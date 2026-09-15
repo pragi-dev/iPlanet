@@ -7,10 +7,11 @@ import { getTicket, mediaUrl } from './api';
 export function TicketDetailEnhanced() {
   const { id } = useParams();
   const [data, setData] = useState(null);
+  const [error, setError] = useState('');
   const [selectedImage, setSelectedImage] = useState(null);
 
-  useEffect(() => { getTicket(id).then(setData); }, [id]);
-  if (!data) return <Shell title="Ticket details"><div className="loading">Loading ticket...</div></Shell>;
+  useEffect(() => { setData(null); setError(''); getTicket(id).then(setData).catch(loadError => setError(loadError.message || 'Unable to load this ticket.')); }, [id]);
+  if (!data) return <Shell title="Ticket details"><div className="loading">{error || 'Loading ticket...'}</div></Shell>;
 
   const { ticket, timeline, escalation } = data;
   const images = [...new Set([...(ticket.originalImages || ticket.images || []), ...(ticket.annotatedImages || [])])];
