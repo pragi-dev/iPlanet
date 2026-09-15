@@ -34,7 +34,8 @@ const isAllowedOrigin = origin => {
       || hostname.endsWith('.loca.lt')
       || hostname.endsWith('.localtunnel.me')
       || hostname.endsWith('.devtunnels.ms')
-      || hostname.endsWith('.app.github.dev');
+      || hostname.endsWith('.app.github.dev')
+      || hostname.endsWith('.vercel.app');
   } catch {
     return false;
   }

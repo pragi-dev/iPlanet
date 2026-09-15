@@ -182,7 +182,9 @@ Output directory: dist
 Set this Vercel environment variable for Production, Preview, and Development as needed:
 
 ```env
-VITE_API_URL=https://<your-render-service>.onrender.com/api
+VITE_API_URL=https://<actual-render-service>.onrender.com/api
 ```
+
+Use the exact backend URL shown in the Render service dashboard. Verify it first at `https://<actual-render-service>.onrender.com/api/health`; it must return `{ "success": true, "message": "API is running" }`.
 
 After the Vercel URL is known, set that URL in Render's `FRONTEND_URLS` variable and redeploy the backend. The Vercel SPA rewrite keeps `/login`, `/corporate/*`, and `/service/*` routes working on refresh.
