@@ -56,11 +56,15 @@ export async function uploadImages(ticketId, files) {
   if (!files.length || String(ticketId).startsWith('ticket-')) return;
   const body = new FormData();
   files.forEach(file => body.append('images', file));
-  await fetch(`${API}/tickets/${ticketId}/images`, {
+  const response = await fetch(`${API}/tickets/${ticketId}/images`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${getToken()}` },
     body,
   });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.message || `Image upload failed (${response.status})`);
+  }
 }
 
 export async function getDashboard() {
