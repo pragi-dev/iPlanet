@@ -6,6 +6,7 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "seed": "node src/seed.js",
+    "seed:demo": "node src/seed.js --reset-demo",
     "test:ai": "node --test src/ai/aiEngine.test.js"
     
   },

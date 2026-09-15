@@ -65,6 +65,20 @@ Demo@123
 
 There are exactly two top-level roles: `corporate_admin` and `iplanet_service`. Engineer assignment is workflow data inside the iPlanet Service portal, not a separate login role.
 
+## Complete demo dataset
+
+Run the persistent MongoDB demo seed with:
+
+```powershell
+npm --prefix backend run seed:demo
+```
+
+The seed creates connected records for 3 companies, 4 service centres, 6 Corporate Admin users, 1 service-desk user, 6 service-role engineer accounts, 16 devices, 25 device-master enrollment records, 6 engineers, 21 tickets, 97 chronological timeline events, 42 notifications, 6 call records, and 4 escalation rules. It validates company, device, ticket, and engineer references before completing.
+
+Enrollment serials include `SAMPLE12345`, `SAMPLE98765`, `ENROLL-IP15-001`, `ENROLL-IP15-002`, `ENROLL-IP14-001`, `ENROLL-MBA-001`, `ENROLL-MBP-001`, `ENROLL-IPAD-001`, and `ENROLL-IPAD-002`.
+
+The existing schema does not have separate Branch, Employee, Warranty, AMC Contract, Model Number, Operating System, IMEI, Purchase Price, Engineer Skill, or User Address collections/fields. The seed stores supported employee, location, warranty, AMC, device, and engineer information in the existing fields rather than inventing a parallel schema.
+
 ## Demo workflow
 
 1. Open the single login screen and sign in with either supported account.

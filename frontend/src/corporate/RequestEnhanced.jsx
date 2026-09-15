@@ -5,7 +5,7 @@ import { Shell, PageTitle, Badge } from './components';
 import { createTicket, getAiPreparedRequest, getDevices, uploadAnnotatedImages, uploadImages } from './api';
 import { ImageAnnotator } from './ImageAnnotator';
 import { ModalLayer } from './ModalLayer';
-import { locations } from './data';
+const locations = ['Chennai', 'Coimbatore', 'Bengaluru', 'Madurai'];
 
 function todayInIndia() {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
