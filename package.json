@@ -1,0 +1,11 @@
+{
+  "name": "apple-self-care-portal",
+  "private": true,
+  "scripts": {
+    "backend": "npm --prefix backend run dev",
+    "frontend": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "dev": "concurrently \"npm run backend\" \"npm run frontend\""
+  },
+  "devDependencies": { "concurrently": "^9.2.1" }
+}
