@@ -5,10 +5,12 @@ Confidential local-only prototype with one role-aware React frontend and one sha
 ## Structure
 
 - `frontend/`: Unified React frontend on port 5173. It preserves both existing portal experiences behind role-protected routes.
-- `corporate-portal/` and `iplanet-portal/`: Existing page/component source retained and consumed by the unified frontend during the merge.
+- `frontend/src/corporate/`: Corporate Admin pages, components, API, and styles.
+- `frontend/src/service/`: iPlanet Service pages, components, API, and styles.
 - `backend/`: Shared API on port 5000.
 - `database/`: Local MongoDB notes.
 - `uploads/`: Local uploaded service-request images.
+- `render.yaml`: Render blueprint for the production backend service.
 
 ## Run locally
 
@@ -103,20 +105,18 @@ The planned extension path is: Chatbot -> AI Support API -> AI Support Engine ->
 
 The browser must call the backend's forwarded URL when a portal is opened remotely. `localhost:5000` only works for a browser running on the development machine.
 
-1. Start MongoDB, then start the backend and both portals:
+1. Start the backend and unified frontend:
 
    ```powershell
    npm run backend
-   npm run corporate
-   npm run iplanet
+   npm run frontend
    ```
 
-2. In VS Code, forward ports `5000`, `5173`, and `5174`.
+2. In VS Code, forward ports `5000` and `5173`.
 3. Copy the forwarded URL for port `5000`, then create/update these uncommitted files:
 
    ```text
-   corporate-portal/.env.local
-   iplanet-portal/.env.local
+   frontend/.env.local
    ```
 
    Set the same backend URL in both files (replace the placeholder with your actual port-5000 forwarding URL):
@@ -125,14 +125,14 @@ The browser must call the backend's forwarded URL when a portal is opened remote
    VITE_API_URL=https://<backend-forwarded-url>/api
    ```
 
-4. Add the forwarded URLs for ports `5173` and `5174` to `FRONTEND_URLS` in `backend/.env`, separated by commas. Keep the local origins too:
+4. Add the forwarded frontend URL to `FRONTEND_URLS` in `backend/.env`, keeping the local origin too:
 
    ```dotenv
-   FRONTEND_URLS=http://localhost:5173,http://localhost:5174,https://<corporate-forwarded-url>,https://<iplanet-forwarded-url>
+   FRONTEND_URLS=http://localhost:5173,https://<frontend-forwarded-url>
    ```
 
-5. Restart the backend after changing `FRONTEND_URLS`, and restart both Vite frontends after changing `VITE_API_URL`.
-6. Open the forwarded Corporate and iPlanet frontend URLs. Verify the backend tunnel directly at:
+5. Restart the backend after changing `FRONTEND_URLS`, and restart the unified Vite frontend after changing `VITE_API_URL`.
+6. Open the forwarded frontend URL. Verify the backend tunnel directly at:
 
    ```text
    https://<backend-forwarded-url>/api/health
@@ -140,4 +140,49 @@ The browser must call the backend's forwarded URL when a portal is opened remote
 
    A successful response is `{ "success": true, "message": "API is running" }`. Log in with the normal demo accounts, load devices/tickets/notifications, then make a mutation such as assigning a device or saving an escalation rule. Refresh to confirm the MongoDB-backed change persists.
 
-Each frontend ships with a non-secret `.env` that sets `VITE_API_URL=http://localhost:5000/api` for local work. Use its ignored `.env.local` counterpart to override that value for a tunnel. The backend continues to connect to local MongoDB; MongoDB is never exposed through a tunnel.
+The unified frontend ships with a non-secret `.env` that sets `VITE_API_URL=http://localhost:5000/api` for local work. Use its ignored `.env.local` counterpart to override that value for a tunnel. The backend continues to connect to MongoDB Atlas; MongoDB is never exposed through a tunnel.
+
+## Production deployment
+
+### Backend on Render
+
+This repository includes [render.yaml](render.yaml). In Render, create a Blueprint from the repository, or configure a Web Service with:
+
+```text
+Root directory: backend
+Build command: npm install
+Start command: npm start
+Health check path: /api/health
+```
+
+Set these Render environment variables:
+
+```env
+MONGODB_URI=mongodb+srv://<username>:<password>@<cluster-host>/<database>?retryWrites=true&w=majority
+JWT_SECRET=<long-random-secret>
+FRONTEND_URLS=https://<your-vercel-app>.vercel.app
+AI_PROVIDER=gemini
+GEMINI_API_KEY=<server-only-gemini-key>
+GEMINI_MODEL=gemini-3.6-flash
+GEMINI_FALLBACK_MODEL=gemini-3.6-flash
+GEMINI_TIMEOUT_MS=60000
+```
+
+Do not commit the real MongoDB URI, JWT secret, or Gemini key. Configure MongoDB Atlas Network Access to allow the Render service to connect.
+
+### Frontend on Vercel
+
+Create the Vercel project with `frontend` as its Root Directory. Vercel will use [frontend/vercel.json](frontend/vercel.json):
+
+```text
+Build command: npm run build
+Output directory: dist
+```
+
+Set this Vercel environment variable for Production, Preview, and Development as needed:
+
+```env
+VITE_API_URL=https://<your-render-service>.onrender.com/api
+```
+
+After the Vercel URL is known, set that URL in Render's `FRONTEND_URLS` variable and redeploy the backend. The Vercel SPA rewrite keeps `/login`, `/corporate/*`, and `/service/*` routes working on refresh.
