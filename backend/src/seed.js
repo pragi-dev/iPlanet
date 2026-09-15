@@ -6,17 +6,7 @@ const locations = ['Chennai', 'Coimbatore', 'Bengaluru', 'Madurai'];
 const models = ['iPhone 15 Pro', 'iPhone 15', 'iPhone 14', 'iPhone 13', 'MacBook Pro 14', 'MacBook Air M2', 'iPad Pro 12.9', 'iPad Air'];
 const people = ['Arun Kumar', 'Meera Iyer', 'Ravi Shankar', 'Nisha Rao', 'Karthik S'];
 const statuses = ['Open', 'Engineer Assigned', 'Engineer Accepted', 'In Progress', 'Waiting for Parts', 'Completed', 'Closed'];
-const primaryUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/iplanet_portal';
-const fallbackUri = process.env.MONGODB_FALLBACK_URI || 'mongodb://127.0.0.1:27017/iplanet_portal';
-try {
-  await mongoose.connect(primaryUri);
-  console.log(`MongoDB connected: ${primaryUri.startsWith('mongodb+srv://') ? 'Atlas' : 'Local'}`);
-} catch (error) {
-  if (primaryUri === fallbackUri) throw error;
-  console.error(`MongoDB primary connection failed: ${error.message}`);
-  await mongoose.connect(fallbackUri);
-  console.log('MongoDB connected: Local fallback');
-}
+await mongoose.connect(process.env.MONGODB_URI);
 await Promise.all([User.deleteMany({}), Company.deleteMany({}), Device.deleteMany({}), DeviceMaster.deleteMany({}), Engineer.deleteMany({}), Ticket.deleteMany({}), TicketTimeline.deleteMany({}), Notification.deleteMany({})]);
 
 const companies = await Company.insertMany([

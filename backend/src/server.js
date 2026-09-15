@@ -471,17 +471,22 @@ app.use((error, _, res, __) => res.status(400).json({ message: error.message || 
 const port = process.env.PORT || 5000;
 async function ensureEscalationRules() { const defaults = [{ name: 'SLA Approaching', level: 1, trigger: 'SLA Approaching', priority: 'All', slaThreshold: 80, action: 'Notify Service Coordinator' }, { name: 'SLA Breach', level: 2, trigger: 'SLA Breached', priority: 'All', slaThreshold: 100, action: 'Escalate to Service Manager' }, { name: 'Critical SLA Breach', level: 3, trigger: 'Critical SLA Breach', priority: 'Critical', slaThreshold: 100, action: 'Escalate to Regional Operations Manager' }]; if (await EscalationRule.countDocuments() === 0) await EscalationRule.insertMany(defaults); }
 async function ensureServiceCentres() { if (await ServiceCentre.countDocuments() === 0) await ServiceCentre.insertMany(['Chennai', 'Coimbatore', 'Bengaluru', 'Madurai'].map(location => ({ name: `${location} Service Centre`, location, status: 'Active' }))); }
-async function connectDatabase() {
-  const primaryUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/iplanet_portal';
-  const fallbackUri = process.env.MONGODB_FALLBACK_URI || 'mongodb://127.0.0.1:27017/iplanet_portal';
-  try {
-    await mongoose.connect(primaryUri);
-    console.log(`MongoDB connected: ${primaryUri.startsWith('mongodb+srv://') ? 'Atlas' : 'Local'}`);
-  } catch (error) {
-    if (primaryUri === fallbackUri) throw error;
-    console.error(`MongoDB primary connection failed: ${error.message}`);
-    await mongoose.connect(fallbackUri);
-    console.log('MongoDB connected: Local fallback');
-  }
+async function ensureDemoAccounts() {
+  const company = await Company.findOneAndUpdate(
+    { companyId: 'CO-DEMO' },
+    { $setOnInsert: { name: 'Demo Corporation', companyId: 'CO-DEMO', contactName: 'Corporate Admin', contactEmail: 'admin@corporate.local', phone: '+91 90000 00000', location: 'Chennai' } },
+    { upsert: true, new: true }
+  );
+  await User.findOneAndUpdate(
+    { email: 'admin@corporate.local' },
+    { $setOnInsert: { name: 'Corporate Admin', email: 'admin@corporate.local', password: 'Demo@123', role: 'corporate_admin', company: company.name, companyId: company._id, phone: company.phone } },
+    { upsert: true, new: true }
+  );
+  await User.findOneAndUpdate(
+    { email: 'service@iplanet.local' },
+    { $setOnInsert: { name: 'iPlanet Service', email: 'service@iplanet.local', password: 'Demo@123', role: 'iplanet_service', company: 'iPlanet Service Desk', phone: '+91 90000 00002' } },
+    { upsert: true, new: true }
+  );
 }
-connectDatabase().then(async () => { await ensureEscalationRules(); await ensureServiceCentres(); app.listen(port, '0.0.0.0', () => console.log(`API running at http://localhost:${port}`)); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });
+ 
+mongoose.connect(process.env.MONGODB_URI).then(async () => { await ensureDemoAccounts(); await ensureEscalationRules(); await ensureServiceCentres(); app.listen(port, '0.0.0.0', () => console.log(`API running at http://localhost:${port}`)); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });
