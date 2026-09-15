@@ -29,6 +29,7 @@ export async function assignEngineer(ticketId, engineerId) { return request(`/ip
 export async function serviceAction(ticketId, action, payload = {}) { const path = action === 'updates' ? 'update' : action; return request(`/iplanet/tickets/${ticketId}/${path}`, { method: 'POST', body: JSON.stringify(payload) }); }
 export async function getServiceReports() { return request('/iplanet/reports'); }
 export async function getDeviceMaster(serial) { return request(`/iplanet/device-master/${encodeURIComponent(serial)}`); }
+export async function getDeviceMasters() { return request('/iplanet/device-master'); }
 export async function enrollDevice(payload) { return request('/iplanet/devices/enroll', { method: 'POST', body: JSON.stringify(payload) }); }
 export async function getServiceNotifications() { return request('/iplanet/notifications'); }
 export async function getServiceNotificationUnreadCount() { return request('/iplanet/notifications/unread-count'); }

@@ -75,6 +75,22 @@ There are exactly two top-level roles: `corporate_admin` and `iplanet_service`. 
 6. Use Device Enrollment with `SAMPLE98765` to look up the local device master, assign employee/department/location, and enroll it.
 7. Refresh Corporate Admin My Devices to see the enrolled device.
 
+Available enrollment demo serial numbers:
+
+```text
+SAMPLE12345
+SAMPLE98765
+ENROLL-IP15-001
+ENROLL-IP15-002
+ENROLL-IP14-001
+ENROLL-MBA-001
+ENROLL-MBP-001
+ENROLL-IPAD-001
+ENROLL-IPAD-002
+```
+
+The iPlanet Service API also exposes the complete catalog at `GET /api/iplanet/device-master` for an authenticated service account.
+
 Device responsibility is intentionally split: iPlanet Service assigns `Device -> Company` and leaves the device `Unassigned`; Corporate Admin receives the `New Device Added` notification and manages `Device -> Employee` from Unassigned Devices.
 
 Everything uses sample data and local MongoDB only. No deployment, external APIs, cloud storage, or production credentials are used.
