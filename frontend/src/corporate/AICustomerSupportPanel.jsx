@@ -11,6 +11,12 @@ const welcomeSuggestions = [
   'My keyboard is not working',
   'My screen is flickering'
 ];
+const localSupportFallback = message => {
+  const normalized = String(message).toLowerCase();
+  if (normalized.includes('charg')) return 'Here are safe steps for a device that is not charging:\n\nInspect the cable, adapter, and outlet for visible damage or loose connections. Try a known-good Apple or certified accessory and a different outlet. Allow a very low battery to charge undisturbed for several minutes, then restart the device if it is responsive.\n\nDoes the charging indicator appear, and have you tried another known-good cable, adapter, and outlet?';
+  if (normalized.includes('battery')) return 'Here are safe steps for fast battery drain:\n\nCheck Battery usage for unusually high-use apps. Turn on Low Power Mode when immediate runtime is needed, install available compatible software updates, and restart the device after saving work.\n\nDid the drain begin after installing an app or update?';
+  return 'I could not reach the AI service, but I can still help. Please describe the device, what changed, and any visible warning or damage.';
+};
 
 export function AICustomerSupportPanel({ ticket, device, open = false, onClose }) {
   const navigate = useNavigate();
@@ -98,8 +104,10 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
         // Preserves the recent non-ticket conversation through the backend.
         conversation: messages
       });
-      const response = result?.reply || result?.message;
-      if (!response) throw new Error('AI Support returned an empty response.');
+      let response = result?.reply || result?.message;
+      if (!response || /AI Support is temporarily unavailable|AI support is currently unavailable/i.test(response)) {
+        response = localSupportFallback(value);
+      }
       setMessages(current => [...current, { role: 'assistant', content: response }]);
       setConversationId(result?.conversationId || conversationId);
       setRequestData(result?.requestData || null);
