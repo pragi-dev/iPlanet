@@ -82,8 +82,15 @@ async function callAiProvider(context, priorSteps = [], responseText = '') {
     return { available: true, message: await getAiSupportReply({ message: userMessage, context: supportContext }) };
   } catch (error) {
     console.error(`[AI ERROR] Stage: AI Provider Fallback Code: ${error?.code || 'AI_UNEXPECTED_ERROR'}`);
-    return { available: false, message: AI_SUPPORT_FALLBACK_MESSAGE };
+    return { available: false, message: buildKnowledgeFallbackReply(userMessage) };
   }
+}
+function buildKnowledgeFallbackReply(message) {
+  const knowledge = buildSupportContext({ message }).retrievedKnowledge[0];
+  if (!knowledge) return 'I could not reach the AI service, but I can still help. Please describe the device, what changed, and any visible warning or damage.';
+  const steps = knowledge.content.split('\n').find(line => line.startsWith('Safe Level-1 steps:'))?.replace('Safe Level-1 steps: ', '');
+  const questions = knowledge.content.split('\n').find(line => line.startsWith('Questions to ask:'))?.replace('Questions to ask: ', '');
+  return `I could not reach the AI service, so here are safe steps for ${knowledge.title}:\n\n${steps || 'Please try a known-good accessory, restart the device, and install available software updates.'}\n\n${questions || 'Let me know whether the issue continues after these checks.'}`;
 }
 async function buildAiSession(ticket, session) {
   const issueContext = { ticketId: ticket.ticketId, deviceType: ticket.deviceId?.deviceType || 'Apple device', deviceModel: ticket.deviceId?.model || 'Unknown model', issueCategory: ticket.issueType || 'General support', issueDescription: ticket.description || '', warrantyStatus: ticket.deviceId?.warrantyStatus || 'Unknown', amcStatus: ticket.deviceId?.amcStatus || 'Unknown' };
@@ -341,9 +348,11 @@ app.post('/api/ai/support/chat', auth, async (req, res) => {
       console.error(`[AI ERROR] Stage: Request Understanding Code: ${error.code || 'AI_UNEXPECTED_ERROR'}`);
       activeSession.providerAvailable = false;
       activeSession.providerStatus = 'Unavailable';
-      activeSession.status = 'AI unavailable';
+      activeSession.status = 'In Progress';
+      const reply = buildKnowledgeFallbackReply(trimmedMessage);
+      activeSession.messages.push({ role: 'assistant', content: reply, timestamp: new Date() });
       await activeSession.save();
-      return res.status(200).json({ success: false, message: AI_SUPPORT_FALLBACK_MESSAGE, conversationId: activeSession.sessionId });
+      return res.json({ success: true, message: reply, conversationId: activeSession.sessionId, session: activeSession });
     }
   }
   const conversationHistory = activeSession.messages.map(item => `${item.role === 'user' ? 'Customer' : 'Assistant'}: ${item.content}`).slice(-12);
