@@ -230,7 +230,8 @@ svg { display: block; flex: 0 0 auto; }
 .panel-heading,.page-title,.welcome,.detail-hero,.ticket-header-row { gap: 16px; }
 .panel-heading { align-items: center; }
 .panel-heading h3 { margin-top: 0; }
-.page-title,.welcome { align-items: center; }
+.page-title { margin: 28px 4.5% 18px; align-items: center; }
+.welcome { align-items: center; }
 .page-title > div,.welcome > div,.detail-hero > div { min-width: 0; }
 
 table th,table td { vertical-align: middle; }
@@ -256,6 +257,7 @@ table td .badge,table td .button,table td .row-link { vertical-align: middle; }
 @media (max-width: 760px) {
   .topbar { gap: 12px; }
   .top-actions { gap: 8px; }
+  .page-title { margin-left: 20px; margin-right: 20px; }
   .welcome > .button,.page-title > .button,.detail-hero > .button { align-self: flex-start; }
   .service-toolbar > .search { max-width: none; }
   .service-toolbar > select { flex: 1 1 150px; min-width: 0; }
