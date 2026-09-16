@@ -18,8 +18,8 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL
-        value: gemini-3.6-flash
+        value: gemini-2.5-flash
       - key: GEMINI_FALLBACK_MODEL
-        value: gemini-3.6-flash
+        value: gemini-2.5-flash
       - key: GEMINI_TIMEOUT_MS
         value: '60000'

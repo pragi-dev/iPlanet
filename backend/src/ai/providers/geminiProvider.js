@@ -9,8 +9,8 @@ function config(environment = process.env) {
   if (!environment.GEMINI_API_KEY?.trim()) throw new GeminiProviderError('Gemini API key is not configured.', 'GEMINI_API_KEY_NOT_CONFIGURED');
   return {
     apiKey: environment.GEMINI_API_KEY.trim(),
-    model: environment.GEMINI_MODEL?.trim() || 'gemini-3.6-flash',
-    fallbackModel: environment.GEMINI_FALLBACK_MODEL?.trim() || 'gemini-3.6-flash',
+    model: environment.GEMINI_MODEL?.trim() || 'gemini-2.5-flash',
+    fallbackModel: environment.GEMINI_FALLBACK_MODEL?.trim() || 'gemini-2.5-flash',
     timeoutMs: Number(environment.GEMINI_TIMEOUT_MS) || 60000
   };
 }
