@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, CheckCircle2, ShieldAlert } from 'lucide-react';
 import { Shell, Badge, PageTitle } from './components';
 import { getTicket, mediaUrl } from './api';
+import { ModalLayer } from './ModalLayer';
 
 export function TicketDetailEnhanced() {
   const { id } = useParams();
@@ -25,7 +26,7 @@ export function TicketDetailEnhanced() {
           <section className="panel info-card"><h3>Request details</h3>{[['Device', ticket.deviceId?.model], ['Serial number', ticket.deviceId?.serialNumber], ['Priority', ticket.priority], ['Expected TAT', ticket.expectedTAT], ['Assigned engineer', ticket.assignedEngineer || 'Unassigned']].map(([label, value]) => <div className="info-row" key={label}><span>{label}</span><strong>{value}</strong></div>)}</section>
           <section className="panel issue-card"><span className="kicker">Issue description</span><h3>{ticket.issueType}</h3><p>{ticket.description}</p><div className="upload-preview">{images.length ? images.map(image => <button type="button" key={image} className="image-thumb-button" onClick={() => setSelectedImage(mediaUrl(image))}><img src={mediaUrl(image)} alt="Reported issue" /></button>) : <span>No issue photos attached</span>}</div></section>
         </div>
-        {selectedImage && <div className="image-lightbox" role="dialog" aria-modal="true" onClick={() => setSelectedImage(null)}><button type="button" className="image-lightbox-close" aria-label="Close image preview" onClick={() => setSelectedImage(null)}>×</button><img src={selectedImage} alt="Ticket attachment preview" /></div>}
+        {selectedImage && <ModalLayer className="image-lightbox"><div role="dialog" aria-modal="true" aria-label="Ticket attachment preview" onClick={() => setSelectedImage(null)}><button type="button" className="image-lightbox-close" aria-label="Close image preview" onClick={() => setSelectedImage(null)}>×</button><img src={selectedImage} alt="Ticket attachment preview" onClick={event => event.stopPropagation()} /></div></ModalLayer>}
         <section className="panel escalation-card">
           <div className="escalation-status-compact">
             <div className="escalation-icon"><ShieldAlert size={18} /></div>

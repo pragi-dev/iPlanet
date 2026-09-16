@@ -183,3 +183,83 @@ textarea { min-height: 110px; padding: 12px; border-radius: 8px; font-size: 14px
 
 /* Close controls are icon-only buttons, not filled form actions. */
 .modal-close { appearance: none; border: 0; background: transparent; color: var(--muted); padding: 6px; line-height: 1; }
+
+/* Shared alignment layer: loaded last for both portals to neutralize legacy
+   cascade differences without changing component markup or behavior. */
+:root { --control-height: 40px; --icon-button-size: 34px; --control-gap: 8px; }
+svg { display: block; flex: 0 0 auto; }
+
+.button,.portal-option,.icon-button,.icon-btn,.modal-close,.call-drawer-close,
+.image-lightbox-close,.ai-listen-button,.voice-button,.suggestion-pill,.link-button,
+.segmented button,.filter-tabs button { line-height: 1; }
+
+.button,.portal-option,.voice-button,.call-drawer-button,.call-save-button,
+.segmented button,.filter-tabs button,.identification-tabs button,.suggestion-pill,
+.ai-alert button { display: inline-flex; align-items: center; justify-content: center; gap: var(--control-gap); }
+
+.button { min-height: var(--control-height); white-space: nowrap; }
+.button:hover:not(:disabled) { transform: none; }
+.button > svg,.portal-option > svg,.voice-button > svg,.call-drawer-button > svg,
+.segmented button > svg,.filter-tabs button > svg,.identification-tabs button > svg { width: 16px; height: 16px; }
+
+.icon-button { width: var(--icon-button-size); height: var(--icon-button-size); padding: 0; display: inline-grid; place-items: center; flex: 0 0 var(--icon-button-size); }
+.icon-button > svg { width: 18px; height: 18px; }
+.icon-btn,.modal-close,.call-drawer-close { display: inline-grid; place-items: center; flex: 0 0 auto; }
+.modal-close { width: 32px; height: 32px; }
+.modal-close > svg,.call-drawer-close > svg { width: 18px; height: 18px; }
+
+.nav-item,.logout,.secure,.top-actions,.back-link,.text-link,.row-link,.art-footer,
+.legend span,.device-found,.aside-line,.file-drop,.notification-item,.ai-chat-title,
+.message-text-wrap,.ai-message,.ai-bubble,.checkbox,.checkbox-row { align-items: center; }
+.nav-item > svg,.logout > svg,.secure > svg { width: 17px; height: 17px; flex: 0 0 17px; }
+.nav-count { margin-left: auto; display: inline-grid; place-items: center; min-width: 18px; min-height: 18px; line-height: 1; }
+
+.search,.input-icon { min-height: var(--control-height); }
+.search > svg,.input-icon > svg { flex: 0 0 auto; }
+.search input,.input-icon input { min-height: 0; height: 38px; line-height: 1.3; }
+.service-toolbar { align-items: center; flex-wrap: wrap; }
+.service-toolbar select,.assign-row select { min-height: var(--control-height); }
+
+.request-form select,.request-form label > input:not([type=file]),.modal input,.modal select,
+.modal > label input,.modal > label select,.call-drawer-body select { min-height: var(--control-height); }
+.request-form textarea,.modal textarea,.call-drawer-body textarea,.service-note { line-height: 1.45; }
+.request-form label,.modal label,.modal > label { line-height: 1.35; }
+.checkbox,.checkbox-row { line-height: 1.3; }
+.checkbox input,.checkbox-row input { flex: 0 0 auto; margin: 0; }
+
+.panel-heading,.page-title,.welcome,.detail-hero,.ticket-header-row { gap: 16px; }
+.panel-heading { align-items: center; }
+.panel-heading h3 { margin-top: 0; }
+.page-title,.welcome { align-items: center; }
+.page-title > div,.welcome > div,.detail-hero > div { min-width: 0; }
+
+table th,table td { vertical-align: middle; }
+table td .badge,table td .button,table td .row-link { vertical-align: middle; }
+.badge { display: inline-flex; align-items: center; justify-content: center; min-height: 22px; line-height: 1; white-space: nowrap; }
+.row-link { display: inline-flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap; }
+
+.metric-icon,.notification-icon,.escalation-icon,.engineer-avatar,.call-drawer-icon,.ai-icon,
+.message-icon,.success-icon,.timeline-dot { flex: 0 0 auto; }
+.metric,.engineer-card,.notification-item { min-width: 0; }
+.info-row { align-items: center; }
+.info-row strong { overflow-wrap: anywhere; }
+
+.action-row,.assign-row,.annotator-actions,.enrollment-actions { align-items: center; }
+.action-row { justify-content: flex-start; }
+.annotator-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.annotator-spacer { flex: 1 1 auto; }
+
+.modal-backdrop,.scanner-backdrop,.annotator-backdrop,.ai-chat-backdrop,.call-drawer-backdrop,.image-lightbox { position: fixed; inset: 0; }
+.image-lightbox > div { display: grid; place-items: center; width: 100%; height: 100%; }
+.image-lightbox-close { display: inline-grid; place-items: center; padding: 0; }
+
+@media (max-width: 760px) {
+  .topbar { gap: 12px; }
+  .top-actions { gap: 8px; }
+  .welcome > .button,.page-title > .button,.detail-hero > .button { align-self: flex-start; }
+  .service-toolbar > .search { max-width: none; }
+  .service-toolbar > select { flex: 1 1 150px; min-width: 0; }
+  .assign-row > * { width: 100%; }
+  .annotator-actions .annotator-spacer { display: none; }
+  .annotator-actions .button { flex: 1 1 auto; }
+}
