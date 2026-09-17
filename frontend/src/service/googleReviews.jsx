@@ -143,8 +143,7 @@ export function GoogleReviews({ admin = false } = {}) {
 
   const connectGmail = async () => {
     try {
-      const result = await getGoogleGmailAuthUrl();
-      window.location.assign(result.authorizationUrl);
+      window.location.assign(getGoogleGmailAuthUrl());
     } catch (authError) {
       setError(authError.message || 'Unable to start Google authorization.');
     }

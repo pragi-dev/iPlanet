@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
@@ -24,6 +24,7 @@ import { buildGoogleGmailAuthUrl, decryptRefreshToken, diagnoseGoogleGmailConnec
 import { retrieveGoogleReviewEmails } from './integrations/googleBusinessProfile/googleGmailReviewService.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.join(__dirname, '../.env') });
 const uploadDir = path.join(__dirname, '../../uploads');
 fs.mkdirSync(uploadDir, { recursive: true });
 const upload = multer({ dest: uploadDir, limits: { fileSize: 5 * 1024 * 1024 }, fileFilter: (_, file, cb) => cb(null, /^image\//.test(file.mimetype)) });
@@ -585,10 +586,12 @@ app.get('/api/iplanet/companies', ...serviceAuth, async (_, res) => res.json(awa
 app.post('/api/iplanet/companies', ...serviceAuth, async (req, res) => { const { name, location, contactName, contactEmail, phone } = req.body; if (!name?.trim() || !location?.trim()) return res.status(400).json({ message: 'Corporate name and location are required' }); try { const company = await Company.create({ name: name.trim(), location: location.trim(), contactName, contactEmail, phone, companyId: `CO-${Date.now()}` }); res.status(201).json(company); } catch (error) { if (error.code === 11000) return res.status(409).json({ message: 'A Corporate with that name already exists' }); throw error; } });
 app.get('/api/iplanet/service-centres', ...serviceAuth, async (_, res) => res.json(await ServiceCentre.find({ status: 'Active' }).sort({ name: 1 })));
 app.post('/api/iplanet/service-centres', ...serviceAuth, async (req, res) => { const { name, location, address, city, state, contactNumber, email, status, serviceCentreId, googleMapsUrl, googleLocationId, googleBusinessProfileConnected, reviewIntegrationMode, googleBusinessProfile } = req.body; if (!name?.trim() || !location?.trim()) return res.status(400).json({ message: 'Service Centre name and location are required' }); try { res.status(201).json(await ServiceCentre.create({ serviceCentreId: serviceCentreId || undefined, name: name.trim(), location: location.trim(), address, city, state, contactNumber, email, status: status || 'Active', googleMapsUrl: googleMapsUrl || '', googleLocationId: googleLocationId || '', googleBusinessProfileConnected: Boolean(googleBusinessProfileConnected ?? false), reviewIntegrationMode: reviewIntegrationMode || 'demo', googleBusinessProfile: googleBusinessProfile || { connected: false, locationId: googleLocationId || '', locationName: name.trim() } })); } catch (error) { if (error.code === 11000) return res.status(409).json({ message: 'A Service Centre with that name already exists' }); throw error; } });
-app.get('/api/google-gmail/auth', auth, allowRoles('corporate_admin', 'iplanet_service'), async (_, res) => {
+app.get('/api/google-gmail/auth', async (_, res) => {
   try {
     const state = jwt.sign({ purpose: 'google-gmail-oauth' }, process.env.JWT_SECRET || 'local-demo-secret', { expiresIn: '10m' });
-    res.json({ authorizationUrl: buildGoogleGmailAuthUrl(process.env, state) });
+    const authorizationUrl = buildGoogleGmailAuthUrl(process.env, state);
+    if (_.accepts('html')) return res.redirect(authorizationUrl);
+    return res.json({ authorizationUrl });
   } catch (error) {
     res.status(error.statusCode || 503).json({ message: error.message, code: error.code || 'GMAIL_OAUTH_ERROR' });
   }
