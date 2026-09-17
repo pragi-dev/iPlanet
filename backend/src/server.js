@@ -524,12 +524,6 @@ app.get('/api/google-reviews', auth, allowRoles('corporate_admin', 'iplanet_serv
   const reviews = await GoogleReview.find(query).populate('serviceCentreId').sort({ reviewCreatedAt: -1 });
   res.json(reviews);
 });
-app.get('/api/google-reviews/:id', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
-  const review = await GoogleReview.findById(req.params.id).populate('serviceCentreId');
-  if (!review) return res.status(404).json({ message: 'Google review not found' });
-  if (req.user.role !== 'corporate_admin' && String(review.serviceCentreId?._id || review.serviceCentreId) !== String(req.user.serviceCentreId)) return res.status(403).json({ message: 'This review is outside your service centre scope.' });
-  res.json(review);
-});
 app.get('/api/google-reviews/analytics', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
   const scope = await buildGoogleReviewScope(req);
   const query = req.user.role === 'corporate_admin' ? {} : { serviceCentreId: scope.serviceCentreId };
@@ -573,6 +567,12 @@ app.get('/api/google-reviews/summary', auth, allowRoles('corporate_admin', 'ipla
     GoogleReview.countDocuments({ ...query, priority: 'high' })
   ]);
   res.json({ total, latest, highPriority });
+});
+app.get('/api/google-reviews/:id', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
+  const review = await GoogleReview.findById(req.params.id).populate('serviceCentreId');
+  if (!review) return res.status(404).json({ message: 'Google review not found' });
+  if (req.user.role !== 'corporate_admin' && String(review.serviceCentreId?._id || review.serviceCentreId) !== String(req.user.serviceCentreId)) return res.status(403).json({ message: 'This review is outside your service centre scope.' });
+  res.json(review);
 });
 app.patch('/api/google-reviews/:id/acknowledge', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
   const review = await GoogleReview.findById(req.params.id);
