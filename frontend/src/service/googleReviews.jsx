@@ -132,7 +132,7 @@ export function GoogleReviews({ admin = false } = {}) {
       setSyncing(true);
       setSyncMessage('');
       const result = await syncGoogleReviews();
-      setSyncMessage(`Sync complete: ${result.new || 0} new, ${result.duplicates || 0} duplicate, ${result.failed || 0} failed.`);
+      setSyncMessage(`Sync complete: ${result.newReviews || 0} new, ${result.duplicates || 0} duplicate, ${result.failed || 0} failed.`);
       await load();
     } catch (syncError) {
       setError(syncError.message || 'Unable to sync Google reviews.');

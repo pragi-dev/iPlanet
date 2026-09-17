@@ -33,8 +33,8 @@ function messageText(message) {
 }
 
 function parseRating(text) {
-  const match = String(text).match(/(?:rating|rated|gave|review)\D{0,30}([1-5])\s*(?:\/\s*5|stars?|out of five)?/i)
-    || String(text).match(/([1-5])\s*(?:\u2605|stars?)(?:\s*(?:out of|\/)?\s*5)?/i);
+  const match = String(text).match(/\b([1-5])\s*(?:\u2605|stars?)(?:\s*(?:out of|\/)?\s*5)?\b/i)
+    || String(text).match(/\b(?:rating|rated|gave)\D{0,20}([1-5])\s*(?:\/\s*5|stars?|out of five)?\b/i);
   return match ? Number(match[1]) : null;
 }
 

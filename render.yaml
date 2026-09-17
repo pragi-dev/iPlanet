@@ -23,3 +23,27 @@ services:
         value: gemini-2.5-flash
       - key: GEMINI_TIMEOUT_MS
         value: '60000'
+      - key: GOOGLE_REVIEW_MODE
+        value: gmail
+      - key: GOOGLE_REVIEW_PLACE_ID
+        value: ChIJDWJ8PaWsKycR3-r2Ijr0D0I
+      - key: GOOGLE_REVIEW_BUSINESS_NAME
+        value: Phoenixx IT
+      - key: GOOGLE_REVIEW_SERVICE_CENTRE_NAME
+        value: Coimbatore Service Centre
+      - key: GOOGLE_REVIEW_SYNC_INTERVAL
+        value: '300000'
+      - key: GOOGLE_GMAIL_CLIENT_ID
+        sync: false
+      - key: GOOGLE_GMAIL_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_GMAIL_REDIRECT_URI
+        sync: false
+      - key: GOOGLE_GMAIL_REFRESH_TOKEN
+        sync: false
+      - key: GOOGLE_GMAIL_SEARCH_QUERY
+        sync: false
+      - key: GOOGLE_GMAIL_LOOKBACK_DAYS
+        value: '30'
+      - key: GOOGLE_GMAIL_DEBUG_STRUCTURE
+        value: 'false'

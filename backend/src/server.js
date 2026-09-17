@@ -20,7 +20,7 @@ import { buildSupportContext } from './ai/contextBuilder.js';
 import { understandRequest, understandDeterministicResult, REQUEST_CATEGORIES, REQUEST_ISSUE_TYPES } from './ai/requestExtractor.js';
 import { indiaToday, resolveServiceDateIntent } from './ai/serviceDate.js';
 import { demoEnrollmentDevices } from './demoData.js';
-import { buildGoogleGmailAuthUrl, decryptRefreshToken, encryptRefreshToken, exchangeGoogleGmailCode, getGoogleGmailProfile, GoogleGmailError, isGmailConfigured } from './integrations/googleBusinessProfile/googleGmailService.js';
+import { buildGoogleGmailAuthUrl, decryptRefreshToken, diagnoseGoogleGmailConnection, encryptRefreshToken, exchangeGoogleGmailCode, getGoogleGmailProfile, GoogleGmailError, isGmailConfigured } from './integrations/googleBusinessProfile/googleGmailService.js';
 import { retrieveGoogleReviewEmails } from './integrations/googleBusinessProfile/googleGmailReviewService.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -136,12 +136,12 @@ async function persistGoogleReview(reviewInput) {
     emailReceivedAt: normalized.emailReceivedAt ? new Date(normalized.emailReceivedAt) : undefined,
     reviewUrl: normalized.reviewUrl || '',
     source: normalized.source,
-    reviewCreatedAt: new Date(normalized.reviewCreatedAt),
-    reviewUpdatedAt: new Date(normalized.reviewUpdatedAt),
+    reviewCreatedAt: normalized.reviewCreatedAt ? new Date(normalized.reviewCreatedAt) : undefined,
+    reviewUpdatedAt: normalized.reviewUpdatedAt ? new Date(normalized.reviewUpdatedAt) : undefined,
     notificationCreated: false,
   });
 
-  const serviceUsers = await User.find({ $or: [{ serviceCentreId: mappedCentre._id }, { role: 'corporate_admin' }] });
+  const serviceUsers = await User.find({ $or: [{ serviceCentreId: mappedCentre._id }, { role: 'corporate_admin' }, { role: 'iplanet_service', serviceCentreId: null }] });
   const notificationOutcome = await createGoogleReviewNotifications({ review: reviewDoc, serviceCentre: mappedCentre, users: serviceUsers, Notification });
   reviewDoc.notificationCreated = notificationOutcome.created > 0;
   await reviewDoc.save();
@@ -154,11 +154,59 @@ async function enrichGoogleReviewWithAi(review) {
   try {
     const raw = await getProviderReply({ messages: [{ role: 'system', content: 'You classify customer reviews. Return JSON only.' }, { role: 'user', content: prompt }], environment: process.env });
     const parsed = JSON.parse(String(raw).replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim());
-    return { ...review, sentiment: ['positive', 'neutral', 'negative'].includes(parsed.sentiment) ? parsed.sentiment : review.sentiment, sentimentScore: Number.isFinite(Number(parsed.sentimentScore)) ? Number(parsed.sentimentScore) : review.sentimentScore, aiSummary: parsed.aiSummary || review.aiSummary, suggestedResponse: parsed.suggestedResponse || review.suggestedResponse, priority: ['low', 'medium', 'high'].includes(parsed.priority) ? parsed.priority : review.priority, keyIssue: parsed.keyIssue || review.keyIssue, aiAvailable: true };
+    return { ...review, sentiment: ['positive', 'neutral', 'negative'].includes(parsed.sentiment) ? parsed.sentiment : review.sentiment, sentimentScore: Number.isFinite(Number(parsed.sentimentScore)) ? Number(parsed.sentimentScore) : review.sentimentScore, aiSummary: parsed.aiSummary || review.aiSummary, suggestedResponse: parsed.suggestedResponse || review.suggestedResponse, priority: ['low', 'medium', 'high'].includes(parsed.priority) ? parsed.priority : review.priority, keyIssue: parsed.keyIssue || review.keyIssue, aiProcessingStatus: 'success', aiProcessingError: '', aiAvailable: true };
   } catch (error) {
     logGoogleReview('AI analysis unavailable; deterministic review analysis retained', { code: error.code || 'AI_UNAVAILABLE' });
-    return { ...review, aiAvailable: false };
+    return { ...review, aiProcessingStatus: 'failed', aiProcessingError: error.message || 'AI analysis unavailable.', aiAvailable: false };
   }
+}
+
+let googleGmailPoller = null;
+
+async function syncGmailReviews() {
+  const connection = await GoogleGmailConnection.findOne({ provider: 'google-gmail' });
+  const refreshToken = decryptRefreshToken(connection?.refreshTokenEncrypted) || process.env.GOOGLE_GMAIL_REFRESH_TOKEN;
+  if (!isGmailConfigured(process.env, refreshToken)) {
+    const error = new GoogleGmailError('Google Reviews is not connected. Authorize the configured Gmail account before syncing.', 'GMAIL_NOT_CONNECTED', 503);
+    throw error;
+  }
+
+  const retrieved = await retrieveGoogleReviewEmails({ refreshToken, environment: process.env });
+  let newReviews = 0;
+  let duplicates = 0;
+  let failed = retrieved.rejected.length;
+  for (const review of retrieved.parsed) {
+    try {
+      const analyzed = await enrichGoogleReviewWithAi({ ...review, googleReviewId: `gmail-${review.gmailMessageId}`, googlePlaceId: review.placeId, googleLocationId: '', serviceCentreName: review.businessName });
+      const result = await persistGoogleReview(analyzed);
+      if (result.duplicate) duplicates += 1;
+      else if (result.mapped) newReviews += 1;
+      else failed += 1;
+    } catch (error) {
+      failed += 1;
+      logGoogleReview('Review import failed', { googleReviewId: review.externalId, code: error.code || 'IMPORT_FAILED' });
+    }
+  }
+  const summary = { success: true, found: retrieved.found, newReviews, duplicates, failed, rejected: retrieved.rejected.length, query: retrieved.query };
+  await GoogleGmailConnection.findOneAndUpdate({ provider: 'google-gmail' }, { provider: 'google-gmail', lastSyncAt: new Date(), lastSyncStatus: 'success', lastSyncMessage: `Imported ${newReviews} new review(s).` }, { upsert: true });
+  return summary;
+}
+
+function startGoogleGmailPoller() {
+  if (googleGmailPoller || String(process.env.GOOGLE_REVIEW_MODE || '').toLowerCase() !== 'gmail') return false;
+  const intervalMs = Math.max(60000, Number(process.env.GOOGLE_REVIEW_SYNC_INTERVAL || 300000));
+  googleGmailPoller = setInterval(async () => {
+    try {
+      const result = await syncGmailReviews();
+      if (result.newReviews || result.failed) logGoogleReview('Background sync completed', { newReviews: result.newReviews, failed: result.failed });
+    } catch (error) {
+      await GoogleGmailConnection.findOneAndUpdate({ provider: 'google-gmail' }, { provider: 'google-gmail', lastSyncAt: new Date(), lastSyncStatus: 'failed', lastSyncMessage: error.message }, { upsert: true });
+      logGoogleReview('Background sync failed', { code: error.code || 'GMAIL_SYNC_FAILED' });
+    }
+  }, intervalMs);
+  googleGmailPoller.unref?.();
+  logGoogleReview('Background poller started', { intervalMs });
+  return true;
 }
 async function getTicketWithContext(ticketIdParam) {
   return Ticket.findById(ticketIdParam).populate('customerId').populate('companyId').populate('serviceCentreId').populate('deviceId').populate('assignedEngineerId');
@@ -554,9 +602,11 @@ app.get('/api/google-gmail/callback', async (req, res) => {
     const refreshToken = tokens.refresh_token || process.env.GOOGLE_GMAIL_REFRESH_TOKEN;
     const profile = await getGoogleGmailProfile({ refreshToken, environment: process.env });
     await GoogleGmailConnection.findOneAndUpdate({ provider: 'google-gmail' }, { provider: 'google-gmail', email: profile.emailAddress, refreshTokenEncrypted: encryptRefreshToken(refreshToken), connectedAt: new Date(), lastSyncMessage: '' }, { upsert: true, new: true });
-    res.type('html').send('<h1>Google Reviews connected</h1><p>You can close this window and return to iPlanetCare.</p>');
+    const frontendUrl = (process.env.FRONTEND_URLS || 'http://localhost:5173').split(',')[0].trim().replace(/\/$/, '');
+    res.redirect(`${frontendUrl}/service/google-reviews?googleGmail=connected`);
   } catch (error) {
-    res.status(error.statusCode || 400).type('html').send(`<h1>Google Reviews connection failed</h1><p>${String(error.message || 'OAuth failed').replace(/[<>]/g, '')}</p>`);
+    const frontendUrl = (process.env.FRONTEND_URLS || 'http://localhost:5173').split(',')[0].trim().replace(/\/$/, '');
+    res.redirect(`${frontendUrl}/service/google-reviews?googleGmail=error&message=${encodeURIComponent(error.code || 'GMAIL_OAUTH_ERROR')}`);
   }
 });
 app.get('/api/google-reviews', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
@@ -571,7 +621,7 @@ app.get('/api/google-reviews', auth, allowRoles('corporate_admin', 'iplanet_serv
   res.json(reviews);
 });
 app.get('/api/google-reviews/health', auth, allowRoles('corporate_admin', 'iplanet_service'), async (_, res) => {
-  const mode = String(process.env.GOOGLE_REVIEW_MODE || 'demo').toLowerCase();
+  const mode = String(process.env.GOOGLE_REVIEW_MODE || 'gmail').toLowerCase();
   const googleApiConfigured = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_BUSINESS_PROFILE_ACCOUNT_ID && process.env.GOOGLE_LOCATION_ID);
   const oauthConfigured = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REDIRECT_URI);
   const accountConfigured = Boolean(process.env.GOOGLE_BUSINESS_PROFILE_ACCOUNT_ID);
@@ -579,16 +629,22 @@ app.get('/api/google-reviews/health', auth, allowRoles('corporate_admin', 'iplan
   const pubsubConfigured = Boolean(process.env.GOOGLE_PUBSUB_PROJECT_ID && process.env.GOOGLE_PUBSUB_TOPIC);
   const webhookConfigured = Boolean(process.env.GOOGLE_PUBSUB_TOPIC || process.env.GOOGLE_REVIEW_MODE === 'google-api');
   const serviceCentreMappingConfigured = await ServiceCentre.exists({ $or: [{ 'googleBusinessProfile.locationId': { $exists: true, $ne: '' } }, { googleLocationId: { $exists: true, $ne: '' } }] });
+  const configuredPlaceId = process.env.GOOGLE_REVIEW_PLACE_ID || 'ChIJDWJ8PaWsKycR3-r2Ijr0D0I';
+  const placeMappingConfigured = await ServiceCentre.exists({ 'googleBusinessProfile.placeId': configuredPlaceId });
   const connection = await GoogleGmailConnection.findOne({ provider: 'google-gmail' }).lean();
   const storedRefreshToken = decryptRefreshToken(connection?.refreshTokenEncrypted);
   const gmailConfigured = isGmailConfigured(process.env, storedRefreshToken);
+  const gmailDiagnostic = await diagnoseGoogleGmailConnection({ refreshToken: storedRefreshToken, environment: process.env });
   res.json({
     mode,
     gmailConfigured,
+    gmailConnected: gmailDiagnostic.connected,
+    gmailDiagnostic: gmailDiagnostic.status,
+    gmailApiReadOnlyRequest: gmailDiagnostic.readOnlyRequest || null,
     oauthConfigured: Boolean(process.env.GOOGLE_GMAIL_CLIENT_ID && process.env.GOOGLE_GMAIL_CLIENT_SECRET && process.env.GOOGLE_GMAIL_REDIRECT_URI),
-    refreshTokenConfigured: Boolean(connection?.refreshToken || process.env.GOOGLE_GMAIL_REFRESH_TOKEN),
-    placeIdConfigured: Boolean(process.env.GOOGLE_REVIEW_PLACE_ID || 'ChIJDWJ8PaWsKycR3-r2Ijr0D0I'),
-    placeId: process.env.GOOGLE_REVIEW_PLACE_ID || 'ChIJDWJ8PaWsKycR3-r2Ijr0D0I',
+    refreshTokenConfigured: Boolean(connection?.refreshTokenEncrypted || process.env.GOOGLE_GMAIL_REFRESH_TOKEN),
+    placeIdConfigured: Boolean(process.env.GOOGLE_REVIEW_PLACE_ID || placeMappingConfigured),
+    placeId: configuredPlaceId,
     businessName: process.env.GOOGLE_REVIEW_BUSINESS_NAME || 'Phoenixx IT',
     lastSyncAt: connection?.lastSyncAt || null,
     lastSyncStatus: connection?.lastSyncStatus || 'never',
@@ -598,7 +654,10 @@ app.get('/api/google-reviews/health', auth, allowRoles('corporate_admin', 'iplan
     locationConfigured,
     pubsubConfigured,
     webhookConfigured,
-    serviceCentreMappingConfigured: !!serviceCentreMappingConfigured,
+    parserConfigured: true,
+    mongoConnected: mongoose.connection.readyState === 1,
+    backgroundSyncRunning: Boolean(googleGmailPoller),
+    serviceCentreMappingConfigured: Boolean(serviceCentreMappingConfigured || placeMappingConfigured),
   });
 });
 app.get('/api/google-reviews/analytics', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
@@ -714,30 +773,11 @@ app.post('/api/google-reviews/webhook', async (req, res) => {
 });
 app.post('/api/google-reviews/sync', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
   const provider = getGoogleBusinessProfileProvider(process.env);
-  const mode = String(process.env.GOOGLE_REVIEW_MODE || 'demo').toLowerCase();
+  const mode = String(process.env.GOOGLE_REVIEW_MODE || 'gmail').toLowerCase();
   if (mode === 'gmail') {
-    let connection = await GoogleGmailConnection.findOne({ provider: 'google-gmail' });
-    const refreshToken = decryptRefreshToken(connection?.refreshTokenEncrypted) || process.env.GOOGLE_GMAIL_REFRESH_TOKEN;
-    if (!isGmailConfigured(process.env, refreshToken)) return res.status(503).json({ message: 'Google Reviews is not connected. Authorize the configured Gmail account before syncing.', code: 'GMAIL_NOT_CONNECTED' });
     try {
-      const retrieved = await retrieveGoogleReviewEmails({ refreshToken, environment: process.env });
-      let newReviews = 0;
-      let duplicates = 0;
-      let failed = retrieved.rejected.length;
-      for (const review of retrieved.parsed) {
-        try {
-          const analyzed = await enrichGoogleReviewWithAi({ ...review, googleReviewId: `gmail-${review.gmailMessageId}`, googlePlaceId: review.placeId, googleLocationId: '', serviceCentreName: review.businessName });
-          const result = await persistGoogleReview(analyzed);
-          if (result.duplicate) duplicates += 1;
-          else if (result.mapped) newReviews += 1;
-          else failed += 1;
-        } catch (error) {
-          failed += 1;
-          logGoogleReview('Review import failed', { googleReviewId: review.externalId, code: error.code || 'IMPORT_FAILED' });
-        }
-      }
-      const summary = { success: true, found: retrieved.found, new: newReviews, duplicates, failed, rejected: retrieved.rejected.length, query: retrieved.query };
-      await GoogleGmailConnection.findOneAndUpdate({ provider: 'google-gmail' }, { provider: 'google-gmail', lastSyncAt: new Date(), lastSyncStatus: 'success', lastSyncMessage: `Imported ${newReviews} new review(s).` }, { upsert: true });
+      const summary = await syncGmailReviews();
+      await GoogleGmailConnection.findOneAndUpdate({ provider: 'google-gmail' }, { provider: 'google-gmail', lastSyncAt: new Date(), lastSyncStatus: 'success', lastSyncMessage: `Imported ${summary.newReviews} new review(s).` }, { upsert: true });
       return res.json({ ...summary, syncedAt: new Date() });
     } catch (error) {
       await GoogleGmailConnection.findOneAndUpdate({ provider: 'google-gmail' }, { provider: 'google-gmail', lastSyncAt: new Date(), lastSyncStatus: 'failed', lastSyncMessage: error.message }, { upsert: true });
@@ -829,6 +869,18 @@ app.use((error, _, res, __) => res.status(400).json({ message: error.message || 
 const port = process.env.PORT || 5000;
 async function ensureEscalationRules() { const defaults = [{ name: 'SLA Approaching', level: 1, trigger: 'SLA Approaching', priority: 'All', slaThreshold: 80, action: 'Notify Service Coordinator' }, { name: 'SLA Breach', level: 2, trigger: 'SLA Breached', priority: 'All', slaThreshold: 100, action: 'Escalate to Service Manager' }, { name: 'Critical SLA Breach', level: 3, trigger: 'Critical SLA Breach', priority: 'Critical', slaThreshold: 100, action: 'Escalate to Regional Operations Manager' }]; if (await EscalationRule.countDocuments() === 0) await EscalationRule.insertMany(defaults); }
 async function ensureServiceCentres() { if (await ServiceCentre.countDocuments() === 0) await ServiceCentre.insertMany(['Chennai', 'Coimbatore', 'Bengaluru', 'Madurai'].map(location => ({ name: `${location} Service Centre`, location, status: 'Active' }))); }
+async function ensureGoogleReviewMapping() {
+  const placeId = process.env.GOOGLE_REVIEW_PLACE_ID || 'ChIJDWJ8PaWsKycR3-r2Ijr0D0I';
+  const businessName = process.env.GOOGLE_REVIEW_BUSINESS_NAME || 'Phoenixx IT';
+  const serviceCentreName = process.env.GOOGLE_REVIEW_SERVICE_CENTRE_NAME || 'Coimbatore Service Centre';
+  const serviceCentre = await ServiceCentre.findOne({ name: serviceCentreName });
+  if (!serviceCentre) {
+    logGoogleReview('Configured service-centre mapping target was not found', { serviceCentreName });
+    return false;
+  }
+  await ServiceCentre.updateOne({ _id: serviceCentre._id }, { $set: { googleBusinessProfileConnected: true, reviewIntegrationMode: 'gmail', 'googleBusinessProfile.placeId': placeId, 'googleBusinessProfile.businessName': businessName, 'googleBusinessProfile.locationName': businessName, 'googleBusinessProfile.connected': true } });
+  return true;
+}
 async function ensureDemoEnrollmentDevices() {
   await Promise.all(demoEnrollmentDevices.map(device => DeviceMaster.updateOne({ serialNumber: device.serialNumber }, { $setOnInsert: device }, { upsert: true })));
 }
@@ -847,4 +899,4 @@ async function ensureDemoAccounts() {
   );
 }
  
-mongoose.connect(process.env.MONGODB_URI).then(async () => { await ensureDemoAccounts(); await ensureDemoEnrollmentDevices(); await ensureEscalationRules(); await ensureServiceCentres(); app.listen(port, '0.0.0.0', () => console.log(`API running at http://localhost:${port}`)); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });
+mongoose.connect(process.env.MONGODB_URI).then(async () => { await ensureDemoAccounts(); await ensureDemoEnrollmentDevices(); await ensureEscalationRules(); await ensureServiceCentres(); await ensureGoogleReviewMapping(); app.listen(port, '0.0.0.0', () => { startGoogleGmailPoller(); console.log(`API running at http://localhost:${port}`); }); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });

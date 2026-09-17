@@ -43,3 +43,24 @@ test('rejects unrelated Gmail messages', () => {
   const unrelated = { ...message, id: 'unrelated', payload: { ...message.payload, headers: [{ name: 'Subject', value: 'Your monthly statement' }], body: { data: Buffer.from('Your account statement is ready.').toString('base64url') } } };
   assert.equal(parseGoogleReviewEmail(unrelated, { placeId: 'place', businessName: 'Phoenixx IT' }), null);
 });
+
+test('handles HTML review mail without a comment or named reviewer', () => {
+  const htmlMessage = {
+    id: 'gmail-html-456',
+    internalDate: String(new Date('2026-05-18T10:00:00.000Z').getTime()),
+    payload: {
+      headers: [
+        { name: 'From', value: 'Google Business Profile <noreply@google.com>' },
+        { name: 'Subject', value: 'New rating for Phoenixx IT' },
+      ],
+      mimeType: 'text/html',
+      body: { data: Buffer.from('<p>Phoenixx IT</p><p>3 stars</p><p>View review: https://maps.google.com/review/456</p>').toString('base64url') },
+    },
+  };
+
+  const parsed = parseGoogleReviewEmail(htmlMessage, { placeId: 'place', businessName: 'Phoenixx IT' });
+  assert.equal(parsed.rating, 3);
+  assert.equal(parsed.reviewerName, null);
+  assert.equal(parsed.comment, null);
+  assert.equal(parsed.gmailMessageId, 'gmail-html-456');
+});

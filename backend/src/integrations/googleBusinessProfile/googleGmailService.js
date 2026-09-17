@@ -64,7 +64,10 @@ export function buildGoogleGmailAuthUrl(environment = process.env, state = '') {
 async function fetchJson(url, options, fetchImpl = fetch) {
   const response = await fetchImpl(url, options);
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new GoogleGmailError(body.error_description || body.error?.message || `Google request failed (${response.status})`, response.status === 401 ? 'GMAIL_AUTH_FAILED' : 'GMAIL_API_ERROR', response.status);
+  if (!response.ok) {
+    const code = url === GOOGLE_TOKEN_ENDPOINT ? 'TOKEN_REFRESH_FAILED' : (response.status === 401 ? 'GMAIL_AUTH_FAILED' : 'GMAIL_API_ACCESS_FAILED');
+    throw new GoogleGmailError(body.error_description || body.error?.message || `Google request failed (${response.status})`, code, response.status);
+  }
   return body;
 }
 
@@ -87,6 +90,7 @@ async function accessToken({ refreshToken, environment = process.env, fetchImpl 
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ client_id: environment.GOOGLE_GMAIL_CLIENT_ID, client_secret: environment.GOOGLE_GMAIL_CLIENT_SECRET, refresh_token: token, grant_type: 'refresh_token' }),
   }, fetchImpl);
+  if (!result.access_token) throw new GoogleGmailError('Google did not return an access token.', 'TOKEN_REFRESH_FAILED', 502);
   return result.access_token;
 }
 
@@ -105,6 +109,17 @@ export async function getGoogleGmailMessage({ refreshToken, messageId, environme
 export async function getGoogleGmailProfile({ refreshToken, environment = process.env, fetchImpl = fetch } = {}) {
   const token = await accessToken({ refreshToken, environment, fetchImpl });
   return fetchJson(`${GMAIL_API}/profile`, { headers: { Authorization: `Bearer ${token}` } }, fetchImpl);
+}
+
+export async function diagnoseGoogleGmailConnection({ refreshToken, environment = process.env, fetchImpl = fetch } = {}) {
+  if (!environment.GOOGLE_GMAIL_CLIENT_ID || !environment.GOOGLE_GMAIL_CLIENT_SECRET || !environment.GOOGLE_GMAIL_REDIRECT_URI) return { status: 'AUTH_CLIENT_MISSING', connected: false };
+  if (!refreshToken && !environment.GOOGLE_GMAIL_REFRESH_TOKEN) return { status: 'REFRESH_TOKEN_MISSING', connected: false };
+  try {
+    const messageIds = await listGoogleReviewEmails({ refreshToken, query: 'in:anywhere', maxResults: 1, environment, fetchImpl });
+    return { status: 'GMAIL_API_CONNECTED', connected: true, readOnlyRequest: 'users.messages.list', sampleCount: messageIds.length };
+  } catch (error) {
+    return { status: error.code === 'TOKEN_REFRESH_FAILED' ? 'TOKEN_REFRESH_FAILED' : 'GMAIL_API_ACCESS_FAILED', connected: false, message: error.message };
+  }
 }
 
 export { GMAIL_SCOPE };

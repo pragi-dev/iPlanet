@@ -20,6 +20,7 @@ const serviceCentreSchema = new mongoose.Schema({
     accountId: String,
     locationId: String,
     locationName: String,
+    businessName: String,
     placeId: String,
     connected: { type: Boolean, default: false }
   }
@@ -52,6 +53,8 @@ const googleReviewSchema = new mongoose.Schema({
   keyIssue: String,
   suggestedResponse: String,
   recommendedAction: String,
+  aiProcessingStatus: { type: String, enum: ['not_attempted', 'success', 'failed'], default: 'not_attempted' },
+  aiProcessingError: String,
   priority: { type: String, enum: ['low', 'medium', 'high'], default: 'low', index: true },
   status: { type: String, enum: ['Open', 'Acknowledged', 'Resolved'], default: 'Open', index: true },
   notificationCreated: { type: Boolean, default: false },
@@ -62,7 +65,7 @@ const googleReviewSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 }, { timestamps: true });
-const notificationSchema = new mongoose.Schema({ user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, portalRole: String, type: String, title: String, message: String, ticket: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' }, device: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, reviewId: { type: mongoose.Schema.Types.ObjectId, ref: 'GoogleReview' }, read: { type: Boolean, default: false } }, { timestamps: true });
+const notificationSchema = new mongoose.Schema({ user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, portalRole: String, type: String, priority: { type: String, enum: ['normal', 'high'], default: 'normal' }, title: String, message: String, ticket: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' }, device: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, reviewId: { type: mongoose.Schema.Types.ObjectId, ref: 'GoogleReview' }, read: { type: Boolean, default: false } }, { timestamps: true });
 const googleGmailConnectionSchema = new mongoose.Schema({
   provider: { type: String, unique: true, default: 'google-gmail' },
   email: String,

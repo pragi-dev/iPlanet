@@ -3,7 +3,7 @@ import { describeGoogleReviewEmailStructure, parseGoogleReviewEmail } from './go
 
 export async function retrieveGoogleReviewEmails({ refreshToken, environment = process.env, fetchImpl = fetch, maxResults = 50 } = {}) {
   const businessName = environment.GOOGLE_REVIEW_BUSINESS_NAME || 'Phoenixx IT';
-  const query = environment.GOOGLE_GMAIL_SEARCH_QUERY || `(review OR rating OR stars) newer_than:${environment.GOOGLE_GMAIL_LOOKBACK_DAYS || 30}d`;
+  const query = environment.GOOGLE_GMAIL_SEARCH_QUERY || `in:anywhere from:(google.com) (review OR rating OR stars) newer_than:${environment.GOOGLE_GMAIL_LOOKBACK_DAYS || 30}d`;
   const ids = await listGoogleReviewEmails({ refreshToken, query, maxResults, environment, fetchImpl });
   const parsed = [];
   const rejected = [];

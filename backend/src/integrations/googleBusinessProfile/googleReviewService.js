@@ -51,7 +51,12 @@ export function analyzeGoogleReview(comment = '', rating = 0) {
 }
 
 export function normalizeGoogleReviewInput(review = {}) {
-  const createdAtSource = review.reviewCreatedAt || review.reviewUpdatedAt || review.createdAt || new Date().toISOString();
+  const createdAtSource = review.reviewCreatedAt || review.reviewUpdatedAt || review.createdAt || null;
+  const safeIso = value => {
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  };
   const originalComment = String(review.comment || review.originalReview || '').trim();
   const normalized = {
     googleReviewId: String(review.googleReviewId || review.id || `gmb-${Date.now()}`),
@@ -65,11 +70,13 @@ export function normalizeGoogleReviewInput(review = {}) {
     reviewerName: review.reviewerName || 'Google reviewer',
     rating: Number(review.rating || 0),
     comment: originalComment,
-    reviewCreatedAt: new Date(createdAtSource).toISOString(),
-    reviewUpdatedAt: review.reviewUpdatedAt ? new Date(review.reviewUpdatedAt).toISOString() : new Date(createdAtSource).toISOString(),
-    emailReceivedAt: review.emailReceivedAt ? new Date(review.emailReceivedAt).toISOString() : undefined,
+    reviewCreatedAt: safeIso(createdAtSource),
+    reviewUpdatedAt: safeIso(review.reviewUpdatedAt || createdAtSource),
+    emailReceivedAt: safeIso(review.emailReceivedAt),
     reviewUrl: review.reviewUrl || '',
     source: review.source || 'google-api',
+    aiProcessingStatus: review.aiProcessingStatus || 'not_attempted',
+    aiProcessingError: review.aiProcessingError || '',
     googleReplyStatus: review.googleReplyStatus || 'not_attempted',
     googleReply: review.googleReply || '',
   };

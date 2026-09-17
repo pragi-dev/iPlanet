@@ -11,6 +11,7 @@ export async function createGoogleReviewNotifications({ review, serviceCentre, u
       company: user.companyId || null,
       serviceCentreId: serviceCentre._id || serviceCentre.id || null,
       portalRole: user.role,
+      priority: review.sentiment === 'negative' ? 'high' : 'normal',
       type: review.sentiment === 'negative' ? 'NEGATIVE_GOOGLE_REVIEW' : 'NEW_GOOGLE_REVIEW',
       title: review.sentiment === 'negative' ? 'Negative Google Review' : 'New Google Review',
       message: review.sentiment === 'negative'
