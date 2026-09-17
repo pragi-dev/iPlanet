@@ -15,7 +15,7 @@ const serviceCentreSchema = new mongoose.Schema({
   googleMapsUrl: String,
   googleLocationId: String,
   googleBusinessProfileConnected: { type: Boolean, default: false },
-  reviewIntegrationMode: { type: String, default: 'demo', enum: ['demo', 'google-api'] },
+  reviewIntegrationMode: { type: String, default: 'demo', enum: ['demo', 'gmail', 'google-api'] },
   googleBusinessProfile: {
     accountId: String,
     locationId: String,
@@ -31,6 +31,9 @@ const ticketSchema = new mongoose.Schema({ ticketId: { type: String, unique: tru
 const escalationRuleSchema = new mongoose.Schema({ name: { type: String, required: true }, level: { type: Number, min: 1, max: 3, required: true }, trigger: { type: String, required: true }, priority: { type: String, default: 'All' }, slaThreshold: { type: Number, min: 0, max: 100, required: true }, action: { type: String, required: true }, isActive: { type: Boolean, default: true } }, { timestamps: true });
 const googleReviewSchema = new mongoose.Schema({
   googleReviewId: { type: String, required: true, unique: true, index: true },
+  gmailMessageId: { type: String, unique: true, sparse: true, index: true },
+  googlePlaceId: { type: String, index: true },
+  businessName: String,
   googleLocationId: { type: String, index: true },
   googleAccountId: { type: String, index: true },
   serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre', index: true },
@@ -40,6 +43,9 @@ const googleReviewSchema = new mongoose.Schema({
   comment: String,
   reviewCreatedAt: { type: Date, index: true },
   reviewUpdatedAt: Date,
+  emailReceivedAt: Date,
+  reviewUrl: String,
+  source: { type: String, default: 'google-api' },
   sentiment: { type: String, enum: ['positive', 'neutral', 'negative'], default: 'neutral', index: true },
   sentimentScore: Number,
   aiSummary: String,
@@ -57,6 +63,15 @@ const googleReviewSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 const notificationSchema = new mongoose.Schema({ user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, portalRole: String, type: String, title: String, message: String, ticket: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' }, device: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, reviewId: { type: mongoose.Schema.Types.ObjectId, ref: 'GoogleReview' }, read: { type: Boolean, default: false } }, { timestamps: true });
+const googleGmailConnectionSchema = new mongoose.Schema({
+  provider: { type: String, unique: true, default: 'google-gmail' },
+  email: String,
+  refreshTokenEncrypted: String,
+  connectedAt: Date,
+  lastSyncAt: Date,
+  lastSyncStatus: { type: String, enum: ['success', 'failed', 'never'], default: 'never' },
+  lastSyncMessage: String,
+}, { timestamps: true });
 const timelineSchema = new mongoose.Schema({ ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' }, status: String, message: String, note: String, updatedBy: String, userRole: String, timestamp: { type: Date, default: Date.now } });
 const callRecordSchema = new mongoose.Schema({ ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket', required: true }, agentUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, agentName: String, ticketNumber: String, customerName: String, customerPhone: String, outcome: { type: String, enum: ['Issue Resolved Remotely', 'Customer Needs Further Assistance', 'Engineer Visit Required', 'Customer Unavailable', 'Call Back Required'], default: 'Customer Unavailable' }, notes: String, callStatus: { type: String, default: 'Call Attempted' } }, { timestamps: true });
 const aiSupportSessionSchema = new mongoose.Schema({ ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' }, customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, preparedRequest: { type: Object }, sessionId: { type: String, unique: true, required: true }, issueContext: { type: Object, default: {} }, messages: [{ role: { type: String, enum: ['user', 'assistant'], required: true }, content: { type: String, required: true }, timestamp: { type: Date, default: Date.now } }], troubleshootingSteps: [{ step: String, outcome: String, timestamp: { type: Date, default: Date.now } }], customerResponses: [{ response: String, timestamp: { type: Date, default: Date.now } }], result: { type: String, default: 'In Progress' }, status: { type: String, default: 'In Progress' }, escalationStatus: { type: String, enum: ['Not Escalated', 'Recommended Service Assistance', 'Resolved'], default: 'Not Escalated' }, providerAvailable: { type: Boolean, default: false }, providerStatus: String }, { timestamps: true });
@@ -69,6 +84,7 @@ export const Engineer = mongoose.model('Engineer', engineerSchema);
 export const Ticket = mongoose.model('Ticket', ticketSchema);
 export const TicketTimeline = mongoose.model('TicketTimeline', timelineSchema);
 export const GoogleReview = mongoose.model('GoogleReview', googleReviewSchema);
+export const GoogleGmailConnection = mongoose.model('GoogleGmailConnection', googleGmailConnectionSchema);
 export const Notification = mongoose.model('Notification', notificationSchema);
 export const EscalationRule = mongoose.model('EscalationRule', escalationRuleSchema);
 export const CallRecord = mongoose.model('CallRecord', callRecordSchema);

@@ -4,6 +4,7 @@ export async function findGoogleMappedServiceCentre({ ServiceCentre, locationId,
     $or: [
       { 'googleBusinessProfile.locationId': locationId },
       { 'googleBusinessProfile.placeId': placeId },
+      { 'googleBusinessProfile.businessName': locationName },
       { 'googleBusinessProfile.locationName': locationName },
       { name: locationName },
     ]

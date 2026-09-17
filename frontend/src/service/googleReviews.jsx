@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ArrowUpRight, CheckCheck, Eye, MessageSquareText, Search, Star, TrendingUp } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight, CheckCheck, Eye, MessageSquareText, RefreshCw, Search, Star, TrendingUp } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { ServiceShell } from './servicePages';
 import { Badge, Empty, Metric, PageTitle } from './components';
-import { acknowledgeGoogleReview, generateGoogleReviewResponse, getGoogleReviewAnalytics, getGoogleReviews, getServiceCentres, resolveGoogleReview } from './api';
+import { acknowledgeGoogleReview, generateGoogleReviewResponse, getGoogleGmailAuthUrl, getGoogleReviewAnalytics, getGoogleReviewHealth, getGoogleReviews, getServiceCentres, resolveGoogleReview, syncGoogleReviews } from './api';
 
 const sentimentColors = { positive: '#2f8f5b', neutral: '#d4a72c', negative: '#bf4a3f' };
 const ratingColors = ['#0e7490', '#2f8f5b', '#d4a72c', '#d96f45', '#bf4a3f'];
@@ -45,18 +45,23 @@ export function GoogleReviews({ admin = false } = {}) {
   const [serviceCentreFilter, setServiceCentreFilter] = useState('All');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState('');
+  const [health, setHealth] = useState(null);
 
   const load = async () => {
     try {
       setLoading(true);
-      const [reviewRows, analyticsResult, centreRows] = await Promise.all([
+      const [reviewRows, analyticsResult, centreRows, healthResult] = await Promise.all([
         getGoogleReviews(admin ? { serviceCentreId: serviceCentreFilter !== 'All' ? serviceCentreFilter : undefined } : {}),
         getGoogleReviewAnalytics(admin ? { serviceCentreId: serviceCentreFilter !== 'All' ? serviceCentreFilter : undefined } : {}),
-        getServiceCentres().catch(() => [])
+        getServiceCentres().catch(() => []),
+        getGoogleReviewHealth().catch(() => null)
       ]);
       setReviews(reviewRows);
       setAnalytics(analyticsResult || { summary: { totalReviews: 0, averageRating: 0, positiveReviews: 0, neutralReviews: 0, negativeReviews: 0, unresolvedNegativeReviews: 0 }, byServiceCentre: [] });
       setServiceCentres(centreRows);
+      setHealth(healthResult);
     } catch (loadError) {
       setError(loadError.message || 'Unable to load Google reviews.');
     } finally {
@@ -122,12 +127,41 @@ export function GoogleReviews({ admin = false } = {}) {
 
   const handleFilter = (field, value) => setFilters(current => ({ ...current, [field]: value }));
 
+  const syncReviews = async () => {
+    try {
+      setSyncing(true);
+      setSyncMessage('');
+      const result = await syncGoogleReviews();
+      setSyncMessage(`Sync complete: ${result.new || 0} new, ${result.duplicates || 0} duplicate, ${result.failed || 0} failed.`);
+      await load();
+    } catch (syncError) {
+      setError(syncError.message || 'Unable to sync Google reviews.');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const connectGmail = async () => {
+    try {
+      const result = await getGoogleGmailAuthUrl();
+      window.location.assign(result.authorizationUrl);
+    } catch (authError) {
+      setError(authError.message || 'Unable to start Google authorization.');
+    }
+  };
+
   const serviceTitle = admin ? 'Google Reviews' : 'Google Reviews';
   const serviceDescription = admin ? 'Monitor service-centre feedback and operational risk across the network.' : 'Monitor customer feedback for this service centre.';
 
   return (
     <ServiceShell title={serviceTitle}>
-      <PageTitle title={serviceTitle} description={serviceDescription} />
+      <PageTitle title={serviceTitle} description={serviceDescription} action={<button type="button" className="button primary" onClick={syncReviews} disabled={syncing}><RefreshCw size={15} className={syncing ? 'spin' : ''} />{syncing ? 'Syncing...' : 'Sync Google Reviews'}</button>} />
+      <div className="panel review-connection-status">
+        <div><span className="kicker">Google Reviews</span><strong>{health?.gmailConfigured ? 'Connected' : 'Not connected'}</strong><small>{health?.businessName || 'Phoenixx IT'} · {health?.placeId || 'Place ID not configured'}</small></div>
+        <div><span className="kicker">Last sync</span><strong>{health?.lastSyncAt ? formatReviewDate(health.lastSyncAt) : 'Never'}</strong><small>{health?.lastSyncStatus || 'never'}</small></div>
+        {!health?.gmailConfigured && <button type="button" className="button secondary" onClick={connectGmail}>Connect Gmail</button>}
+      </div>
+      {syncMessage && <p className="form-success review-error">{syncMessage}</p>}
       <div className="toolbar service-toolbar review-toolbar">
         {admin && (
           <select value={serviceCentreFilter} onChange={event => setServiceCentreFilter(event.target.value)}>
@@ -300,6 +334,7 @@ export function GoogleReviews({ admin = false } = {}) {
               <div className="review-block">
                 <span className="kicker">Original Google Review</span>
                 <p>{selectedReview.comment || 'No review text provided.'}</p>
+                {selectedReview.reviewUrl && <a className="text-link" href={selectedReview.reviewUrl} target="_blank" rel="noreferrer">Open Review <ArrowUpRight size={14} /></a>}
               </div>
 
               <div className="review-block">
