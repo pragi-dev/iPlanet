@@ -217,6 +217,14 @@ svg { display: block; flex: 0 0 auto; }
 .review-toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 4.5% 18px; }
 .review-toolbar select,
 .review-toolbar input { min-height: 38px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--ink); padding: 0 10px; font-size: 12px; }
+.review-connection-status { margin: 0 4.5% 18px; padding: 16px 20px; display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(150px, .8fr) auto; align-items: center; gap: 24px; }
+.review-connection-item { min-width: 0; display: grid; gap: 5px; }
+.review-connection-item .kicker { margin: 0; }
+.review-connection-item strong { color: var(--ink); font-size: 16px; line-height: 1.2; }
+.review-connection-item small { color: var(--muted); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.connection-state { color: #b45309 !important; }
+.connection-state.connected { color: #2f8f5b !important; }
+.sync-failed { color: #bf4a3f !important; text-transform: capitalize; }
 .review-metrics { margin: 0 4.5% 18px; }
 .review-chart-grid { margin: 0 4.5% 18px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .review-table-panel { margin: 0 4.5% 40px; }
@@ -290,6 +298,8 @@ table td .badge,table td .button,table td .row-link { vertical-align: middle; }
   .welcome > .button,.page-title > .button,.detail-hero > .button { align-self: flex-start; }
   .service-toolbar > .search { max-width: none; }
   .service-toolbar > select { flex: 1 1 150px; min-width: 0; }
+  .review-connection-status { margin-left: 20px; margin-right: 20px; grid-template-columns: 1fr; gap: 14px; padding: 16px; }
+  .review-connection-status .button { justify-self: start; }
   .assign-row > * { width: 100%; }
   .annotator-actions .annotator-spacer { display: none; }
   .annotator-actions .button { flex: 1 1 auto; }

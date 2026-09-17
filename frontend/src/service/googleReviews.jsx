@@ -156,8 +156,8 @@ export function GoogleReviews({ admin = false } = {}) {
     <ServiceShell title={serviceTitle}>
       <PageTitle title={serviceTitle} description={serviceDescription} action={<button type="button" className="button primary" onClick={syncReviews} disabled={syncing}><RefreshCw size={15} className={syncing ? 'spin' : ''} />{syncing ? 'Syncing...' : 'Sync Google Reviews'}</button>} />
       <div className="panel review-connection-status">
-        <div><span className="kicker">Google Reviews</span><strong>{health?.gmailConfigured ? 'Connected' : 'Not connected'}</strong><small>{health?.businessName || 'Phoenixx IT'} · {health?.placeId || 'Place ID not configured'}</small></div>
-        <div><span className="kicker">Last sync</span><strong>{health?.lastSyncAt ? formatReviewDate(health.lastSyncAt) : 'Never'}</strong><small>{health?.lastSyncStatus || 'never'}</small></div>
+        <div className="review-connection-item"><span className="kicker">Google Reviews</span><strong className={health?.gmailConfigured ? 'connection-state connected' : 'connection-state'}>{health?.gmailConfigured ? 'Connected' : 'Not connected'}</strong><small>{health?.businessName || 'Phoenixx IT'} <span aria-hidden="true">·</span> {health?.placeId || 'Place ID not configured'}</small></div>
+        <div className="review-connection-item"><span className="kicker">Last sync</span><strong>{health?.lastSyncAt ? formatReviewDate(health.lastSyncAt) : 'Never'}</strong><small className={health?.lastSyncStatus === 'failed' ? 'sync-failed' : ''}>{health?.lastSyncStatus || 'never'}</small></div>
         {!health?.gmailConfigured && <button type="button" className="button secondary" onClick={connectGmail}>Connect Gmail</button>}
       </div>
       {syncMessage && <p className="form-success review-error">{syncMessage}</p>}
