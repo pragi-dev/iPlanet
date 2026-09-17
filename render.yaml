@@ -38,8 +38,10 @@ services:
       - key: GOOGLE_GMAIL_CLIENT_SECRET
         sync: false
       - key: GOOGLE_GMAIL_REDIRECT_URI
-        sync: false
+        value: https://iplanet-backend.onrender.com/api/google-gmail/callback
       - key: GOOGLE_GMAIL_REFRESH_TOKEN
+        sync: false
+      - key: GOOGLE_GMAIL_TOKEN_ENCRYPTION_KEY
         sync: false
       - key: GOOGLE_GMAIL_SEARCH_QUERY
         sync: false

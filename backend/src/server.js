@@ -168,7 +168,7 @@ async function syncGmailReviews() {
   const connection = await GoogleGmailConnection.findOne({ provider: 'google-gmail' });
   const refreshToken = decryptRefreshToken(connection?.refreshTokenEncrypted) || process.env.GOOGLE_GMAIL_REFRESH_TOKEN;
   if (!isGmailConfigured(process.env, refreshToken)) {
-    const error = new GoogleGmailError('Google Reviews is not connected. Authorize the configured Gmail account before syncing.', 'GMAIL_NOT_CONNECTED', 503);
+    const error = new GoogleGmailError('Google Reviews is not connected on this backend. Authorize Gmail using this deployment URL, then retry sync.', 'GMAIL_NOT_CONNECTED', 503);
     throw error;
   }
 
@@ -643,6 +643,7 @@ app.get('/api/google-reviews/health', auth, allowRoles('corporate_admin', 'iplan
     gmailConfigured,
     gmailConnected: gmailDiagnostic.connected,
     gmailDiagnostic: gmailDiagnostic.status,
+    tokenStorageStatus: connection?.refreshTokenEncrypted && !storedRefreshToken ? 'ENCRYPTED_TOKEN_UNREADABLE' : storedRefreshToken ? 'AVAILABLE' : 'MISSING',
     gmailApiReadOnlyRequest: gmailDiagnostic.readOnlyRequest || null,
     oauthConfigured: Boolean(process.env.GOOGLE_GMAIL_CLIENT_ID && process.env.GOOGLE_GMAIL_CLIENT_SECRET && process.env.GOOGLE_GMAIL_REDIRECT_URI),
     refreshTokenConfigured: Boolean(connection?.refreshTokenEncrypted || process.env.GOOGLE_GMAIL_REFRESH_TOKEN),

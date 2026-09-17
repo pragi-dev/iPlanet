@@ -14,7 +14,7 @@ export class GoogleGmailError extends Error {
 }
 
 function encryptionKey(environment = process.env) {
-  return crypto.createHash('sha256').update(String(environment.JWT_SECRET || 'local-demo-secret')).update('iplanet-google-gmail-refresh-token').digest();
+  return crypto.createHash('sha256').update(String(environment.GOOGLE_GMAIL_TOKEN_ENCRYPTION_KEY || environment.JWT_SECRET || 'local-demo-secret')).update('iplanet-google-gmail-refresh-token').digest();
 }
 
 export function encryptRefreshToken(token, environment = process.env) {
