@@ -2,7 +2,28 @@ import mongoose from 'mongoose';
 
 const userSchema = new mongoose.Schema({ name: String, email: { type: String, unique: true }, password: String, role: { type: String, default: 'corporate_admin' }, company: String, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, phone: String });
 const companySchema = new mongoose.Schema({ name: { type: String, unique: true }, companyId: { type: String, unique: true }, contactName: String, contactEmail: String, phone: String, location: String });
-const serviceCentreSchema = new mongoose.Schema({ name: { type: String, unique: true }, location: { type: String, required: true }, address: String, city: String, state: String, contactNumber: String, email: String, status: { type: String, default: 'Active' }, googleBusinessProfile: { accountId: String, locationId: String, locationName: String, placeId: String, connected: { type: Boolean, default: false } } }, { timestamps: true });
+const serviceCentreSchema = new mongoose.Schema({
+  serviceCentreId: { type: String, unique: true, sparse: true },
+  name: { type: String, unique: true },
+  location: { type: String, required: true },
+  address: String,
+  city: String,
+  state: String,
+  contactNumber: String,
+  email: String,
+  status: { type: String, default: 'Active' },
+  googleMapsUrl: String,
+  googleLocationId: String,
+  googleBusinessProfileConnected: { type: Boolean, default: false },
+  reviewIntegrationMode: { type: String, default: 'demo', enum: ['demo', 'google-api'] },
+  googleBusinessProfile: {
+    accountId: String,
+    locationId: String,
+    locationName: String,
+    placeId: String,
+    connected: { type: Boolean, default: false }
+  }
+}, { timestamps: true });
 const deviceSchema = new mongoose.Schema({ assetId: String, serialNumber: { type: String, unique: true }, deviceType: String, model: String, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, selectedEntityId: { type: mongoose.Schema.Types.ObjectId }, selectedEntityType: { type: String, enum: ['corporate', 'service_centre'] }, employeeName: String, employeeId: String, department: String, location: String, purchaseDate: Date, warrantyStatus: String, warrantyExpiry: Date, amcStatus: String, amcExpiry: Date, deviceStatus: String, deviceAllocationStatus: { type: String, enum: ['Unassigned', 'Assigned'], default: 'Unassigned' }, lastServiceDate: Date });
 const deviceMasterSchema = new mongoose.Schema({ serialNumber: { type: String, unique: true }, deviceType: String, model: String, assetId: String, purchaseDate: Date, warrantyStatus: String, warrantyExpiry: Date, amcStatus: String, amcExpiry: Date });
 const engineerSchema = new mongoose.Schema({ name: String, employeeId: { type: String, unique: true }, email: { type: String, unique: true }, phone: String, location: String, status: { type: String, default: 'Available' }, userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' } });

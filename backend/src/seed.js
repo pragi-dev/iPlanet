@@ -12,10 +12,10 @@ const companyDefinitions = [
   { name: 'Demo Corporation', companyId: 'CO-003', contactName: 'Karthik Raj', contactEmail: 'karthik.raj@democorporation.in', phone: '+91 422 456 9900', location: 'Coimbatore' }
 ];
 const serviceCentreDefinitions = [
-  { name: 'Chennai Service Centre', location: 'Chennai', city: 'Chennai', state: 'Tamil Nadu', contactNumber: '+91 44 4012 8801', email: 'chennai.service@iplanetcare.in' },
-  { name: 'Coimbatore Service Centre', location: 'Coimbatore', city: 'Coimbatore', state: 'Tamil Nadu', contactNumber: '+91 422 456 9901', email: 'coimbatore.service@iplanetcare.in' },
-  { name: 'Bengaluru Service Centre', location: 'Bengaluru', city: 'Bengaluru', state: 'Karnataka', contactNumber: '+91 80 4123 7701', email: 'bengaluru.service@iplanetcare.in' },
-  { name: 'Madurai Service Centre', location: 'Madurai', city: 'Madurai', state: 'Tamil Nadu', contactNumber: '+91 452 438 2201', email: 'madurai.service@iplanetcare.in' }
+  { serviceCentreId: 'SC-CHN-001', name: 'Chennai Service Centre', location: 'Chennai', city: 'Chennai', state: 'Tamil Nadu', contactNumber: '+91 44 4012 8801', email: 'chennai.service@iplanetcare.in', googleMapsUrl: 'https://maps.google.com/?q=Chennai+Service+Centre', googleLocationId: '', googleBusinessProfileConnected: false, reviewIntegrationMode: 'demo', googleBusinessProfile: { connected: false, locationId: '', locationName: 'Chennai Service Centre' } },
+  { serviceCentreId: 'SC-CBE-001', name: 'Coimbatore Service Centre', location: 'Coimbatore', city: 'Coimbatore', state: 'Tamil Nadu', contactNumber: '+91 422 456 9901', email: 'coimbatore.service@iplanetcare.in', googleMapsUrl: 'https://maps.google.com/?q=Coimbatore+Service+Centre', googleLocationId: '', googleBusinessProfileConnected: false, reviewIntegrationMode: 'demo', googleBusinessProfile: { connected: false, locationId: '', locationName: 'Coimbatore Service Centre' } },
+  { serviceCentreId: 'SC-BLR-001', name: 'Bengaluru Service Centre', location: 'Bengaluru', city: 'Bengaluru', state: 'Karnataka', contactNumber: '+91 80 4123 7701', email: 'bengaluru.service@iplanetcare.in', googleMapsUrl: 'https://maps.google.com/?q=Bengaluru+Service+Centre', googleLocationId: '', googleBusinessProfileConnected: false, reviewIntegrationMode: 'demo', googleBusinessProfile: { connected: false, locationId: '', locationName: 'Bengaluru Service Centre' } },
+  { serviceCentreId: 'SC-MDU-001', name: 'Madurai Service Centre', location: 'Madurai', city: 'Madurai', state: 'Tamil Nadu', contactNumber: '+91 452 438 2201', email: 'madurai.service@iplanetcare.in', googleMapsUrl: 'https://maps.google.com/?q=Madurai+Service+Centre', googleLocationId: '', googleBusinessProfileConnected: false, reviewIntegrationMode: 'demo', googleBusinessProfile: { connected: false, locationId: '', locationName: 'Madurai Service Centre' } }
 ];
 const corporateUsers = [
   ['Arjun Kumar', 'admin@corporate.local', 0, '+91 98400 11001'],
