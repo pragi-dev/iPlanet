@@ -13,28 +13,35 @@ export class GoogleGmailError extends Error {
   }
 }
 
-function encryptionKey(environment = process.env) {
-  return crypto.createHash('sha256').update(String(environment.GOOGLE_GMAIL_TOKEN_ENCRYPTION_KEY || environment.JWT_SECRET || 'local-demo-secret')).update('iplanet-google-gmail-refresh-token').digest();
+function encryptionKey(secret) {
+  return crypto.createHash('sha256').update(String(secret || 'local-demo-secret')).update('iplanet-google-gmail-refresh-token').digest();
+}
+
+function encryptionSecrets(environment = process.env) {
+  return [...new Set([environment.GOOGLE_GMAIL_TOKEN_ENCRYPTION_KEY, environment.GOOGLE_GMAIL_CLIENT_SECRET, environment.JWT_SECRET, 'local-demo-secret'].filter(Boolean))];
 }
 
 export function encryptRefreshToken(token, environment = process.env) {
   const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey(environment), iv);
+  const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey(encryptionSecrets(environment)[0]), iv);
   const encrypted = Buffer.concat([cipher.update(String(token), 'utf8'), cipher.final()]);
   return `v1:${iv.toString('base64url')}:${cipher.getAuthTag().toString('base64url')}:${encrypted.toString('base64url')}`;
 }
 
 export function decryptRefreshToken(value, environment = process.env) {
   if (!value) return '';
-  try {
-    const [version, ivText, tagText, encryptedText] = String(value).split(':');
-    if (version !== 'v1') return '';
-    const decipher = crypto.createDecipheriv('aes-256-gcm', encryptionKey(environment), Buffer.from(ivText, 'base64url'));
-    decipher.setAuthTag(Buffer.from(tagText, 'base64url'));
-    return Buffer.concat([decipher.update(Buffer.from(encryptedText, 'base64url')), decipher.final()]).toString('utf8');
-  } catch {
-    return '';
+  const [version, ivText, tagText, encryptedText] = String(value).split(':');
+  if (version !== 'v1') return '';
+  for (const secret of encryptionSecrets(environment)) {
+    try {
+      const decipher = crypto.createDecipheriv('aes-256-gcm', encryptionKey(secret), Buffer.from(ivText, 'base64url'));
+      decipher.setAuthTag(Buffer.from(tagText, 'base64url'));
+      return Buffer.concat([decipher.update(Buffer.from(encryptedText, 'base64url')), decipher.final()]).toString('utf8');
+    } catch {
+      // Try the next deployment-compatible key without exposing token details.
+    }
   }
+  return '';
 }
 
 function requireOAuthConfig(environment) {
