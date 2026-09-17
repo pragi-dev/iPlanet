@@ -9,6 +9,7 @@ import { CoverageEnhanced } from './corporate/CoverageEnhanced';
 import { AICustomerSupportPanel } from './corporate/AICustomerSupportPanel';
 import { getDevice, getTicket, login } from './corporate/api';
 import { ServiceDashboard } from './service/servicePages';
+import { GoogleReviews } from './service/googleReviews';
 import { MyTickets } from './service/companyQueue';
 import { DeviceEnrollment } from './service/enrollment';
 import { ServiceNotifications, EscalationMatrix } from './service/serviceExtras';
@@ -127,6 +128,7 @@ function ServiceRoutes() {
     <Route path="/service/dashboard" element={<Protected role="iplanet_service"><ServiceDashboard /></Protected>} />
     <Route path="/service/tickets" element={<Protected role="iplanet_service"><MyTickets /></Protected>} />
     <Route path="/service/tickets/:id" element={<Protected role="iplanet_service"><OperationalTicketDetail /></Protected>} />
+    <Route path="/service/google-reviews" element={<Protected role="iplanet_service"><GoogleReviews /></Protected>} />
     <Route path="/service/device-enrollment" element={<Protected role="iplanet_service"><DeviceEnrollment /></Protected>} />
     <Route path="/service/engineers" element={<Protected role="iplanet_service"><Engineers /></Protected>} />
     <Route path="/service/reports" element={<Protected role="iplanet_service"><ServiceReports /></Protected>} />
