@@ -66,6 +66,16 @@ async function notifyUsers({ users, company, ticket, device, type, title, messag
 async function serviceUsers() { return User.find({ role: 'iplanet_service' }); }
 async function serviceUsersForCentre(serviceCentreId) { if (!serviceCentreId) return []; return User.find({ role: 'iplanet_service', serviceCentreId }); }
 
+function logGoogleReview(message, details = {}) {
+  const safeDetails = {};
+  for (const [key, value] of Object.entries(details)) {
+    if (typeof key === 'string' && /(client_secret|token|secret|private|key)/i.test(key)) continue;
+    safeDetails[key] = value;
+  }
+  const suffix = Object.keys(safeDetails).length ? ` ${JSON.stringify(safeDetails)}` : '';
+  console.log(`[GOOGLE REVIEW] ${message}${suffix}`);
+}
+
 async function buildGoogleReviewScope(req) {
   if (req.user.role === 'corporate_admin') return {};
   if (req.user.role === 'iplanet_service') {
@@ -91,6 +101,7 @@ async function mapGoogleLocationToServiceCentre({ locationId, locationName, acco
 
 async function persistGoogleReview(reviewInput) {
   const normalized = normalizeGoogleReviewInput(reviewInput);
+  logGoogleReview('Review identified', { googleReviewId: normalized.googleReviewId, googleLocationId: normalized.googleLocationId || 'unknown', serviceCentreName: normalized.serviceCentreName || 'unknown' });
   const mappedCentre = await mapGoogleLocationToServiceCentre({
     locationId: normalized.googleLocationId,
     locationName: normalized.serviceCentreName,
@@ -99,8 +110,11 @@ async function persistGoogleReview(reviewInput) {
   });
 
   if (!mappedCentre) {
-    return { duplicate: false, mapped: false, review: normalized, notificationsCreated: 0, error: 'Service centre mapping missing for this Google Business Profile location.' };
+    logGoogleReview('Location not mapped', { googleLocationId: normalized.googleLocationId || 'unknown', serviceCentreName: normalized.serviceCentreName || 'unknown' });
+    return { duplicate: false, mapped: false, review: normalized, notificationsCreated: 0, error: 'GOOGLE_LOCATION_NOT_MAPPED', locationId: normalized.googleLocationId || null };
   }
+
+  logGoogleReview('Service Centre mapped', { serviceCentreName: mappedCentre.name, serviceCentreId: String(mappedCentre._id), googleLocationId: normalized.googleLocationId || mappedCentre.googleBusinessProfile?.locationId || 'unknown' });
 
   const existing = await GoogleReview.findOne({ googleReviewId: normalized.googleReviewId }).lean();
   if (existing) {
@@ -524,6 +538,26 @@ app.get('/api/google-reviews', auth, allowRoles('corporate_admin', 'iplanet_serv
   const reviews = await GoogleReview.find(query).populate('serviceCentreId').sort({ reviewCreatedAt: -1 });
   res.json(reviews);
 });
+app.get('/api/google-reviews/health', auth, allowRoles('corporate_admin', 'iplanet_service'), async (_, res) => {
+  const mode = String(process.env.GOOGLE_REVIEW_MODE || 'demo').toLowerCase();
+  const googleApiConfigured = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_BUSINESS_PROFILE_ACCOUNT_ID && process.env.GOOGLE_LOCATION_ID);
+  const oauthConfigured = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REDIRECT_URI);
+  const accountConfigured = Boolean(process.env.GOOGLE_BUSINESS_PROFILE_ACCOUNT_ID);
+  const locationConfigured = Boolean(process.env.GOOGLE_LOCATION_ID);
+  const pubsubConfigured = Boolean(process.env.GOOGLE_PUBSUB_PROJECT_ID && process.env.GOOGLE_PUBSUB_TOPIC);
+  const webhookConfigured = Boolean(process.env.GOOGLE_PUBSUB_TOPIC || process.env.GOOGLE_REVIEW_MODE === 'google-api');
+  const serviceCentreMappingConfigured = await ServiceCentre.exists({ $or: [{ 'googleBusinessProfile.locationId': { $exists: true, $ne: '' } }, { googleLocationId: { $exists: true, $ne: '' } }] });
+  res.json({
+    mode,
+    googleApiConfigured,
+    oauthConfigured,
+    accountConfigured,
+    locationConfigured,
+    pubsubConfigured,
+    webhookConfigured,
+    serviceCentreMappingConfigured: !!serviceCentreMappingConfigured,
+  });
+});
 app.get('/api/google-reviews/analytics', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
   const scope = await buildGoogleReviewScope(req);
   const query = req.user.role === 'corporate_admin' ? {} : { serviceCentreId: scope.serviceCentreId };
@@ -613,6 +647,7 @@ app.post('/api/google-reviews/:id/reply', auth, allowRoles('corporate_admin', 'i
   res.status(202).json({ ok: true, result });
 });
 app.post('/api/google-reviews/webhook', async (req, res) => {
+  logGoogleReview('Pub/Sub request received', { hasBody: !!req.body, contentType: req.headers['content-type'] || 'unknown' });
   const provider = getGoogleBusinessProfileProvider(process.env);
   if (process.env.GOOGLE_REVIEW_MODE === 'google-api') {
     const token = req.headers['x-goog-pubsub-topic-name'] || req.headers['x-goog-pubsub-message-number'];
@@ -624,7 +659,14 @@ app.post('/api/google-reviews/webhook', async (req, res) => {
   const payload = req.body?.message?.data ? JSON.parse(Buffer.from(req.body.message.data, 'base64').toString('utf8')) : req.body;
   const reviewInput = payload?.review || payload?.googleReview || payload;
   if (!reviewInput?.googleReviewId && !reviewInput?.id) return res.status(400).json({ message: 'Google review payload was missing a review identifier.' });
+  logGoogleReview('Message received', { googleReviewId: reviewInput.googleReviewId || reviewInput.id, hasLocation: !!(reviewInput.googleLocationId || reviewInput.locationId || reviewInput.locationName) });
   const result = await persistGoogleReview(reviewInput);
+  if (result.mapped === false) {
+    logGoogleReview('Review processing complete with mapping failure', { googleReviewId: reviewInput.googleReviewId || reviewInput.id, error: result.error, googleLocationId: result.locationId || reviewInput.googleLocationId || reviewInput.locationId || 'unknown' });
+  }
+  if (result.notificationsCreated > 0) {
+    logGoogleReview('Notification created', { googleReviewId: result.review?.googleReviewId || reviewInput.googleReviewId || reviewInput.id, serviceCentreId: String(result.review?.serviceCentreId || ''), count: result.notificationsCreated });
+  }
   res.json({ ok: true, result });
 });
 app.post('/api/google-reviews/sync', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
@@ -678,10 +720,29 @@ app.post('/api/iplanet/tickets/:id/close', ...serviceAuth, async (req, res) => e
 app.post('/api/iplanet/tickets/:id/update', ...serviceAuth, async (req, res) => engineerAction(req, res, req.body.status, req.body.note || 'Service update recorded.'));
 app.get('/api/iplanet/dashboard', ...serviceAuth, async (_, res) => { const tickets = await Ticket.find(); await Promise.all(tickets.map(ticket => evaluateEscalation(ticket, true))); const count = status => tickets.filter(ticket => ticket.status === status).length; res.json({ stats: { newRequests: count('Open'), unassigned: tickets.filter(ticket => !ticket.assignedEngineerId).length, assigned: count('Engineer Assigned') + count('Engineer Accepted'), inProgress: count('In Progress'), waitingParts: count('Waiting for Parts'), completed: count('Completed'), closed: count('Closed'), activeEscalations: tickets.filter(ticket => ticket.escalationStatus === 'Escalated').length, atRisk: tickets.filter(ticket => ticket.escalationStatus === 'At Risk').length, breached: tickets.filter(ticket => ticket.escalationStatus === 'SLA Breached').length }, volume: await ticketVolumeByMonth(), locations: await Ticket.aggregate([{ $group: { _id: '$location', value: { $sum: 1 } } }, { $project: { _id: 0, name: '$_id', value: 1 } }]) }); });
 app.get('/api/iplanet/reports', ...serviceAuth, async (_, res) => { const tickets = await Ticket.find().populate('deviceId'); const group = key => Object.entries(tickets.reduce((result, ticket) => { const value = key === 'deviceType' ? ticket.deviceId?.deviceType : ticket[key]; result[value || 'Other'] = (result[value || 'Other'] || 0) + 1; return result; }, {})).map(([name, value]) => ({ name, value })); res.json({ total: tickets.length, open: tickets.filter(t => t.status === 'Open').length, completed: tickets.filter(t => t.status === 'Completed').length, closed: tickets.filter(t => t.status === 'Closed').length, averageClosureTat: '2.4 days', locations: group('location'), deviceTypes: group('deviceType'), issueTypes: group('issueType') }); });
-app.get('/api/iplanet/notifications', ...serviceAuth, async (req, res) => res.json(await Notification.find({ user: req.user.id, portalRole: 'iplanet_service' }).populate('ticket').populate('device').sort({ createdAt: -1 })));
-app.get('/api/iplanet/notifications/unread-count', ...serviceAuth, async (req, res) => res.json({ count: await Notification.countDocuments({ user: req.user.id, portalRole: 'iplanet_service', read: false }) }));
-app.patch('/api/iplanet/notifications/:id/read', ...serviceAuth, async (req, res) => { const notification = await Notification.findOneAndUpdate({ _id: req.params.id, user: req.user.id, portalRole: 'iplanet_service' }, { read: true }, { new: true }); if (!notification) return res.status(404).json({ message: 'Notification not found' }); res.json(notification); });
-app.patch('/api/iplanet/notifications/read-all', ...serviceAuth, async (req, res) => { await Notification.updateMany({ user: req.user.id, portalRole: 'iplanet_service', read: false }, { read: true }); res.json({ ok: true }); });
+app.get('/api/iplanet/notifications', ...serviceAuth, async (req, res) => {
+  const query = { user: req.user.id, portalRole: 'iplanet_service' };
+  if (req.user.serviceCentreId) query.serviceCentreId = req.user.serviceCentreId;
+  res.json(await Notification.find(query).populate('ticket').populate('device').sort({ createdAt: -1 }));
+});
+app.get('/api/iplanet/notifications/unread-count', ...serviceAuth, async (req, res) => {
+  const query = { user: req.user.id, portalRole: 'iplanet_service', read: false };
+  if (req.user.serviceCentreId) query.serviceCentreId = req.user.serviceCentreId;
+  res.json({ count: await Notification.countDocuments(query) });
+});
+app.patch('/api/iplanet/notifications/:id/read', ...serviceAuth, async (req, res) => {
+  const query = { _id: req.params.id, user: req.user.id, portalRole: 'iplanet_service' };
+  if (req.user.serviceCentreId) query.serviceCentreId = req.user.serviceCentreId;
+  const notification = await Notification.findOneAndUpdate(query, { read: true }, { new: true });
+  if (!notification) return res.status(404).json({ message: 'Notification not found' });
+  res.json(notification);
+});
+app.patch('/api/iplanet/notifications/read-all', ...serviceAuth, async (req, res) => {
+  const query = { user: req.user.id, portalRole: 'iplanet_service', read: false };
+  if (req.user.serviceCentreId) query.serviceCentreId = req.user.serviceCentreId;
+  await Notification.updateMany(query, { read: true });
+  res.json({ ok: true });
+});
 app.get('/api/escalation-matrix', auth, async (_, res) => res.json(Object.values(escalationContacts).map(contact => ({ ...contact, trigger: contact.level === 1 ? 'SLA approaching' : contact.level === 2 ? 'SLA breached' : 'Critical SLA breach' }))));
 app.get('/api/iplanet/escalation-rules', ...serviceAuth, async (_, res) => res.json(await EscalationRule.find().sort({ level: 1, slaThreshold: 1 })));
 app.post('/api/iplanet/escalation-rules', ...serviceAuth, async (req, res) => { const { name, level, trigger, priority, slaThreshold, action, isActive } = req.body; if (!name?.trim() || !level || !trigger || !action?.trim() || !Number.isFinite(Number(slaThreshold)) || Number(slaThreshold) < 0 || Number(slaThreshold) > 100) return res.status(400).json({ message: 'Rule name, level, trigger, valid SLA threshold, and action are required' }); res.status(201).json(await EscalationRule.create({ name: name.trim(), level: Number(level), trigger, priority: priority || 'All', slaThreshold: Number(slaThreshold), action: action.trim(), isActive: isActive !== false })); });
