@@ -422,7 +422,11 @@ app.post('/api/reviews', auth, allowRoles('corporate_admin'), async (req, res) =
   if (!Number.isInteger(Number(rating)) || Number(rating) < 1 || Number(rating) > 5) return res.status(400).json({ message: 'Rating must be an integer from 1 to 5.' });
   if (!cleanComment) return res.status(400).json({ message: 'A review comment is required.' });
   if (cleanComment.length > 2000) return res.status(400).json({ message: 'Review comment must be 2000 characters or fewer.' });
-  const ticket = await Ticket.findOne({ _id: requestedTicketId, companyId: req.user.companyId, customerId: req.user.id });
+  const identifier = String(requestedTicketId).trim();
+  const ticketIdentifierQuery = mongoose.isObjectIdOrHexString(identifier)
+    ? { $or: [{ _id: identifier }, { ticketId: identifier }] }
+    : { ticketId: identifier };
+  const ticket = await Ticket.findOne({ ...ticketIdentifierQuery, companyId: req.user.companyId, customerId: req.user.id });
   if (!ticket) return res.status(404).json({ message: 'Ticket not found.' });
   if (ticket.status !== 'Closed') return res.status(400).json({ message: 'Only closed service requests can be reviewed.' });
   try {
