@@ -8,7 +8,7 @@ export const mediaUrl = path => {
   return `${API_ORIGIN || ''}/${normalized}`;
 };
 const getToken = () => localStorage.getItem('iplanet_token');
-async function request(path, options = {}) { const response = await fetch(`${API}${path}`, { ...options, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}`, ...(options.headers || {}) } }); if (!response.ok) { const body = await response.json().catch(() => ({})); const error = new Error(body.message || `Request failed (${response.status})`); error.status = response.status; error.path = path; throw error; } return response.json(); }
+async function request(path, options = {}) { const token = getToken(); const response = await fetch(`${API}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers || {}) } }); if (!response.ok) { const body = await response.json().catch(() => ({})); const error = new Error(body.message || `Request failed (${response.status})`); error.status = response.status; error.path = path; throw error; } return response.json(); }
 export async function login(email, password) { return request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }); }
 export async function getDevices(search = '') { return request(`/devices${search ? `?search=${encodeURIComponent(search)}` : ''}`); }
 export async function getDevice(id) { return request(`/devices/${id}`); }
