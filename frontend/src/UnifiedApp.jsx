@@ -41,11 +41,11 @@ function sessionIsValid() {
 
 function Login() {
   const profiles = {
-    corporate: { label: 'Corporate Admin', email: 'admin@corporate.local' },
+    corporate: { label: 'Corporate Admin', email: 'karthik.raj@democorporation.in' },
     service: { label: 'iPlanet Service', email: 'service@iplanet.local' }
   };
   const [profile, setProfile] = useState('corporate');
-  const [email, setEmail] = useState('admin@corporate.local');
+  const [email, setEmail] = useState('karthik.raj@democorporation.in');
   const [password, setPassword] = useState('Demo@123');
   const [error, setError] = useState('');
   const navigate = useNavigate();
