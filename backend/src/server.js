@@ -7,9 +7,12 @@ import multer from 'multer';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Review, Notification, EscalationRule, CallRecord, AITroubleshootingSession } from './models.js';
+import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Review, Notification, EscalationRule, CallRecord, AITroubleshootingSession, GoogleBusinessIntegration, GoogleBusinessLocationMapping } from './models.js';
 import { auth, allowRoles } from './middleware.js';
 import { createAiSupportRouter } from './routes/aiSupport.js';
+import { buildGoogleBusinessAuthUrl, parseGoogleBusinessState } from './integrations/googleBusinessProfile/googleBusinessProfileAuth.js';
+import { discoverGoogleBusinessLocations, getGoogleBusinessReviews } from './integrations/googleBusinessProfile/googleBusinessProfileProvider.js';
+import { normalizeGoogleBusinessReview } from './integrations/googleBusinessProfile/googleBusinessProfileSyncService.js';
 import { getAiSupportReply } from './ai/aiEngine.js';
 import { buildSupportContext } from './ai/contextBuilder.js';
 import { understandRequest, understandDeterministicResult, REQUEST_CATEGORIES, REQUEST_ISSUE_TYPES } from './ai/requestExtractor.js';
@@ -54,6 +57,67 @@ app.use(express.json());
 app.use('/uploads', express.static(uploadDir));
 app.use('/api/ai', auth, createAiSupportRouter());
 app.get('/api/health', (_, res) => res.json({ success: true, message: 'API is running' }));
+app.get('/api/google-business/health', (_, res) => res.json({ success: true, mode: 'business-profile', configured: Boolean(process.env.GOOGLE_BUSINESS_CLIENT_ID && process.env.GOOGLE_BUSINESS_CLIENT_SECRET) }));
+app.get('/api/google-business/auth', auth, allowRoles('corporate_admin'), async (req, res) => {
+  const state = JSON.stringify({ companyId: req.user.companyId, userId: req.user.id });
+  const redirectUrl = buildGoogleBusinessAuthUrl({
+    clientId: process.env.GOOGLE_BUSINESS_CLIENT_ID,
+    redirectUri: process.env.GOOGLE_BUSINESS_REDIRECT_URI,
+    state,
+  });
+  res.json({ success: true, url: redirectUrl, state });
+});
+app.get('/api/google-business/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+  if (error) return res.status(400).json({ success: false, message: `Google OAuth error: ${error}` });
+  if (!code) return res.status(400).json({ success: false, message: 'Missing Google authorization code.' });
+  const safeState = parseGoogleBusinessState(state || '{}');
+  const payload = {
+    success: true,
+    message: 'Google Business Profile connection is ready for OAuth completion.',
+    state: safeState,
+    code: String(code),
+  };
+  res.json(payload);
+});
+app.get('/api/google-business/locations', auth, allowRoles('corporate_admin'), async (req, res) => {
+  const integration = await GoogleBusinessIntegration.findOne({ companyId: req.user.companyId, userId: req.user.id }).sort({ createdAt: -1 });
+  if (!integration?.accessToken) {
+    return res.status(400).json({ message: 'Google Business Profile is not connected for this company.' });
+  }
+  const locations = await discoverGoogleBusinessLocations(integration.accessToken);
+  res.json({ success: true, locations });
+});
+app.get('/api/google-business/reviews/sync', auth, allowRoles('corporate_admin'), async (req, res) => {
+  const integration = await GoogleBusinessIntegration.findOne({ companyId: req.user.companyId, userId: req.user.id }).sort({ createdAt: -1 });
+  if (!integration?.accessToken) {
+    return res.status(400).json({ message: 'Google Business Profile is not connected for this company.' });
+  }
+  const mappings = await GoogleBusinessLocationMapping.find({ companyId: req.user.companyId }).lean();
+  const results = [];
+  for (const mapping of mappings) {
+    try {
+      const response = await getGoogleBusinessReviews(mapping.locationName, integration.accessToken);
+      const reviews = response.reviews.map(review => normalizeGoogleBusinessReview(review, mapping.locationDisplayName || mapping.serviceCentreName));
+      results.push({ serviceCentreId: mapping.serviceCentreId, locationName: mapping.locationName, reviewCount: reviews.filter(Boolean).length, reviews });
+    } catch (error) {
+      results.push({ serviceCentreId: mapping.serviceCentreId, locationName: mapping.locationName, error: error.message, reviewCount: 0, reviews: [] });
+    }
+  }
+  res.json({ success: true, results });
+});
+app.post('/api/google-business/locations/map', auth, allowRoles('corporate_admin'), async (req, res) => {
+  const { locationName, locationDisplayName, accountName, serviceCentreId } = req.body || {};
+  if (!locationName || !serviceCentreId) return res.status(400).json({ message: 'locationName and serviceCentreId are required.' });
+  const serviceCentre = await ServiceCentre.findOne({ _id: serviceCentreId, status: 'Active' });
+  if (!serviceCentre) return res.status(404).json({ message: 'Service centre not found.' });
+  const mapping = await GoogleBusinessLocationMapping.findOneAndUpdate(
+    { companyId: req.user.companyId, locationName },
+    { companyId: req.user.companyId, locationName, locationDisplayName: locationDisplayName || serviceCentre.name, accountName: accountName || '', serviceCentreId: serviceCentre._id, serviceCentreName: serviceCentre.name },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  res.status(201).json({ success: true, mapping });
+});
 const ticketId = () => `TKT-2026-${String(Date.now()).slice(-5)}`;
 const serviceAuth = [auth, allowRoles('iplanet_service')];
 const transitions = { Open: ['Engineer Assigned'], 'Engineer Assigned': ['Engineer Accepted'], 'Engineer Accepted': ['In Progress'], 'In Progress': ['Waiting for Parts', 'Completed'], 'Waiting for Parts': ['In Progress'], Completed: ['Closed'], Closed: [] };

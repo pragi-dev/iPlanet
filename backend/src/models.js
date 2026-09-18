@@ -21,6 +21,31 @@ const escalationRuleSchema = new mongoose.Schema({ name: { type: String, require
 const reviewSchema = new mongoose.Schema({ ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket', required: true, unique: true, index: true }, corporateId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true }, customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre', index: true }, deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, engineerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Engineer' }, rating: { type: Number, required: true, min: 1, max: 5 }, comment: { type: String, required: true, trim: true, maxlength: 2000 } }, { timestamps: true });
 reviewSchema.index({ corporateId: 1, createdAt: -1 });
 reviewSchema.index({ serviceCentreId: 1, createdAt: -1 });
+const googleBusinessIntegrationSchema = new mongoose.Schema({
+  companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  accountName: { type: String, default: null },
+  accountDisplayName: { type: String, default: null },
+  accessToken: { type: String, default: null },
+  refreshToken: { type: String, default: null },
+  tokenType: { type: String, default: 'Bearer' },
+  expiresAt: { type: Date, default: null },
+  connectedAt: { type: Date, default: Date.now },
+  lastSyncedAt: { type: Date, default: null },
+  status: { type: String, default: 'connected', enum: ['connected', 'error', 'disconnected'] }
+}, { timestamps: true });
+const googleBusinessLocationMappingSchema = new mongoose.Schema({
+  companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
+  locationName: { type: String, required: true },
+  locationDisplayName: { type: String, default: '' },
+  accountName: { type: String, default: '' },
+  serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre', required: true },
+  serviceCentreName: { type: String, default: '' },
+  mappedAt: { type: Date, default: Date.now },
+  lastReviewSyncAt: { type: Date, default: null },
+  lastSyncedReviewCount: { type: Number, default: 0 }
+}, { timestamps: true });
+googleBusinessLocationMappingSchema.index({ companyId: 1, locationName: 1 }, { unique: true });
 const notificationSchema = new mongoose.Schema({ user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, portalRole: String, type: String, priority: { type: String, enum: ['normal', 'high'], default: 'normal' }, title: String, message: String, ticket: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' }, device: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, reviewId: { type: mongoose.Schema.Types.ObjectId, ref: 'Review' }, action: { type: Object, default: null }, read: { type: Boolean, default: false } }, { timestamps: true });
 const timelineSchema = new mongoose.Schema({ ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' }, status: String, message: String, note: String, updatedBy: String, userRole: String, timestamp: { type: Date, default: Date.now } });
 const callRecordSchema = new mongoose.Schema({ ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket', required: true }, agentUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, agentName: String, ticketNumber: String, customerName: String, customerPhone: String, outcome: { type: String, enum: ['Issue Resolved Remotely', 'Customer Needs Further Assistance', 'Engineer Visit Required', 'Customer Unavailable', 'Call Back Required'], default: 'Customer Unavailable' }, notes: String, callStatus: { type: String, default: 'Call Attempted' } }, { timestamps: true });
@@ -34,6 +59,8 @@ export const Engineer = mongoose.model('Engineer', engineerSchema);
 export const Ticket = mongoose.model('Ticket', ticketSchema);
 export const TicketTimeline = mongoose.model('TicketTimeline', timelineSchema);
 export const Review = mongoose.model('Review', reviewSchema);
+export const GoogleBusinessIntegration = mongoose.model('GoogleBusinessIntegration', googleBusinessIntegrationSchema);
+export const GoogleBusinessLocationMapping = mongoose.model('GoogleBusinessLocationMapping', googleBusinessLocationMappingSchema);
 export const Notification = mongoose.model('Notification', notificationSchema);
 export const EscalationRule = mongoose.model('EscalationRule', escalationRuleSchema);
 export const CallRecord = mongoose.model('CallRecord', callRecordSchema);
