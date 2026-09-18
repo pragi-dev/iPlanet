@@ -21,6 +21,7 @@ export async function getServiceDashboard() { return request('/iplanet/dashboard
 export async function getServiceTickets(filters = {}) { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value && value !== 'All')); return request(`/iplanet/tickets${params.toString() ? `?${params}` : ''}`); }
 export async function getServiceTicket(id) { return request(`/iplanet/tickets/${id}`); }
 export async function getServiceReviews(filters = {}) { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value && value !== 'All')); return request(`/service/reviews${params.toString() ? `?${params}` : ''}`); }
+export async function getServiceReview(id) { return request(`/service/reviews/${id}`); }
 export async function getEngineers() { return request('/iplanet/engineers'); }
 export async function getCompanies() { return request('/iplanet/companies'); }
 export async function createCompany(payload) { return request('/iplanet/companies', { method: 'POST', body: JSON.stringify(payload) }); }
@@ -36,22 +37,6 @@ export async function getServiceNotifications() { return request('/iplanet/notif
 export async function getServiceNotificationUnreadCount() { return request('/iplanet/notifications/unread-count'); }
 export async function markServiceNotificationRead(id) { return request(`/iplanet/notifications/${id}/read`, { method: 'PATCH', body: JSON.stringify({}) }); }
 export async function markAllServiceNotificationsRead() { return request('/iplanet/notifications/read-all', { method: 'PATCH', body: JSON.stringify({}) }); }
-export async function getGoogleReviews(filters = {}) {
-  const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== undefined && value !== null && value !== '' && value !== 'All'));
-  return request(`/google-reviews${params.toString() ? `?${params}` : ''}`);
-}
-export async function getGoogleReviewAnalytics(filters = {}) {
-  const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== undefined && value !== null && value !== '' && value !== 'All'));
-  return request(`/google-reviews/analytics${params.toString() ? `?${params}` : ''}`);
-}
-export async function getGoogleReviewSummary() { return request('/google-reviews/summary'); }
-export async function getGoogleBusinessHealth() { return request('/google-business/health'); }
-export async function syncGoogleBusinessReviews() { return request('/google-business/reviews/sync', { method: 'POST', body: JSON.stringify({}) }); }
-export async function getGoogleReviewHealth() { return request('/google-reviews/health'); }
-export async function syncGoogleReviews() { return request('/google-reviews/sync', { method: 'POST', body: JSON.stringify({}) }); }
-export async function acknowledgeGoogleReview(id) { return request(`/google-reviews/${id}/acknowledge`, { method: 'PATCH', body: JSON.stringify({}) }); }
-export async function resolveGoogleReview(id) { return request(`/google-reviews/${id}/resolve`, { method: 'PATCH', body: JSON.stringify({}) }); }
-export async function generateGoogleReviewResponse(id) { return request(`/google-reviews/${id}/generate-response`, { method: 'POST', body: JSON.stringify({}) }); }
 export async function getEscalationMatrix() { return request('/escalation-matrix'); }
 export async function getEscalationRules() { return request('/iplanet/escalation-rules'); }
 export async function createEscalationRule(payload) { return request('/iplanet/escalation-rules', { method: 'POST', body: JSON.stringify(payload) }); }

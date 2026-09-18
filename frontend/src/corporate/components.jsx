@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Smartphone, PlusCircle, Ticket, ShieldCheck, UserRound, LogOut, Bell, Search, ChevronRight, ArrowUpRight, UserRoundCheck, BellRing, Link2 } from 'lucide-react';
+import { LayoutDashboard, Smartphone, PlusCircle, Ticket, ShieldCheck, UserRound, LogOut, Bell, Search, ChevronRight, ArrowUpRight, UserRoundCheck, BellRing } from 'lucide-react';
 import { getNotificationUnreadCount } from './api';
 
 export function Badge({ children }) { return <span className={`badge badge-${String(children).toLowerCase().replaceAll(' ', '-').replaceAll('/', '')}`}>{children}</span>; }
 export function Sidebar() {
   const navigate = useNavigate(); const [unread, setUnread] = useState(0);
-  const links = [['/corporate/dashboard', LayoutDashboard, 'Dashboard'], ['/corporate/devices', Smartphone, 'My Devices'], ['/corporate/unassigned-devices', UserRoundCheck, 'Unassigned Devices'], ['/corporate/raise-request', PlusCircle, 'Raise Request'], ['/corporate/service-requests', Ticket, 'My Tickets'], ['/corporate/warranty', ShieldCheck, 'Warranty & AMC'], ['/corporate/notifications', BellRing, 'Notifications'], ['/corporate/profile', UserRound, 'Profile'], ['/corporate/google-business', Link2, 'Google Business']];
+  const links = [['/corporate/dashboard', LayoutDashboard, 'Dashboard'], ['/corporate/devices', Smartphone, 'My Devices'], ['/corporate/unassigned-devices', UserRoundCheck, 'Unassigned Devices'], ['/corporate/raise-request', PlusCircle, 'Raise Request'], ['/corporate/service-requests', Ticket, 'My Tickets'], ['/corporate/warranty', ShieldCheck, 'Warranty & AMC'], ['/corporate/notifications', BellRing, 'Notifications'], ['/corporate/profile', UserRound, 'Profile']];
   useEffect(() => { getNotificationUnreadCount().then(result => setUnread(result.count)).catch(() => setUnread(0)); }, []);
   return <aside className="sidebar"><div className="brand"><div className="brand-mark">i</div><div><strong>iPlanet</strong><small>Customer care</small></div></div><nav>{links.map(([to, Icon, label]) => <NavLink key={to} to={to} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}><Icon size={17} />{label}{label === 'Notifications' && unread > 0 && <span className="nav-count">{unread}</span>}</NavLink>)}</nav><div className="sidebar-foot"><div className="secure"><ShieldCheck size={16} /><span>Secure workspace<small>Customer portal</small></span></div><button className="logout" onClick={() => { localStorage.clear(); navigate('/login'); }}><LogOut size={16} />Sign out</button></div></aside>;
 }

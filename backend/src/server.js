@@ -7,21 +7,14 @@ import multer from 'multer';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, GoogleReview, Review, GoogleBusinessIntegration, GoogleBusinessLocation, Notification, EscalationRule, CallRecord, AITroubleshootingSession } from './models.js';
+import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Review, Notification, EscalationRule, CallRecord, AITroubleshootingSession } from './models.js';
 import { auth, allowRoles } from './middleware.js';
 import { createAiSupportRouter } from './routes/aiSupport.js';
-import { normalizeGoogleReviewInput, buildGoogleReviewAnalytics, processGoogleReview } from './integrations/googleBusinessProfile/googleReviewService.js';
-import { createGoogleReviewNotifications } from './integrations/googleBusinessProfile/googleNotificationService.js';
-import { findGoogleMappedServiceCentre } from './integrations/googleBusinessProfile/googleLocationService.js';
 import { getAiSupportReply } from './ai/aiEngine.js';
-import { getProviderReply } from './ai/providers/providerRouter.js';
 import { buildSupportContext } from './ai/contextBuilder.js';
 import { understandRequest, understandDeterministicResult, REQUEST_CATEGORIES, REQUEST_ISSUE_TYPES } from './ai/requestExtractor.js';
 import { indiaToday, resolveServiceDateIntent } from './ai/serviceDate.js';
 import { demoEnrollmentDevices } from './demoData.js';
-import { buildGoogleBusinessAuthUrl, decryptGoogleBusinessRefreshToken, encryptGoogleBusinessRefreshToken, exchangeGoogleBusinessCode, GoogleBusinessProfileError } from './integrations/googleBusinessProfile/googleBusinessProfileAuth.js';
-import { createGoogleBusinessProfileProvider } from './integrations/googleBusinessProfile/googleBusinessProfileProvider.js';
-import { discoverGoogleLocations, syncGoogleBusinessReviews } from './integrations/googleBusinessProfile/googleBusinessProfileSyncService.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '../.env') });
@@ -68,153 +61,7 @@ const escalationContacts = { 1: { level: 1, name: 'Service Coordinator', contact
 function targetHours(priority = 'Medium') { return { Critical: 4, High: 12, Medium: 24, Low: 48 }[priority] || 24; }
 async function notifyUsers({ users, company, ticket, device, type, title, message, serviceCentreId, reviewId, action, priority }) { if (!users.length) return; await Notification.insertMany(users.map(user => ({ user: user._id, company, serviceCentreId, ticket: ticket?._id, device: device?._id, reviewId, portalRole: user.role, type, priority, title, message, action, read: false }))); }
 async function serviceUsers() { return User.find({ role: 'iplanet_service' }); }
-async function serviceUsersForCentre(serviceCentreId) { if (!serviceCentreId) return []; return User.find({ role: 'iplanet_service', serviceCentreId }); }
-
-function logGoogleReview(message, details = {}) {
-  const safeDetails = {};
-  for (const [key, value] of Object.entries(details)) {
-    if (typeof key === 'string' && /(client_secret|token|secret|private|key)/i.test(key)) continue;
-    safeDetails[key] = value;
-  }
-  const suffix = Object.keys(safeDetails).length ? ` ${JSON.stringify(safeDetails)}` : '';
-  console.log(`[GOOGLE REVIEW] ${message}${suffix}`);
-}
-
-async function buildGoogleReviewScope(req) {
-  if (req.user.role === 'corporate_admin') return {};
-  if (req.user.role === 'iplanet_service') {
-    if (req.user.serviceCentreId) return { serviceCentreId: new mongoose.Types.ObjectId(req.user.serviceCentreId) };
-    return { serviceCentreId: null };
-  }
-  return { user: req.user.id };
-}
-
-async function mapGoogleLocationToServiceCentre({ locationId, locationName, accountId, placeId }) {
-  const discoveredLocation = await GoogleBusinessLocation.findOne({
-    ...(accountId ? { googleAccountId: accountId } : {}),
-    ...(locationId ? { googleLocationId: locationId } : {}),
-    mappingStatus: 'MAPPED',
-    serviceCentreId: { $ne: null },
-  }).populate('serviceCentreId');
-  if (discoveredLocation?.serviceCentreId) return discoveredLocation.serviceCentreId;
-  const serviceCentre = await ServiceCentre.findOne({
-    $or: [
-      { 'googleBusinessProfile.locationId': locationId },
-      { 'googleBusinessProfile.locationName': locationName },
-      { 'googleBusinessProfile.placeId': placeId },
-      { name: locationName },
-      { location: locationName }
-    ]
-  });
-  if (serviceCentre) return serviceCentre;
-  return findGoogleMappedServiceCentre({ ServiceCentre, locationId, locationName, accountId, placeId });
-}
-
-async function persistGoogleReview(reviewInput) {
-  const normalized = normalizeGoogleReviewInput(reviewInput);
-  logGoogleReview('Review identified', { googleReviewId: normalized.googleReviewId, googleLocationId: normalized.googleLocationId || 'unknown', serviceCentreName: normalized.serviceCentreName || 'unknown' });
-  const mappedCentre = await mapGoogleLocationToServiceCentre({
-    locationId: normalized.googleLocationId,
-    locationName: normalized.businessName || normalized.serviceCentreName,
-    accountId: normalized.googleAccountId,
-    placeId: normalized.googlePlaceId || reviewInput.placeId || reviewInput.googlePlaceId || ''
-  });
-
-  if (!mappedCentre) {
-    logGoogleReview('Location not mapped', { googleLocationId: normalized.googleLocationId || 'unknown', serviceCentreName: normalized.serviceCentreName || 'unknown' });
-    return { duplicate: false, mapped: false, review: normalized, notificationsCreated: 0, error: 'GOOGLE_LOCATION_NOT_MAPPED', locationId: normalized.googleLocationId || null };
-  }
-
-  logGoogleReview('Service Centre mapped', { serviceCentreName: mappedCentre.name, serviceCentreId: String(mappedCentre._id), googleLocationId: normalized.googleLocationId || mappedCentre.googleBusinessProfile?.locationId || 'unknown' });
-
-  const existing = await GoogleReview.findOne({ googleReviewId: normalized.googleReviewId });
-  if (existing) {
-    const changed = existing.reviewUpdatedAt?.getTime?.() !== new Date(normalized.reviewUpdatedAt || 0).getTime() || existing.comment !== normalized.comment || existing.rating !== normalized.rating;
-    if (changed) {
-      Object.assign(existing, normalized, { serviceCentreId: mappedCentre._id, serviceCentreName: mappedCentre.name || normalized.serviceCentreName });
-      await existing.save();
-      return { duplicate: false, updated: true, mapped: true, review: existing, notificationsCreated: 0 };
-    }
-    return { duplicate: true, mapped: true, review: existing, notificationsCreated: 0, duplicateReviewId: normalized.googleReviewId };
-  }
-
-  const reviewDoc = await GoogleReview.create({
-    ...normalized,
-    serviceCentreId: mappedCentre._id,
-    serviceCentreName: mappedCentre.name || normalized.serviceCentreName,
-    googleLocationId: normalized.googleLocationId || mappedCentre.googleBusinessProfile?.locationId || '',
-    googleAccountId: normalized.googleAccountId || mappedCentre.googleBusinessProfile?.accountId || '',
-    googlePlaceId: normalized.googlePlaceId || mappedCentre.googleBusinessProfile?.placeId || '',
-    businessName: normalized.businessName || mappedCentre.googleBusinessProfile?.businessName || '',
-    reviewUrl: normalized.reviewUrl || '',
-    source: normalized.source,
-    reviewCreatedAt: normalized.reviewCreatedAt ? new Date(normalized.reviewCreatedAt) : undefined,
-    reviewUpdatedAt: normalized.reviewUpdatedAt ? new Date(normalized.reviewUpdatedAt) : undefined,
-    notificationCreated: false,
-  });
-
-  const serviceUsers = await User.find({ $or: [{ serviceCentreId: mappedCentre._id }, { role: 'corporate_admin' }, { role: 'iplanet_service', serviceCentreId: null }] });
-  const notificationOutcome = await createGoogleReviewNotifications({ review: reviewDoc, serviceCentre: mappedCentre, users: serviceUsers, Notification });
-  reviewDoc.notificationCreated = notificationOutcome.created > 0;
-  await reviewDoc.save();
-
-  return { duplicate: false, mapped: true, review: reviewDoc, notificationsCreated: notificationOutcome.created };
-}
-
-async function enrichGoogleReviewWithAi(review) {
-  const prompt = `Analyze this customer Google review for iPlanetCare. Return only valid JSON with keys sentiment (positive, neutral, or negative), sentimentScore (-1 to 1), aiSummary, suggestedResponse, priority (low, medium, or high), and keyIssue. Rating: ${review.rating || 'unknown'}. Review: ${review.comment || 'No comment provided.'}`;
-  try {
-    const raw = await getProviderReply({ messages: [{ role: 'system', content: 'You classify customer reviews. Return JSON only.' }, { role: 'user', content: prompt }], environment: process.env });
-    const parsed = JSON.parse(String(raw).replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim());
-    return { ...review, sentiment: ['positive', 'neutral', 'negative'].includes(parsed.sentiment) ? parsed.sentiment : review.sentiment, sentimentScore: Number.isFinite(Number(parsed.sentimentScore)) ? Number(parsed.sentimentScore) : review.sentimentScore, aiSummary: parsed.aiSummary || review.aiSummary, suggestedResponse: parsed.suggestedResponse || review.suggestedResponse, priority: ['low', 'medium', 'high'].includes(parsed.priority) ? parsed.priority : review.priority, keyIssue: parsed.keyIssue || review.keyIssue, aiProcessingStatus: 'success', aiProcessingError: '', aiAvailable: true };
-  } catch (error) {
-    logGoogleReview('AI analysis unavailable; deterministic review analysis retained', { code: error.code || 'AI_UNAVAILABLE' });
-    return { ...review, aiProcessingStatus: 'failed', aiProcessingError: error.message || 'AI analysis unavailable.', aiAvailable: false };
-  }
-}
-
-let googleBusinessPoller = null;
-
-async function getGoogleBusinessConnection() {
-  return GoogleBusinessIntegration.findOne({ provider: 'google-business-profile' });
-}
-
-async function getGoogleBusinessProvider() {
-  const integration = await getGoogleBusinessConnection();
-  const refreshToken = decryptGoogleBusinessRefreshToken(integration?.refreshTokenEncrypted);
-  if (!refreshToken) throw new GoogleBusinessProfileError('Google Business Profile is not connected.', 'GOOGLE_BUSINESS_NOT_CONNECTED', 503);
-  return { integration, provider: createGoogleBusinessProfileProvider({ refreshToken, environment: process.env }) };
-}
-
-async function syncBusinessLocations() {
-  const { integration, provider } = await getGoogleBusinessProvider();
-  const locations = await discoverGoogleLocations({ provider, GoogleBusinessLocation, ServiceCentre });
-  const account = locations[0]?.googleAccountId || integration.googleAccountId || '';
-  await GoogleBusinessIntegration.updateOne({ _id: integration._id }, { $set: { status: 'connected', googleAccountId: account, lastLocationSyncAt: new Date(), lastError: '' } });
-  return { locations, locationsDiscovered: locations.length };
-}
-
-async function syncBusinessReviews() {
-  const { integration, provider } = await getGoogleBusinessProvider();
-  const summary = await syncGoogleBusinessReviews({
-    provider,
-    GoogleBusinessLocation,
-    persistReview: async review => persistGoogleReview(await enrichGoogleReviewWithAi(review)),
-  });
-  await GoogleBusinessIntegration.updateOne({ _id: integration._id }, { $set: { status: 'connected', lastReviewSyncAt: new Date(), lastError: '' } });
-  return summary;
-}
-
-function startGoogleBusinessPoller() {
-  if (googleBusinessPoller || String(process.env.GOOGLE_REVIEW_MODE || '').toLowerCase() !== 'business-profile') return false;
-  const intervalMs = Math.max(60000, Number(process.env.GOOGLE_REVIEW_SYNC_INTERVAL || 300000));
-  googleBusinessPoller = setInterval(async () => {
-    try { await syncBusinessReviews(); } catch (error) { await GoogleBusinessIntegration.updateOne({ provider: 'google-business-profile' }, { $set: { status: 'error', lastError: error.message } }, { upsert: true }); }
-  }, intervalMs);
-  googleBusinessPoller.unref?.();
-  return true;
-}
-
+async function serviceUsersForCentre(serviceCentreId) { return serviceCentreId ? User.find({ role: 'iplanet_service', $or: [{ serviceCentreId }, { serviceCentreId: null }] }) : User.find({ role: 'iplanet_service' }); }
 async function getTicketWithContext(ticketIdParam) {
   return Ticket.findById(ticketIdParam).populate('customerId').populate('companyId').populate('serviceCentreId').populate('deviceId').populate('assignedEngineerId');
 }
@@ -348,7 +195,7 @@ app.get('/api/devices', auth, allowRoles('corporate_admin'), async (req, res) =>
 app.get('/api/devices/serial/:serialNumber', auth, allowRoles('corporate_admin'), async (req, res) => { const device = await Device.findOne({ serialNumber: req.params.serialNumber, ...corporateCompany(req) }); if (!device) return res.status(404).json({ message: 'No device found for that serial number' }); res.json(device); });
 app.get('/api/devices/:id', auth, allowRoles('corporate_admin'), async (req, res) => { const device = await Device.findOne({ _id: req.params.id, ...corporateCompany(req) }); if (!device) return res.status(404).json({ message: 'Device not found' }); res.json(device); });
 app.get('/api/tickets', auth, allowRoles('corporate_admin'), async (req, res) => { const query = { companyId: req.user.companyId, ...(req.query.status && req.query.status !== 'All' ? { status: req.query.status } : {}) }; res.json(await Ticket.find(query).populate('deviceId').populate('companyId').populate('assignedEngineerId').sort({ createdAt: -1 })); });
-app.get('/api/tickets/:id', auth, allowRoles('corporate_admin'), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }).populate('deviceId').populate('companyId').populate('serviceCentreId').populate('assignedEngineerId').populate('customerId'); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); await evaluateEscalation(ticket, true); const [timeline, callHistory, aiSupport, review] = await Promise.all([TicketTimeline.find({ ticketId: ticket._id }).sort({ timestamp: 1 }), CallRecord.find({ ticketId: ticket._id }).sort({ createdAt: -1 }), AITroubleshootingSession.find({ ticketId: ticket._id }).sort({ createdAt: -1 }), Review.findOne({ ticketId: ticket._id })]); const reviewSubmitted = Boolean(review); const reviewEligible = ticket.status === 'Completed' && !reviewSubmitted; res.json({ ticket, reviewEligible, reviewSubmitted, reviewId: review?._id || null, escalation: { status: ticket.escalationStatus, level: ticket.escalationLevel, reason: ticket.escalationReason, responseTarget: ticket.responseTarget, resolutionTarget: ticket.resolutionTarget, slaTargetAt: ticket.slaTargetAt }, escalationContact: escalationContacts[ticket.escalationLevel] || null, timeline, callHistory, aiSupport }); });
+app.get('/api/tickets/:id', auth, allowRoles('corporate_admin'), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }).populate('deviceId').populate('companyId').populate('serviceCentreId').populate('assignedEngineerId').populate('customerId'); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); await evaluateEscalation(ticket, true); const [timeline, callHistory, aiSupport, review] = await Promise.all([TicketTimeline.find({ ticketId: ticket._id }).sort({ timestamp: 1 }), CallRecord.find({ ticketId: ticket._id }).sort({ createdAt: -1 }), AITroubleshootingSession.find({ ticketId: ticket._id }).sort({ createdAt: -1 }), Review.findOne({ ticketId: ticket._id })]); const reviewSubmitted = Boolean(review); const reviewEligible = ticket.status === 'Closed' && !reviewSubmitted; res.json({ ticket, reviewEligible, reviewSubmitted, reviewId: review?._id || null, escalation: { status: ticket.escalationStatus, level: ticket.escalationLevel, reason: ticket.escalationReason, responseTarget: ticket.responseTarget, resolutionTarget: ticket.resolutionTarget, slaTargetAt: ticket.slaTargetAt }, escalationContact: escalationContacts[ticket.escalationLevel] || null, timeline, callHistory, aiSupport }); });
 app.post('/api/tickets', auth, allowRoles('corporate_admin'), async (req, res) => { const device = await Device.findOne({ _id: req.body.deviceId, companyId: req.user.companyId }); if (!device) return res.status(400).json({ message: 'Valid company device selection is required' }); const createdAt = new Date(); const ticket = await Ticket.create({ ...req.body, ticketId: ticketId(), customerId: req.user.id, companyId: req.user.companyId, deviceId: device._id, status: 'Open', images: [], originalImages: [], annotatedImages: [], responseTarget: '4 business hours', resolutionTarget: `${targetHours(req.body.priority)} hours`, slaTargetAt: new Date(createdAt.getTime() + targetHours(req.body.priority) * 3600000), slaStatus: 'Healthy', escalationStatus: 'Not Escalated' }); await TicketTimeline.create({ ticketId: ticket._id, status: 'Open', message: 'Service request created by Corporate Admin.', updatedBy: 'Corporate Portal', userRole: 'corporate_admin' }); const users = await serviceUsers(); await notifyUsers({ users, company: ticket.companyId, ticket, device, type: 'NEW_SERVICE_REQUEST', title: 'New service request', message: `${ticket.ticketId} was raised for ${device.model}.` }); res.status(201).json(await ticket.populate('deviceId')); });
 app.post('/api/tickets/:id/images', auth, allowRoles('corporate_admin'), upload.array('images', 5), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); const paths = req.files.map(file => `/uploads/${file.filename}`); ticket.images.push(...paths); ticket.originalImages.push(...paths); await ticket.save(); res.json(ticket); });
 app.post('/api/tickets/:id/annotated-images', auth, allowRoles('corporate_admin'), upload.array('images', 5), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); const paths = req.files.map(file => `/uploads/${file.filename}`); ticket.images.push(...paths); ticket.annotatedImages.push(...paths); await ticket.save(); res.json(ticket); });
@@ -575,21 +422,23 @@ app.post('/api/reviews', auth, allowRoles('corporate_admin'), async (req, res) =
   if (!Number.isInteger(Number(rating)) || Number(rating) < 1 || Number(rating) > 5) return res.status(400).json({ message: 'Rating must be an integer from 1 to 5.' });
   if (!cleanComment) return res.status(400).json({ message: 'A review comment is required.' });
   if (cleanComment.length > 2000) return res.status(400).json({ message: 'Review comment must be 2000 characters or fewer.' });
-  const ticket = await Ticket.findOne({ _id: requestedTicketId, companyId: req.user.companyId });
+  const ticket = await Ticket.findOne({ _id: requestedTicketId, companyId: req.user.companyId, customerId: req.user.id });
   if (!ticket) return res.status(404).json({ message: 'Ticket not found.' });
-  if (ticket.status !== 'Completed') return res.status(409).json({ message: 'Only completed service requests can be reviewed.' });
+  if (ticket.status !== 'Closed') return res.status(409).json({ message: 'Only closed service requests can be reviewed.' });
   try {
     const review = await Review.create({ ticketId: ticket._id, corporateId: ticket.companyId, customerId: ticket.customerId, serviceCentreId: ticket.serviceCentreId, deviceId: ticket.deviceId, engineerId: ticket.assignedEngineerId, rating: Number(rating), comment: cleanComment });
+    const recipients = ticket.serviceCentreId ? await serviceUsersForCentre(ticket.serviceCentreId) : await serviceUsers();
+    await notifyUsers({ users: recipients, company: ticket.companyId, serviceCentreId: ticket.serviceCentreId, ticket, device: ticket.deviceId, reviewId: review._id, type: 'NEW_CUSTOMER_REVIEW', title: 'New Customer Review', message: `New customer feedback has been submitted for service request ${ticket.ticketId}.`, action: { type: 'NEW_CUSTOMER_REVIEW', ticketId: String(ticket._id), reviewId: String(review._id), route: `/service/reviews/${review._id}` } });
     res.status(201).json(review);
   } catch (error) {
     if (error?.code === 11000) return res.status(409).json({ message: 'This service request has already been reviewed.' });
     throw error;
   }
 });
-app.get('/api/reviews/my', auth, allowRoles('corporate_admin'), async (req, res) => res.json(await Review.find({ corporateId: req.user.companyId }).populate('ticketId').populate('serviceCentreId').populate('deviceId').sort({ createdAt: -1 })));
+app.get('/api/reviews/my', auth, allowRoles('corporate_admin'), async (req, res) => res.json(await Review.find({ corporateId: req.user.companyId, customerId: req.user.id }).populate('ticketId').populate('serviceCentreId').populate('deviceId').sort({ createdAt: -1 })));
 app.get('/api/reviews/:id', auth, allowRoles('corporate_admin'), async (req, res) => { const review = await Review.findOne({ _id: req.params.id, corporateId: req.user.companyId }).populate('ticketId').populate('serviceCentreId').populate('deviceId'); if (!review) return res.status(404).json({ message: 'Review not found.' }); res.json(review); });
 app.get('/api/service/reviews', ...serviceAuth, async (req, res) => { const query = reviewTicketQueryForService(req); if (req.query.rating) query.rating = Number(req.query.rating); if (req.query.serviceCentreId && !req.user.serviceCentreId) query.serviceCentreId = req.query.serviceCentreId; if (req.query.search) { const tickets = await Ticket.find({ ...query, ticketId: { $regex: req.query.search, $options: 'i' } }).select('_id'); query.ticketId = { $in: tickets.map(ticket => ticket._id) }; } res.json(await Review.find(query).populate('ticketId').populate('corporateId').populate('serviceCentreId').populate('deviceId').sort({ createdAt: -1 })); });
-app.get('/api/service/reviews/:id', ...serviceAuth, async (req, res) => { const review = await Review.findOne({ _id: req.params.id, ...reviewTicketQueryForService(req) }).populate('ticketId').populate('corporateId').populate('serviceCentreId').populate('deviceId'); if (!review) return res.status(404).json({ message: 'Review not found.' }); res.json(review); });
+app.get('/api/service/reviews/:id', ...serviceAuth, async (req, res) => { const review = await Review.findOne({ _id: req.params.id, ...reviewTicketQueryForService(req) }).populate('ticketId').populate('customerId').populate('corporateId').populate('serviceCentreId').populate('deviceId'); if (!review) return res.status(404).json({ message: 'Review not found.' }); res.json(review); });
 
 async function serviceTicket(id) { return Ticket.findById(id).populate('customerId').populate('companyId').populate('serviceCentreId').populate('deviceId').populate('assignedEngineerId'); }
 async function addTimeline(ticket, status, message, user) { ticket.status = status; ticket.updatedAt = new Date(); await ticket.save(); return TicketTimeline.create({ ticketId: ticket._id, status, message, updatedBy: user.name, userRole: user.role, timestamp: new Date() }); }
@@ -601,7 +450,7 @@ async function notifyTicketUpdate(ticket, device, type, title, message) {
   ]);
 }
 async function notifyReviewRequest(ticket) {
-  const recipients = await User.find({ role: 'corporate_admin', companyId: ticket.companyId });
+  const recipients = await User.find({ _id: ticket.customerId, role: 'corporate_admin', companyId: ticket.companyId });
   for (const user of recipients) {
     const exists = await Notification.exists({ user: user._id, ticket: ticket._id, type: 'RATE_SERVICE' });
     if (!exists) await Notification.create({ user: user._id, company: ticket.companyId, serviceCentreId: ticket.serviceCentreId, ticket: ticket._id, device: ticket.deviceId, portalRole: 'corporate_admin', type: 'RATE_SERVICE', title: 'Service Completed', message: `Your service request ${ticket.ticketId} has been completed. We'd love to hear about your experience.`, action: { type: 'RATE_SERVICE', ticketId: String(ticket._id), route: `/corporate/reviews/${ticket._id}` }, read: false });
@@ -622,157 +471,7 @@ app.get('/api/iplanet/tickets/:id', ...serviceAuth, async (req, res) => { const 
 app.get('/api/iplanet/companies', ...serviceAuth, async (_, res) => res.json(await Company.find().sort({ name: 1 })));
 app.post('/api/iplanet/companies', ...serviceAuth, async (req, res) => { const { name, location, contactName, contactEmail, phone } = req.body; if (!name?.trim() || !location?.trim()) return res.status(400).json({ message: 'Corporate name and location are required' }); try { const company = await Company.create({ name: name.trim(), location: location.trim(), contactName, contactEmail, phone, companyId: `CO-${Date.now()}` }); res.status(201).json(company); } catch (error) { if (error.code === 11000) return res.status(409).json({ message: 'A Corporate with that name already exists' }); throw error; } });
 app.get('/api/iplanet/service-centres', ...serviceAuth, async (_, res) => res.json(await ServiceCentre.find({ status: 'Active' }).sort({ name: 1 })));
-app.post('/api/iplanet/service-centres', ...serviceAuth, async (req, res) => { const { name, location, address, city, state, contactNumber, email, status, serviceCentreId, googleMapsUrl, googleLocationId, googleBusinessProfileConnected, reviewIntegrationMode, googleBusinessProfile } = req.body; if (!name?.trim() || !location?.trim()) return res.status(400).json({ message: 'Service Centre name and location are required' }); try { res.status(201).json(await ServiceCentre.create({ serviceCentreId: serviceCentreId || undefined, name: name.trim(), location: location.trim(), address, city, state, contactNumber, email, status: status || 'Active', googleMapsUrl: googleMapsUrl || '', googleLocationId: googleLocationId || '', googleBusinessProfileConnected: Boolean(googleBusinessProfileConnected ?? false), reviewIntegrationMode: reviewIntegrationMode || 'demo', googleBusinessProfile: googleBusinessProfile || { connected: false, locationId: googleLocationId || '', locationName: name.trim() } })); } catch (error) { if (error.code === 11000) return res.status(409).json({ message: 'A Service Centre with that name already exists' }); throw error; } });
-app.get('/api/google-business/auth', auth, allowRoles('corporate_admin'), async (_, res) => {
-  try {
-    const state = jwt.sign({ purpose: 'google-business-oauth' }, process.env.JWT_SECRET || 'local-demo-secret', { expiresIn: '10m' });
-    const authorizationUrl = buildGoogleBusinessAuthUrl(process.env, state);
-    if (_.accepts('html')) return res.redirect(authorizationUrl);
-    return res.json({ authorizationUrl });
-  } catch (error) {
-    res.status(error.statusCode || 503).json({ message: error.message, code: error.code || 'GOOGLE_BUSINESS_OAUTH_ERROR' });
-  }
-});
-app.get('/api/google-business/callback', async (req, res) => {
-  try {
-    const state = jwt.verify(req.query.state, process.env.JWT_SECRET || 'local-demo-secret');
-    if (state.purpose !== 'google-business-oauth') throw new Error('Invalid Google OAuth state.');
-    if (req.query.error) throw new GoogleBusinessProfileError(`Google authorization failed: ${req.query.error}`, 'GOOGLE_BUSINESS_AUTH_DENIED', 400);
-    const tokens = await exchangeGoogleBusinessCode(req.query.code, process.env);
-    if (!tokens.refresh_token) throw new GoogleBusinessProfileError('Google did not return a refresh token. Revoke the existing app grant and authorize again.', 'GOOGLE_BUSINESS_REFRESH_TOKEN_MISSING', 400);
-    await GoogleBusinessIntegration.findOneAndUpdate({ provider: 'google-business-profile' }, { provider: 'google-business-profile', status: 'connected', refreshTokenEncrypted: encryptGoogleBusinessRefreshToken(tokens.refresh_token), lastError: '' }, { upsert: true, new: true });
-    const frontendUrl = (process.env.FRONTEND_URLS || 'http://localhost:5173').split(',')[0].trim().replace(/\/$/, '');
-    res.redirect(`${frontendUrl}/corporate/google-business?googleBusiness=connected`);
-  } catch (error) {
-    const frontendUrl = (process.env.FRONTEND_URLS || 'http://localhost:5173').split(',')[0].trim().replace(/\/$/, '');
-    res.redirect(`${frontendUrl}/corporate/google-business?googleBusiness=error&message=${encodeURIComponent(error.code || 'GOOGLE_BUSINESS_OAUTH_ERROR')}`);
-  }
-});
-app.get('/api/google-business/health', auth, allowRoles('corporate_admin'), async (_, res) => {
-  const integration = await getGoogleBusinessConnection();
-  const locationsDiscovered = await GoogleBusinessLocation.countDocuments({ status: 'ACTIVE' });
-  const locationsMapped = await GoogleBusinessLocation.countDocuments({ mappingStatus: 'MAPPED', status: 'ACTIVE' });
-  res.json({ provider: 'google_business_profile', oauthConfigured: Boolean(process.env.GOOGLE_BUSINESS_CLIENT_ID && process.env.GOOGLE_BUSINESS_CLIENT_SECRET && process.env.GOOGLE_BUSINESS_REDIRECT_URI), connection: integration?.status || 'disconnected', locationsDiscovered, locationsMapped, lastLocationSync: integration?.lastLocationSyncAt || null, lastReviewSync: integration?.lastReviewSyncAt || null, syncAvailable: Boolean(integration?.refreshTokenEncrypted), lastError: integration?.lastError || '' });
-});
-app.get('/api/google-business/status', auth, allowRoles('corporate_admin'), async (_, res) => { const integration = await getGoogleBusinessConnection(); res.json({ connection: integration?.status || 'disconnected', lastLocationSync: integration?.lastLocationSyncAt || null, lastReviewSync: integration?.lastReviewSyncAt || null, lastError: integration?.lastError || '' }); });
-app.post('/api/google-business/disconnect', auth, allowRoles('corporate_admin'), async (_, res) => { await GoogleBusinessIntegration.findOneAndUpdate({ provider: 'google-business-profile' }, { $set: { status: 'disconnected', refreshTokenEncrypted: '', googleAccountId: '', googleAccountEmail: '', lastError: '' } }, { upsert: true }); res.json({ success: true }); });
-app.get('/api/google-business/locations', auth, allowRoles('corporate_admin'), async (_, res) => res.json(await GoogleBusinessLocation.find({ status: 'ACTIVE' }).populate('serviceCentreId').sort({ businessName: 1 })));
-app.get('/api/google-business/service-centres', auth, allowRoles('corporate_admin'), async (_, res) => res.json(await ServiceCentre.find({ status: 'Active' }).sort({ name: 1 })));
-app.post('/api/google-business/locations/sync', auth, allowRoles('corporate_admin'), async (_, res) => { try { res.json({ success: true, ...(await syncBusinessLocations()) }); } catch (error) { await GoogleBusinessIntegration.updateOne({ provider: 'google-business-profile' }, { $set: { status: 'error', lastError: error.message } }, { upsert: true }); res.status(error.statusCode || 502).json({ message: error.message, code: error.code || 'GOOGLE_BUSINESS_LOCATION_SYNC_FAILED' }); } });
-app.patch('/api/google-business/locations/:id/mapping', auth, allowRoles('corporate_admin'), async (req, res) => { const location = await GoogleBusinessLocation.findById(req.params.id); const serviceCentre = await ServiceCentre.findById(req.body.serviceCentreId); if (!location || !serviceCentre) return res.status(404).json({ message: 'Google location or Service Centre not found.' }); location.serviceCentreId = serviceCentre._id; location.mappingStatus = 'MAPPED'; await location.save(); res.json(await location.populate('serviceCentreId')); });
-app.post('/api/google-business/reviews/sync', auth, allowRoles('corporate_admin'), async (_, res) => { try { res.json({ success: true, ...(await syncBusinessReviews()) }); } catch (error) { await GoogleBusinessIntegration.updateOne({ provider: 'google-business-profile' }, { $set: { status: 'error', lastError: error.message } }, { upsert: true }); res.status(error.statusCode || 502).json({ message: error.message, code: error.code || 'GOOGLE_BUSINESS_REVIEW_SYNC_FAILED' }); } });
-app.get('/api/google-reviews', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
-  const scope = await buildGoogleReviewScope(req);
-  const query = req.user.role === 'corporate_admin' ? {} : { serviceCentreId: scope.serviceCentreId };
-  if (req.query.serviceCentreId && req.user.role === 'corporate_admin') {
-    query.serviceCentreId = new mongoose.Types.ObjectId(req.query.serviceCentreId);
-  }
-  if (req.query.sentiment) query.sentiment = req.query.sentiment;
-  if (req.query.status) query.status = req.query.status;
-  const reviews = await GoogleReview.find(query).populate('serviceCentreId').sort({ reviewCreatedAt: -1 });
-  res.json(reviews);
-});
-app.get('/api/google-reviews/health', auth, allowRoles('corporate_admin', 'iplanet_service'), async (_, res) => {
-  const integration = await getGoogleBusinessConnection();
-  const locationsDiscovered = await GoogleBusinessLocation.countDocuments({ status: 'ACTIVE' });
-  const locationsMapped = await GoogleBusinessLocation.countDocuments({ mappingStatus: 'MAPPED', status: 'ACTIVE' });
-  res.json({ provider: 'google_business_profile', mode: String(process.env.GOOGLE_REVIEW_MODE || 'demo').toLowerCase(), oauthConfigured: Boolean(process.env.GOOGLE_BUSINESS_CLIENT_ID && process.env.GOOGLE_BUSINESS_CLIENT_SECRET && process.env.GOOGLE_BUSINESS_REDIRECT_URI), connection: integration?.status || 'disconnected', locationsDiscovered, locationsMapped, lastLocationSync: integration?.lastLocationSyncAt || null, lastReviewSync: integration?.lastReviewSyncAt || null, syncAvailable: Boolean(integration?.refreshTokenEncrypted), backgroundSyncRunning: Boolean(googleBusinessPoller), lastError: integration?.lastError || '' });
-});
-app.get('/api/google-reviews/status', auth, allowRoles('corporate_admin', 'iplanet_service'), async (_, res) => {
-  const integration = await getGoogleBusinessConnection();
-  res.json({ connection: integration?.status || 'disconnected', lastReviewSync: integration?.lastReviewSyncAt || null, lastError: integration?.lastError || '' });
-});
-app.get('/api/google-reviews/analytics', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
-  const scope = await buildGoogleReviewScope(req);
-  const query = req.user.role === 'corporate_admin' ? {} : { serviceCentreId: scope.serviceCentreId };
-  const rows = await GoogleReview.find(query).lean();
-  const byServiceCentre = await GoogleReview.aggregate([
-    { $match: query },
-    {
-      $group: {
-        _id: '$serviceCentreName',
-        total: { $sum: 1 },
-        averageRating: { $avg: '$rating' },
-        positive: { $sum: { $cond: [{ $eq: ['$sentiment', 'positive'] }, 1, 0] } },
-        neutral: { $sum: { $cond: [{ $eq: ['$sentiment', 'neutral'] }, 1, 0] } },
-        negative: { $sum: { $cond: [{ $eq: ['$sentiment', 'negative'] }, 1, 0] } },
-        unresolved: { $sum: { $cond: [{ $and: [{ $eq: ['$sentiment', 'negative'] }, { $ne: ['$status', 'Resolved'] }] }, 1, 0] } }
-      }
-    },
-    {
-      $project: {
-        _id: 0,
-        serviceCentre: '$_id',
-        total: 1,
-        averageRating: { $round: ['$averageRating', 2] },
-        positive: 1,
-        neutral: 1,
-        negative: 1,
-        unresolved: 1
-      }
-    },
-    { $sort: { total: -1 } }
-  ]);
-
-  res.json({ summary: buildGoogleReviewAnalytics(rows), byServiceCentre });
-});
-app.get('/api/google-reviews/summary', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
-  const scope = await buildGoogleReviewScope(req);
-  const query = req.user.role === 'corporate_admin' ? {} : { serviceCentreId: scope.serviceCentreId };
-  const [total, latest, highPriority] = await Promise.all([
-    GoogleReview.countDocuments(query),
-    GoogleReview.findOne(query).sort({ reviewCreatedAt: -1 }),
-    GoogleReview.countDocuments({ ...query, priority: 'high' })
-  ]);
-  res.json({ total, latest, highPriority });
-});
-app.get('/api/google-reviews/:id', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
-  const review = await GoogleReview.findById(req.params.id).populate('serviceCentreId');
-  if (!review) return res.status(404).json({ message: 'Google review not found' });
-  if (req.user.role !== 'corporate_admin' && String(review.serviceCentreId?._id || review.serviceCentreId) !== String(req.user.serviceCentreId)) return res.status(403).json({ message: 'This review is outside your service centre scope.' });
-  res.json(review);
-});
-app.patch('/api/google-reviews/:id/acknowledge', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
-  const review = await GoogleReview.findById(req.params.id);
-  if (!review) return res.status(404).json({ message: 'Google review not found' });
-  if (req.user.role !== 'corporate_admin' && String(review.serviceCentreId) !== String(req.user.serviceCentreId)) return res.status(403).json({ message: 'This review is outside your service centre scope.' });
-  review.status = 'Acknowledged';
-  review.acknowledgedAt = new Date();
-  await review.save();
-  res.json(review);
-});
-app.patch('/api/google-reviews/:id/resolve', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
-  const review = await GoogleReview.findById(req.params.id);
-  if (!review) return res.status(404).json({ message: 'Google review not found' });
-  if (req.user.role !== 'corporate_admin' && String(review.serviceCentreId) !== String(req.user.serviceCentreId)) return res.status(403).json({ message: 'This review is outside your service centre scope.' });
-  review.status = 'Resolved';
-  review.resolvedAt = new Date();
-  await review.save();
-  res.json(review);
-});
-app.post('/api/google-reviews/:id/generate-response', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
-  const review = await GoogleReview.findById(req.params.id);
-  if (!review) return res.status(404).json({ message: 'Google review not found' });
-  if (req.user.role !== 'corporate_admin' && String(review.serviceCentreId) !== String(req.user.serviceCentreId)) return res.status(403).json({ message: 'This review is outside your service centre scope.' });
-  res.json({ suggestedResponse: review.suggestedResponse || 'Thank you for the feedback. We value your input and will review the service concern.' });
-});
-app.post('/api/google-reviews/:id/reply', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
-  const review = await GoogleReview.findById(req.params.id);
-  if (!review) return res.status(404).json({ message: 'Google review not found' });
-  if (req.user.role !== 'corporate_admin' && String(review.serviceCentreId) !== String(req.user.serviceCentreId)) return res.status(403).json({ message: 'This review is outside your service centre scope.' });
-  return res.status(501).json({ message: 'Google review replies are not enabled in the Business Profile migration yet.' });
-});
-app.post('/api/google-reviews/sync', auth, allowRoles('corporate_admin', 'iplanet_service'), async (_, res) => {
-  const mode = String(process.env.GOOGLE_REVIEW_MODE || 'demo').toLowerCase();
-  if (mode === 'demo') return res.json({ success: true, mode: 'demo', status: 'demo-mode', message: 'Demo mode is active. No live Google Business Profile calls are made.' });
-  if (mode !== 'business-profile') return res.status(503).json({ message: 'Google Business Profile mode is not configured.', code: 'GOOGLE_BUSINESS_MODE_INVALID' });
-  try {
-    return res.json({ success: true, mode, ...(await syncBusinessReviews()) });
-  } catch (error) {
-    await GoogleBusinessIntegration.updateOne({ provider: 'google-business-profile' }, { $set: { status: 'error', lastError: error.message } }, { upsert: true });
-    return res.status(error.statusCode || 502).json({ message: error.message, code: error.code || 'GOOGLE_BUSINESS_REVIEW_SYNC_FAILED' });
-  }
-});
+app.post('/api/iplanet/service-centres', ...serviceAuth, async (req, res) => { const { name, location, address, city, state, contactNumber, email, status, serviceCentreId } = req.body; if (!name?.trim() || !location?.trim()) return res.status(400).json({ message: 'Service Centre name and location are required' }); try { res.status(201).json(await ServiceCentre.create({ serviceCentreId: serviceCentreId || undefined, name: name.trim(), location: location.trim(), address, city, state, contactNumber, email, status: status || 'Active' })); } catch (error) { if (error.code === 11000) return res.status(409).json({ message: 'A Service Centre with that name already exists' }); throw error; } });
 app.get('/api/iplanet/engineers', ...serviceAuth, async (_, res) => { const engineers = await Engineer.find().populate('userId'); const tickets = await Ticket.find({ assignedEngineerId: { $ne: null }, status: { $nin: ['Closed'] } }); res.json(engineers.map(engineer => ({ ...engineer.toObject(), assignedTicketCount: tickets.filter(ticket => String(ticket.assignedEngineerId) === String(engineer._id)).length }))); });
 app.post('/api/iplanet/tickets/:id/assign', ...serviceAuth, async (req, res) => { const ticket = await serviceTicket(req.params.id); const engineer = await Engineer.findById(req.body.engineerId); if (!ticket || !engineer) return res.status(404).json({ message: 'Ticket or engineer not found' }); if (!['Open', 'Engineer Assigned'].includes(ticket.status)) return res.status(409).json({ message: `Cannot assign an engineer to a ${ticket.status} ticket` }); ticket.assignedEngineer = engineer.name; ticket.assignedEngineerId = engineer._id; ticket.assignedAt = new Date(); await addTimeline(ticket, 'Engineer Assigned', `${engineer.name} assigned to the service request.`, req.user); await notifyTicketUpdate(ticket, ticket.deviceId, 'ENGINEER_ASSIGNED', 'Engineer assigned', `Engineer ${engineer.name} was assigned to ${ticket.ticketId}.`); res.json(await serviceTicket(ticket._id)); });
 app.get('/api/iplanet/tickets/:id/calls', ...serviceAuth, async (req, res) => { const ticket = await serviceTicket(req.params.id); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); res.json(await CallRecord.find({ ticketId: ticket._id }).sort({ createdAt: -1 })); });
@@ -798,7 +497,7 @@ app.post('/api/iplanet/tickets/:id/ai-support', ...serviceAuth, async (req, res)
     res.status(503).json({ message: 'AI troubleshooting is currently unavailable.', session });
   }
 });
-async function engineerAction(req, res, status, message, title = `${status} update`) { const ticket = await serviceTicket(req.params.id); if (!ticket) return res.status(404).json({ message: 'Service ticket not found' }); if (!ticket.assignedEngineerId) return res.status(409).json({ message: 'Assign an engineer before updating this ticket' }); if (!transitions[ticket.status]?.includes(status)) return res.status(409).json({ message: `Cannot move a ${ticket.status} ticket to ${status}` }); const updateMessage = req.body.note?.trim() || message || `${status} update recorded.`; await addTimeline(ticket, status, updateMessage, req.user); await notifyTicketUpdate(ticket, ticket.deviceId, 'TICKET_UPDATE', title, `${ticket.ticketId}: ${updateMessage}`); if (status === 'Completed') await notifyReviewRequest(ticket); await evaluateEscalation(ticket, true); res.json(await serviceTicket(ticket._id)); }
+async function engineerAction(req, res, status, message, title = `${status} update`) { const ticket = await serviceTicket(req.params.id); if (!ticket) return res.status(404).json({ message: 'Service ticket not found' }); if (!ticket.assignedEngineerId) return res.status(409).json({ message: 'Assign an engineer before updating this ticket' }); if (!transitions[ticket.status]?.includes(status)) return res.status(409).json({ message: `Cannot move a ${ticket.status} ticket to ${status}` }); const updateMessage = req.body.note?.trim() || message || `${status} update recorded.`; await addTimeline(ticket, status, updateMessage, req.user); await notifyTicketUpdate(ticket, ticket.deviceId, 'TICKET_UPDATE', title, `${ticket.ticketId}: ${updateMessage}`); if (status === 'Closed') await notifyReviewRequest(ticket); await evaluateEscalation(ticket, true); res.json(await serviceTicket(ticket._id)); }
 app.post('/api/iplanet/tickets/:id/accept', ...serviceAuth, async (req, res) => engineerAction(req, res, 'Engineer Accepted', 'Engineer accepted the service assignment.'));
 app.post('/api/iplanet/tickets/:id/start', ...serviceAuth, async (req, res) => engineerAction(req, res, 'In Progress', 'Work started on the service request.', 'Work started'));
 app.post('/api/iplanet/tickets/:id/waiting-parts', ...serviceAuth, async (req, res) => engineerAction(req, res, 'Waiting for Parts', 'Waiting for replacement parts.', 'Waiting for parts'));
@@ -843,18 +542,6 @@ app.use((error, _, res, __) => res.status(400).json({ message: error.message || 
 const port = process.env.PORT || 5000;
 async function ensureEscalationRules() { const defaults = [{ name: 'SLA Approaching', level: 1, trigger: 'SLA Approaching', priority: 'All', slaThreshold: 80, action: 'Notify Service Coordinator' }, { name: 'SLA Breach', level: 2, trigger: 'SLA Breached', priority: 'All', slaThreshold: 100, action: 'Escalate to Service Manager' }, { name: 'Critical SLA Breach', level: 3, trigger: 'Critical SLA Breach', priority: 'Critical', slaThreshold: 100, action: 'Escalate to Regional Operations Manager' }]; if (await EscalationRule.countDocuments() === 0) await EscalationRule.insertMany(defaults); }
 async function ensureServiceCentres() { if (await ServiceCentre.countDocuments() === 0) await ServiceCentre.insertMany(['Chennai', 'Coimbatore', 'Bengaluru', 'Madurai'].map(location => ({ name: `${location} Service Centre`, location, status: 'Active' }))); }
-async function ensureGoogleReviewMapping() {
-  const placeId = process.env.GOOGLE_REVIEW_PLACE_ID || 'ChIJDWJ8PaWsKycR3-r2Ijr0D0I';
-  const businessName = process.env.GOOGLE_REVIEW_BUSINESS_NAME || 'Phoenixx IT';
-  const serviceCentreName = process.env.GOOGLE_REVIEW_SERVICE_CENTRE_NAME || 'Coimbatore Service Centre';
-  const serviceCentre = await ServiceCentre.findOne({ name: serviceCentreName });
-  if (!serviceCentre) {
-    logGoogleReview('Configured service-centre mapping target was not found', { serviceCentreName });
-    return false;
-  }
-  await ServiceCentre.updateOne({ _id: serviceCentre._id }, { $set: { googleBusinessProfileConnected: true, reviewIntegrationMode: 'business-profile', 'googleBusinessProfile.placeId': placeId, 'googleBusinessProfile.businessName': businessName, 'googleBusinessProfile.locationName': businessName, 'googleBusinessProfile.connected': true } });
-  return true;
-}
 async function ensureDemoEnrollmentDevices() {
   await Promise.all(demoEnrollmentDevices.map(device => DeviceMaster.updateOne({ serialNumber: device.serialNumber }, { $setOnInsert: device }, { upsert: true })));
 }
@@ -873,4 +560,4 @@ async function ensureDemoAccounts() {
   );
 }
  
-mongoose.connect(process.env.MONGODB_URI).then(async () => { await ensureDemoAccounts(); await ensureDemoEnrollmentDevices(); await ensureEscalationRules(); await ensureServiceCentres(); await ensureGoogleReviewMapping(); app.listen(port, '0.0.0.0', () => { startGoogleBusinessPoller(); console.log(`API running at http://localhost:${port}`); }); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });
+mongoose.connect(process.env.MONGODB_URI).then(async () => { await ensureDemoAccounts(); await ensureDemoEnrollmentDevices(); await ensureEscalationRules(); await ensureServiceCentres(); app.listen(port, '0.0.0.0', () => console.log(`API running at http://localhost:${port}`)); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });

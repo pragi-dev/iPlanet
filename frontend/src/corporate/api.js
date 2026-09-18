@@ -30,14 +30,6 @@ export async function getTicketCalls(ticketId) { return request(`/tickets/${tick
 export async function saveTicketCall(ticketId, payload) { return request(`/tickets/${ticketId}/calls`, { method: 'POST', body: JSON.stringify(payload) }); }
 export async function getTicketAITroubleshooting(ticketId) { return request(`/tickets/${ticketId}/ai-support`); }
 export async function startTicketAITroubleshooting(ticketId, payload) { return request(`/tickets/${ticketId}/ai-support`, { method: 'POST', body: JSON.stringify(payload) }); }
-export async function getGoogleBusinessHealth() { return request('/google-business/health'); }
-export async function getGoogleBusinessAuthorizationUrl() { return request('/google-business/auth'); }
-export async function disconnectGoogleBusiness() { return request('/google-business/disconnect', { method: 'POST', body: JSON.stringify({}) }); }
-export async function getGoogleBusinessLocations() { return request('/google-business/locations'); }
-export async function getGoogleBusinessServiceCentres() { return request('/google-business/service-centres'); }
-export async function syncGoogleBusinessLocations() { return request('/google-business/locations/sync', { method: 'POST', body: JSON.stringify({}) }); }
-export async function syncGoogleBusinessReviews() { return request('/google-business/reviews/sync', { method: 'POST', body: JSON.stringify({}) }); }
-export async function mapGoogleBusinessLocation(locationId, serviceCentreId) { return request(`/google-business/locations/${locationId}/mapping`, { method: 'PATCH', body: JSON.stringify({ serviceCentreId }) }); }
 export async function sendAiSupportMessage(ticketId, payload) { return request('/ai/support/chat', { method: 'POST', body: JSON.stringify({ ...payload, ticketId }) }); }
 export async function getAiPreparedRequest(conversationId) { return request(`/ai/support/request-data/${encodeURIComponent(conversationId)}`); }
 export async function getCoverage() { return request('/coverage'); }
