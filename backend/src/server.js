@@ -7,10 +7,9 @@ import multer from 'multer';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, GoogleReview, GoogleGmailConnection, Notification, EscalationRule, CallRecord, AITroubleshootingSession } from './models.js';
+import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, GoogleReview, GoogleBusinessIntegration, GoogleBusinessLocation, Notification, EscalationRule, CallRecord, AITroubleshootingSession } from './models.js';
 import { auth, allowRoles } from './middleware.js';
 import { createAiSupportRouter } from './routes/aiSupport.js';
-import { getGoogleBusinessProfileProvider } from './integrations/googleBusinessProfile/googleBusinessProfileClient.js';
 import { normalizeGoogleReviewInput, buildGoogleReviewAnalytics, processGoogleReview } from './integrations/googleBusinessProfile/googleReviewService.js';
 import { createGoogleReviewNotifications } from './integrations/googleBusinessProfile/googleNotificationService.js';
 import { findGoogleMappedServiceCentre } from './integrations/googleBusinessProfile/googleLocationService.js';
@@ -20,8 +19,9 @@ import { buildSupportContext } from './ai/contextBuilder.js';
 import { understandRequest, understandDeterministicResult, REQUEST_CATEGORIES, REQUEST_ISSUE_TYPES } from './ai/requestExtractor.js';
 import { indiaToday, resolveServiceDateIntent } from './ai/serviceDate.js';
 import { demoEnrollmentDevices } from './demoData.js';
-import { buildGoogleGmailAuthUrl, decryptRefreshToken, diagnoseGoogleGmailConnection, encryptRefreshToken, exchangeGoogleGmailCode, getGoogleGmailProfile, GoogleGmailError, isGmailConfigured } from './integrations/googleBusinessProfile/googleGmailService.js';
-import { retrieveGoogleReviewEmails } from './integrations/googleBusinessProfile/googleGmailReviewService.js';
+import { buildGoogleBusinessAuthUrl, decryptGoogleBusinessRefreshToken, encryptGoogleBusinessRefreshToken, exchangeGoogleBusinessCode, GoogleBusinessProfileError } from './integrations/googleBusinessProfile/googleBusinessProfileAuth.js';
+import { createGoogleBusinessProfileProvider } from './integrations/googleBusinessProfile/googleBusinessProfileProvider.js';
+import { discoverGoogleLocations, syncGoogleBusinessReviews } from './integrations/googleBusinessProfile/googleBusinessProfileSyncService.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '../.env') });
@@ -90,6 +90,13 @@ async function buildGoogleReviewScope(req) {
 }
 
 async function mapGoogleLocationToServiceCentre({ locationId, locationName, accountId, placeId }) {
+  const discoveredLocation = await GoogleBusinessLocation.findOne({
+    ...(accountId ? { googleAccountId: accountId } : {}),
+    ...(locationId ? { googleLocationId: locationId } : {}),
+    mappingStatus: 'MAPPED',
+    serviceCentreId: { $ne: null },
+  }).populate('serviceCentreId');
+  if (discoveredLocation?.serviceCentreId) return discoveredLocation.serviceCentreId;
   const serviceCentre = await ServiceCentre.findOne({
     $or: [
       { 'googleBusinessProfile.locationId': locationId },
@@ -120,8 +127,14 @@ async function persistGoogleReview(reviewInput) {
 
   logGoogleReview('Service Centre mapped', { serviceCentreName: mappedCentre.name, serviceCentreId: String(mappedCentre._id), googleLocationId: normalized.googleLocationId || mappedCentre.googleBusinessProfile?.locationId || 'unknown' });
 
-  const existing = await GoogleReview.findOne({ $or: [{ googleReviewId: normalized.googleReviewId }, ...(normalized.gmailMessageId ? [{ gmailMessageId: normalized.gmailMessageId }] : [])] }).lean();
+  const existing = await GoogleReview.findOne({ googleReviewId: normalized.googleReviewId });
   if (existing) {
+    const changed = existing.reviewUpdatedAt?.getTime?.() !== new Date(normalized.reviewUpdatedAt || 0).getTime() || existing.comment !== normalized.comment || existing.rating !== normalized.rating;
+    if (changed) {
+      Object.assign(existing, normalized, { serviceCentreId: mappedCentre._id, serviceCentreName: mappedCentre.name || normalized.serviceCentreName });
+      await existing.save();
+      return { duplicate: false, updated: true, mapped: true, review: existing, notificationsCreated: 0 };
+    }
     return { duplicate: true, mapped: true, review: existing, notificationsCreated: 0, duplicateReviewId: normalized.googleReviewId };
   }
 
@@ -131,10 +144,8 @@ async function persistGoogleReview(reviewInput) {
     serviceCentreName: mappedCentre.name || normalized.serviceCentreName,
     googleLocationId: normalized.googleLocationId || mappedCentre.googleBusinessProfile?.locationId || '',
     googleAccountId: normalized.googleAccountId || mappedCentre.googleBusinessProfile?.accountId || '',
-    gmailMessageId: normalized.gmailMessageId || undefined,
     googlePlaceId: normalized.googlePlaceId || mappedCentre.googleBusinessProfile?.placeId || '',
     businessName: normalized.businessName || mappedCentre.googleBusinessProfile?.businessName || '',
-    emailReceivedAt: normalized.emailReceivedAt ? new Date(normalized.emailReceivedAt) : undefined,
     reviewUrl: normalized.reviewUrl || '',
     source: normalized.source,
     reviewCreatedAt: normalized.reviewCreatedAt ? new Date(normalized.reviewCreatedAt) : undefined,
@@ -162,53 +173,48 @@ async function enrichGoogleReviewWithAi(review) {
   }
 }
 
-let googleGmailPoller = null;
+let googleBusinessPoller = null;
 
-async function syncGmailReviews() {
-  const connection = await GoogleGmailConnection.findOne({ provider: 'google-gmail' });
-  const refreshToken = decryptRefreshToken(connection?.refreshTokenEncrypted) || process.env.GOOGLE_GMAIL_REFRESH_TOKEN;
-  if (!isGmailConfigured(process.env, refreshToken)) {
-    const error = new GoogleGmailError('Google Reviews is not connected on this backend. Authorize Gmail using this deployment URL, then retry sync.', 'GMAIL_NOT_CONNECTED', 503);
-    throw error;
-  }
+async function getGoogleBusinessConnection() {
+  return GoogleBusinessIntegration.findOne({ provider: 'google-business-profile' });
+}
 
-  const retrieved = await retrieveGoogleReviewEmails({ refreshToken, environment: process.env });
-  let newReviews = 0;
-  let duplicates = 0;
-  let failed = retrieved.rejected.length;
-  for (const review of retrieved.parsed) {
-    try {
-      const analyzed = await enrichGoogleReviewWithAi({ ...review, googleReviewId: `gmail-${review.gmailMessageId}`, googlePlaceId: review.placeId, googleLocationId: '', serviceCentreName: review.businessName });
-      const result = await persistGoogleReview(analyzed);
-      if (result.duplicate) duplicates += 1;
-      else if (result.mapped) newReviews += 1;
-      else failed += 1;
-    } catch (error) {
-      failed += 1;
-      logGoogleReview('Review import failed', { googleReviewId: review.externalId, code: error.code || 'IMPORT_FAILED' });
-    }
-  }
-  const summary = { success: true, found: retrieved.found, newReviews, duplicates, failed, rejected: retrieved.rejected.length, query: retrieved.query };
-  await GoogleGmailConnection.findOneAndUpdate({ provider: 'google-gmail' }, { provider: 'google-gmail', lastSyncAt: new Date(), lastSyncStatus: 'success', lastSyncMessage: `Imported ${newReviews} new review(s).` }, { upsert: true });
+async function getGoogleBusinessProvider() {
+  const integration = await getGoogleBusinessConnection();
+  const refreshToken = decryptGoogleBusinessRefreshToken(integration?.refreshTokenEncrypted);
+  if (!refreshToken) throw new GoogleBusinessProfileError('Google Business Profile is not connected.', 'GOOGLE_BUSINESS_NOT_CONNECTED', 503);
+  return { integration, provider: createGoogleBusinessProfileProvider({ refreshToken, environment: process.env }) };
+}
+
+async function syncBusinessLocations() {
+  const { integration, provider } = await getGoogleBusinessProvider();
+  const locations = await discoverGoogleLocations({ provider, GoogleBusinessLocation, ServiceCentre });
+  const account = locations[0]?.googleAccountId || integration.googleAccountId || '';
+  await GoogleBusinessIntegration.updateOne({ _id: integration._id }, { $set: { status: 'connected', googleAccountId: account, lastLocationSyncAt: new Date(), lastError: '' } });
+  return { locations, locationsDiscovered: locations.length };
+}
+
+async function syncBusinessReviews() {
+  const { integration, provider } = await getGoogleBusinessProvider();
+  const summary = await syncGoogleBusinessReviews({
+    provider,
+    GoogleBusinessLocation,
+    persistReview: async review => persistGoogleReview(await enrichGoogleReviewWithAi(review)),
+  });
+  await GoogleBusinessIntegration.updateOne({ _id: integration._id }, { $set: { status: 'connected', lastReviewSyncAt: new Date(), lastError: '' } });
   return summary;
 }
 
-function startGoogleGmailPoller() {
-  if (googleGmailPoller || String(process.env.GOOGLE_REVIEW_MODE || '').toLowerCase() !== 'gmail') return false;
+function startGoogleBusinessPoller() {
+  if (googleBusinessPoller || String(process.env.GOOGLE_REVIEW_MODE || '').toLowerCase() !== 'business-profile') return false;
   const intervalMs = Math.max(60000, Number(process.env.GOOGLE_REVIEW_SYNC_INTERVAL || 300000));
-  googleGmailPoller = setInterval(async () => {
-    try {
-      const result = await syncGmailReviews();
-      if (result.newReviews || result.failed) logGoogleReview('Background sync completed', { newReviews: result.newReviews, failed: result.failed });
-    } catch (error) {
-      await GoogleGmailConnection.findOneAndUpdate({ provider: 'google-gmail' }, { provider: 'google-gmail', lastSyncAt: new Date(), lastSyncStatus: 'failed', lastSyncMessage: error.message }, { upsert: true });
-      logGoogleReview('Background sync failed', { code: error.code || 'GMAIL_SYNC_FAILED' });
-    }
+  googleBusinessPoller = setInterval(async () => {
+    try { await syncBusinessReviews(); } catch (error) { await GoogleBusinessIntegration.updateOne({ provider: 'google-business-profile' }, { $set: { status: 'error', lastError: error.message } }, { upsert: true }); }
   }, intervalMs);
-  googleGmailPoller.unref?.();
-  logGoogleReview('Background poller started', { intervalMs });
+  googleBusinessPoller.unref?.();
   return true;
 }
+
 async function getTicketWithContext(ticketIdParam) {
   return Ticket.findById(ticketIdParam).populate('customerId').populate('companyId').populate('serviceCentreId').populate('deviceId').populate('assignedEngineerId');
 }
@@ -586,32 +592,42 @@ app.get('/api/iplanet/companies', ...serviceAuth, async (_, res) => res.json(awa
 app.post('/api/iplanet/companies', ...serviceAuth, async (req, res) => { const { name, location, contactName, contactEmail, phone } = req.body; if (!name?.trim() || !location?.trim()) return res.status(400).json({ message: 'Corporate name and location are required' }); try { const company = await Company.create({ name: name.trim(), location: location.trim(), contactName, contactEmail, phone, companyId: `CO-${Date.now()}` }); res.status(201).json(company); } catch (error) { if (error.code === 11000) return res.status(409).json({ message: 'A Corporate with that name already exists' }); throw error; } });
 app.get('/api/iplanet/service-centres', ...serviceAuth, async (_, res) => res.json(await ServiceCentre.find({ status: 'Active' }).sort({ name: 1 })));
 app.post('/api/iplanet/service-centres', ...serviceAuth, async (req, res) => { const { name, location, address, city, state, contactNumber, email, status, serviceCentreId, googleMapsUrl, googleLocationId, googleBusinessProfileConnected, reviewIntegrationMode, googleBusinessProfile } = req.body; if (!name?.trim() || !location?.trim()) return res.status(400).json({ message: 'Service Centre name and location are required' }); try { res.status(201).json(await ServiceCentre.create({ serviceCentreId: serviceCentreId || undefined, name: name.trim(), location: location.trim(), address, city, state, contactNumber, email, status: status || 'Active', googleMapsUrl: googleMapsUrl || '', googleLocationId: googleLocationId || '', googleBusinessProfileConnected: Boolean(googleBusinessProfileConnected ?? false), reviewIntegrationMode: reviewIntegrationMode || 'demo', googleBusinessProfile: googleBusinessProfile || { connected: false, locationId: googleLocationId || '', locationName: name.trim() } })); } catch (error) { if (error.code === 11000) return res.status(409).json({ message: 'A Service Centre with that name already exists' }); throw error; } });
-app.get('/api/google-gmail/auth', async (_, res) => {
+app.get('/api/google-business/auth', async (_, res) => {
   try {
-    const state = jwt.sign({ purpose: 'google-gmail-oauth' }, process.env.JWT_SECRET || 'local-demo-secret', { expiresIn: '10m' });
-    const authorizationUrl = buildGoogleGmailAuthUrl(process.env, state);
+    const state = jwt.sign({ purpose: 'google-business-oauth' }, process.env.JWT_SECRET || 'local-demo-secret', { expiresIn: '10m' });
+    const authorizationUrl = buildGoogleBusinessAuthUrl(process.env, state);
     if (_.accepts('html')) return res.redirect(authorizationUrl);
     return res.json({ authorizationUrl });
   } catch (error) {
-    res.status(error.statusCode || 503).json({ message: error.message, code: error.code || 'GMAIL_OAUTH_ERROR' });
+    res.status(error.statusCode || 503).json({ message: error.message, code: error.code || 'GOOGLE_BUSINESS_OAUTH_ERROR' });
   }
 });
-app.get('/api/google-gmail/callback', async (req, res) => {
+app.get('/api/google-business/callback', async (req, res) => {
   try {
     const state = jwt.verify(req.query.state, process.env.JWT_SECRET || 'local-demo-secret');
-    if (state.purpose !== 'google-gmail-oauth') throw new Error('Invalid Google OAuth state.');
-    const tokens = await exchangeGoogleGmailCode(req.query.code, process.env);
-    if (!tokens.refresh_token && !process.env.GOOGLE_GMAIL_REFRESH_TOKEN) throw new GoogleGmailError('Google did not return a refresh token. Revoke the existing app grant and authorize again.', 'GMAIL_REFRESH_TOKEN_MISSING', 400);
-    const refreshToken = tokens.refresh_token || process.env.GOOGLE_GMAIL_REFRESH_TOKEN;
-    const profile = await getGoogleGmailProfile({ refreshToken, environment: process.env });
-    await GoogleGmailConnection.findOneAndUpdate({ provider: 'google-gmail' }, { provider: 'google-gmail', email: profile.emailAddress, refreshTokenEncrypted: encryptRefreshToken(refreshToken), connectedAt: new Date(), lastSyncMessage: '' }, { upsert: true, new: true });
+    if (state.purpose !== 'google-business-oauth') throw new Error('Invalid Google OAuth state.');
+    if (req.query.error) throw new GoogleBusinessProfileError(`Google authorization failed: ${req.query.error}`, 'GOOGLE_BUSINESS_AUTH_DENIED', 400);
+    const tokens = await exchangeGoogleBusinessCode(req.query.code, process.env);
+    if (!tokens.refresh_token) throw new GoogleBusinessProfileError('Google did not return a refresh token. Revoke the existing app grant and authorize again.', 'GOOGLE_BUSINESS_REFRESH_TOKEN_MISSING', 400);
+    await GoogleBusinessIntegration.findOneAndUpdate({ provider: 'google-business-profile' }, { provider: 'google-business-profile', status: 'connected', refreshTokenEncrypted: encryptGoogleBusinessRefreshToken(tokens.refresh_token), lastError: '' }, { upsert: true, new: true });
     const frontendUrl = (process.env.FRONTEND_URLS || 'http://localhost:5173').split(',')[0].trim().replace(/\/$/, '');
-    res.redirect(`${frontendUrl}/service/google-reviews?googleGmail=connected`);
+    res.redirect(`${frontendUrl}/corporate/google-business?googleBusiness=connected`);
   } catch (error) {
     const frontendUrl = (process.env.FRONTEND_URLS || 'http://localhost:5173').split(',')[0].trim().replace(/\/$/, '');
-    res.redirect(`${frontendUrl}/service/google-reviews?googleGmail=error&message=${encodeURIComponent(error.code || 'GMAIL_OAUTH_ERROR')}`);
+    res.redirect(`${frontendUrl}/corporate/google-business?googleBusiness=error&message=${encodeURIComponent(error.code || 'GOOGLE_BUSINESS_OAUTH_ERROR')}`);
   }
 });
+app.get('/api/google-business/health', auth, allowRoles('corporate_admin'), async (_, res) => {
+  const integration = await getGoogleBusinessConnection();
+  const locationsDiscovered = await GoogleBusinessLocation.countDocuments({ status: 'ACTIVE' });
+  const locationsMapped = await GoogleBusinessLocation.countDocuments({ mappingStatus: 'MAPPED', status: 'ACTIVE' });
+  res.json({ provider: 'google_business_profile', oauthConfigured: Boolean(process.env.GOOGLE_BUSINESS_CLIENT_ID && process.env.GOOGLE_BUSINESS_CLIENT_SECRET && process.env.GOOGLE_BUSINESS_REDIRECT_URI), connection: integration?.status || 'disconnected', locationsDiscovered, locationsMapped, lastLocationSync: integration?.lastLocationSyncAt || null, lastReviewSync: integration?.lastReviewSyncAt || null, syncAvailable: Boolean(integration?.refreshTokenEncrypted), lastError: integration?.lastError || '' });
+});
+app.get('/api/google-business/locations', auth, allowRoles('corporate_admin'), async (_, res) => res.json(await GoogleBusinessLocation.find({ status: 'ACTIVE' }).populate('serviceCentreId').sort({ businessName: 1 })));
+app.get('/api/google-business/service-centres', auth, allowRoles('corporate_admin'), async (_, res) => res.json(await ServiceCentre.find({ status: 'Active' }).sort({ name: 1 })));
+app.post('/api/google-business/locations/sync', auth, allowRoles('corporate_admin'), async (_, res) => { try { res.json({ success: true, ...(await syncBusinessLocations()) }); } catch (error) { await GoogleBusinessIntegration.updateOne({ provider: 'google-business-profile' }, { $set: { status: 'error', lastError: error.message } }, { upsert: true }); res.status(error.statusCode || 502).json({ message: error.message, code: error.code || 'GOOGLE_BUSINESS_LOCATION_SYNC_FAILED' }); } });
+app.patch('/api/google-business/locations/:id/mapping', auth, allowRoles('corporate_admin'), async (req, res) => { const location = await GoogleBusinessLocation.findById(req.params.id); const serviceCentre = await ServiceCentre.findById(req.body.serviceCentreId); if (!location || !serviceCentre) return res.status(404).json({ message: 'Google location or Service Centre not found.' }); location.serviceCentreId = serviceCentre._id; location.mappingStatus = 'MAPPED'; await location.save(); res.json(await location.populate('serviceCentreId')); });
+app.post('/api/google-business/reviews/sync', auth, allowRoles('corporate_admin'), async (_, res) => { try { res.json({ success: true, ...(await syncBusinessReviews()) }); } catch (error) { await GoogleBusinessIntegration.updateOne({ provider: 'google-business-profile' }, { $set: { status: 'error', lastError: error.message } }, { upsert: true }); res.status(error.statusCode || 502).json({ message: error.message, code: error.code || 'GOOGLE_BUSINESS_REVIEW_SYNC_FAILED' }); } });
 app.get('/api/google-reviews', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
   const scope = await buildGoogleReviewScope(req);
   const query = req.user.role === 'corporate_admin' ? {} : { serviceCentreId: scope.serviceCentreId };
@@ -624,45 +640,10 @@ app.get('/api/google-reviews', auth, allowRoles('corporate_admin', 'iplanet_serv
   res.json(reviews);
 });
 app.get('/api/google-reviews/health', auth, allowRoles('corporate_admin', 'iplanet_service'), async (_, res) => {
-  const mode = String(process.env.GOOGLE_REVIEW_MODE || 'gmail').toLowerCase();
-  const googleApiConfigured = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_BUSINESS_PROFILE_ACCOUNT_ID && process.env.GOOGLE_LOCATION_ID);
-  const oauthConfigured = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REDIRECT_URI);
-  const accountConfigured = Boolean(process.env.GOOGLE_BUSINESS_PROFILE_ACCOUNT_ID);
-  const locationConfigured = Boolean(process.env.GOOGLE_LOCATION_ID);
-  const pubsubConfigured = Boolean(process.env.GOOGLE_PUBSUB_PROJECT_ID && process.env.GOOGLE_PUBSUB_TOPIC);
-  const webhookConfigured = Boolean(process.env.GOOGLE_PUBSUB_TOPIC || process.env.GOOGLE_REVIEW_MODE === 'google-api');
-  const serviceCentreMappingConfigured = await ServiceCentre.exists({ $or: [{ 'googleBusinessProfile.locationId': { $exists: true, $ne: '' } }, { googleLocationId: { $exists: true, $ne: '' } }] });
-  const configuredPlaceId = process.env.GOOGLE_REVIEW_PLACE_ID || 'ChIJDWJ8PaWsKycR3-r2Ijr0D0I';
-  const placeMappingConfigured = await ServiceCentre.exists({ 'googleBusinessProfile.placeId': configuredPlaceId });
-  const connection = await GoogleGmailConnection.findOne({ provider: 'google-gmail' }).lean();
-  const storedRefreshToken = decryptRefreshToken(connection?.refreshTokenEncrypted);
-  const gmailConfigured = isGmailConfigured(process.env, storedRefreshToken);
-  const gmailDiagnostic = await diagnoseGoogleGmailConnection({ refreshToken: storedRefreshToken, environment: process.env });
-  res.json({
-    mode,
-    gmailConfigured,
-    gmailConnected: gmailDiagnostic.connected,
-    gmailDiagnostic: gmailDiagnostic.status,
-    tokenStorageStatus: connection?.refreshTokenEncrypted && !storedRefreshToken ? 'ENCRYPTED_TOKEN_UNREADABLE' : storedRefreshToken ? 'AVAILABLE' : 'MISSING',
-    gmailApiReadOnlyRequest: gmailDiagnostic.readOnlyRequest || null,
-    oauthConfigured: Boolean(process.env.GOOGLE_GMAIL_CLIENT_ID && process.env.GOOGLE_GMAIL_CLIENT_SECRET && process.env.GOOGLE_GMAIL_REDIRECT_URI),
-    refreshTokenConfigured: Boolean(connection?.refreshTokenEncrypted || process.env.GOOGLE_GMAIL_REFRESH_TOKEN),
-    placeIdConfigured: Boolean(process.env.GOOGLE_REVIEW_PLACE_ID || placeMappingConfigured),
-    placeId: configuredPlaceId,
-    businessName: process.env.GOOGLE_REVIEW_BUSINESS_NAME || 'Phoenixx IT',
-    lastSyncAt: connection?.lastSyncAt || null,
-    lastSyncStatus: connection?.lastSyncStatus || 'never',
-    lastSyncMessage: connection?.lastSyncMessage || '',
-    googleApiConfigured,
-    accountConfigured,
-    locationConfigured,
-    pubsubConfigured,
-    webhookConfigured,
-    parserConfigured: true,
-    mongoConnected: mongoose.connection.readyState === 1,
-    backgroundSyncRunning: Boolean(googleGmailPoller),
-    serviceCentreMappingConfigured: Boolean(serviceCentreMappingConfigured || placeMappingConfigured),
-  });
+  const integration = await getGoogleBusinessConnection();
+  const locationsDiscovered = await GoogleBusinessLocation.countDocuments({ status: 'ACTIVE' });
+  const locationsMapped = await GoogleBusinessLocation.countDocuments({ mappingStatus: 'MAPPED', status: 'ACTIVE' });
+  res.json({ provider: 'google_business_profile', mode: String(process.env.GOOGLE_REVIEW_MODE || 'demo').toLowerCase(), oauthConfigured: Boolean(process.env.GOOGLE_BUSINESS_CLIENT_ID && process.env.GOOGLE_BUSINESS_CLIENT_SECRET && process.env.GOOGLE_BUSINESS_REDIRECT_URI), connection: integration?.status || 'disconnected', locationsDiscovered, locationsMapped, lastLocationSync: integration?.lastLocationSyncAt || null, lastReviewSync: integration?.lastReviewSyncAt || null, syncAvailable: Boolean(integration?.refreshTokenEncrypted), backgroundSyncRunning: Boolean(googleBusinessPoller), lastError: integration?.lastError || '' });
 });
 app.get('/api/google-reviews/analytics', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
   const scope = await buildGoogleReviewScope(req);
@@ -742,66 +723,18 @@ app.post('/api/google-reviews/:id/reply', auth, allowRoles('corporate_admin', 'i
   const review = await GoogleReview.findById(req.params.id);
   if (!review) return res.status(404).json({ message: 'Google review not found' });
   if (req.user.role !== 'corporate_admin' && String(review.serviceCentreId) !== String(req.user.serviceCentreId)) return res.status(403).json({ message: 'This review is outside your service centre scope.' });
-  const provider = getGoogleBusinessProfileProvider(process.env);
-  if (process.env.GOOGLE_REVIEW_MODE !== 'google-api') {
-    return res.status(400).json({ message: 'Google review reply is disabled in demo mode. Set GOOGLE_REVIEW_MODE=google-api and configure OAuth before enabling live replies.' });
-  }
-  const result = await provider.replyToReview(review.googleReviewId, { message: req.body.message || review.suggestedResponse });
-  review.googleReplyStatus = 'replied';
-  review.googleReply = req.body.message || review.suggestedResponse;
-  await review.save();
-  res.status(202).json({ ok: true, result });
+  return res.status(501).json({ message: 'Google review replies are not enabled in the Business Profile migration yet.' });
 });
-app.post('/api/google-reviews/webhook', async (req, res) => {
-  logGoogleReview('Pub/Sub request received', { hasBody: !!req.body, contentType: req.headers['content-type'] || 'unknown' });
-  const provider = getGoogleBusinessProfileProvider(process.env);
-  if (process.env.GOOGLE_REVIEW_MODE === 'google-api') {
-    const token = req.headers['x-goog-pubsub-topic-name'] || req.headers['x-goog-pubsub-message-number'];
-    if (process.env.GOOGLE_PUBSUB_VERIFICATION_TOKEN && req.headers['x-google-pubsub-verification-token'] !== process.env.GOOGLE_PUBSUB_VERIFICATION_TOKEN) {
-      return res.status(401).json({ message: 'Unauthorized Google webhook request.' });
-    }
-    if (!token && !req.body?.message) return res.status(400).json({ message: 'Invalid Pub/Sub message payload.' });
+app.post('/api/google-reviews/sync', auth, allowRoles('corporate_admin', 'iplanet_service'), async (_, res) => {
+  const mode = String(process.env.GOOGLE_REVIEW_MODE || 'demo').toLowerCase();
+  if (mode === 'demo') return res.json({ success: true, mode: 'demo', status: 'demo-mode', message: 'Demo mode is active. No live Google Business Profile calls are made.' });
+  if (mode !== 'business-profile') return res.status(503).json({ message: 'Google Business Profile mode is not configured.', code: 'GOOGLE_BUSINESS_MODE_INVALID' });
+  try {
+    return res.json({ success: true, mode, ...(await syncBusinessReviews()) });
+  } catch (error) {
+    await GoogleBusinessIntegration.updateOne({ provider: 'google-business-profile' }, { $set: { status: 'error', lastError: error.message } }, { upsert: true });
+    return res.status(error.statusCode || 502).json({ message: error.message, code: error.code || 'GOOGLE_BUSINESS_REVIEW_SYNC_FAILED' });
   }
-  const payload = req.body?.message?.data ? JSON.parse(Buffer.from(req.body.message.data, 'base64').toString('utf8')) : req.body;
-  const reviewInput = payload?.review || payload?.googleReview || payload;
-  if (!reviewInput?.googleReviewId && !reviewInput?.id) return res.status(400).json({ message: 'Google review payload was missing a review identifier.' });
-  logGoogleReview('Message received', { googleReviewId: reviewInput.googleReviewId || reviewInput.id, hasLocation: !!(reviewInput.googleLocationId || reviewInput.locationId || reviewInput.locationName) });
-  const result = await persistGoogleReview(reviewInput);
-  if (result.mapped === false) {
-    logGoogleReview('Review processing complete with mapping failure', { googleReviewId: reviewInput.googleReviewId || reviewInput.id, error: result.error, googleLocationId: result.locationId || reviewInput.googleLocationId || reviewInput.locationId || 'unknown' });
-  }
-  if (result.notificationsCreated > 0) {
-    logGoogleReview('Notification created', { googleReviewId: result.review?.googleReviewId || reviewInput.googleReviewId || reviewInput.id, serviceCentreId: String(result.review?.serviceCentreId || ''), count: result.notificationsCreated });
-  }
-  res.json({ ok: true, result });
-});
-app.post('/api/google-reviews/sync', auth, allowRoles('corporate_admin', 'iplanet_service'), async (req, res) => {
-  const provider = getGoogleBusinessProfileProvider(process.env);
-  const mode = String(process.env.GOOGLE_REVIEW_MODE || 'gmail').toLowerCase();
-  if (mode === 'gmail') {
-    try {
-      const summary = await syncGmailReviews();
-      await GoogleGmailConnection.findOneAndUpdate({ provider: 'google-gmail' }, { provider: 'google-gmail', lastSyncAt: new Date(), lastSyncStatus: 'success', lastSyncMessage: `Imported ${summary.newReviews} new review(s).` }, { upsert: true });
-      return res.json({ ...summary, syncedAt: new Date() });
-    } catch (error) {
-      await GoogleGmailConnection.findOneAndUpdate({ provider: 'google-gmail' }, { provider: 'google-gmail', lastSyncAt: new Date(), lastSyncStatus: 'failed', lastSyncMessage: error.message }, { upsert: true });
-      return res.status(error.statusCode || 502).json({ message: error.message, code: error.code || 'GMAIL_SYNC_FAILED' });
-    }
-  }
-  if (mode !== 'google-api') {
-    return res.json({ syncedAt: new Date(), mode: 'demo', status: 'demo-mode', message: 'Demo mode is active. No live Google API calls are made.' });
-  }
-  const locations = await provider.getLocations();
-  let processed = 0;
-  for (const location of locations) {
-    const reviews = await provider.getReviews(location.locationId || location.id);
-    for (const review of reviews) {
-      const normalized = normalizeGoogleReviewInput({ ...review, locationName: location.locationName || location.name, googleLocationId: review.googleLocationId || location.locationId || location.id, googleAccountId: review.googleAccountId || location.accountId || process.env.GOOGLE_BUSINESS_PROFILE_ACCOUNT_ID });
-      const result = await persistGoogleReview(normalized);
-      if (!result.duplicate && result.mapped) processed += 1;
-    }
-  }
-  res.json({ syncedAt: new Date(), mode: 'google-api', status: 'success', processed });
 });
 app.get('/api/iplanet/engineers', ...serviceAuth, async (_, res) => { const engineers = await Engineer.find().populate('userId'); const tickets = await Ticket.find({ assignedEngineerId: { $ne: null }, status: { $nin: ['Closed'] } }); res.json(engineers.map(engineer => ({ ...engineer.toObject(), assignedTicketCount: tickets.filter(ticket => String(ticket.assignedEngineerId) === String(engineer._id)).length }))); });
 app.post('/api/iplanet/tickets/:id/assign', ...serviceAuth, async (req, res) => { const ticket = await serviceTicket(req.params.id); const engineer = await Engineer.findById(req.body.engineerId); if (!ticket || !engineer) return res.status(404).json({ message: 'Ticket or engineer not found' }); if (!['Open', 'Engineer Assigned'].includes(ticket.status)) return res.status(409).json({ message: `Cannot assign an engineer to a ${ticket.status} ticket` }); ticket.assignedEngineer = engineer.name; ticket.assignedEngineerId = engineer._id; ticket.assignedAt = new Date(); await addTimeline(ticket, 'Engineer Assigned', `${engineer.name} assigned to the service request.`, req.user); await notifyTicketUpdate(ticket, ticket.deviceId, 'ENGINEER_ASSIGNED', 'Engineer assigned', `Engineer ${engineer.name} was assigned to ${ticket.ticketId}.`); res.json(await serviceTicket(ticket._id)); });
@@ -882,7 +815,7 @@ async function ensureGoogleReviewMapping() {
     logGoogleReview('Configured service-centre mapping target was not found', { serviceCentreName });
     return false;
   }
-  await ServiceCentre.updateOne({ _id: serviceCentre._id }, { $set: { googleBusinessProfileConnected: true, reviewIntegrationMode: 'gmail', 'googleBusinessProfile.placeId': placeId, 'googleBusinessProfile.businessName': businessName, 'googleBusinessProfile.locationName': businessName, 'googleBusinessProfile.connected': true } });
+  await ServiceCentre.updateOne({ _id: serviceCentre._id }, { $set: { googleBusinessProfileConnected: true, reviewIntegrationMode: 'business-profile', 'googleBusinessProfile.placeId': placeId, 'googleBusinessProfile.businessName': businessName, 'googleBusinessProfile.locationName': businessName, 'googleBusinessProfile.connected': true } });
   return true;
 }
 async function ensureDemoEnrollmentDevices() {
@@ -903,4 +836,4 @@ async function ensureDemoAccounts() {
   );
 }
  
-mongoose.connect(process.env.MONGODB_URI).then(async () => { await ensureDemoAccounts(); await ensureDemoEnrollmentDevices(); await ensureEscalationRules(); await ensureServiceCentres(); await ensureGoogleReviewMapping(); app.listen(port, '0.0.0.0', () => { startGoogleGmailPoller(); console.log(`API running at http://localhost:${port}`); }); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });
+mongoose.connect(process.env.MONGODB_URI).then(async () => { await ensureDemoAccounts(); await ensureDemoEnrollmentDevices(); await ensureEscalationRules(); await ensureServiceCentres(); await ensureGoogleReviewMapping(); app.listen(port, '0.0.0.0', () => { startGoogleBusinessPoller(); console.log(`API running at http://localhost:${port}`); }); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });

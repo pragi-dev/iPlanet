@@ -24,7 +24,7 @@ services:
       - key: GEMINI_TIMEOUT_MS
         value: '60000'
       - key: GOOGLE_REVIEW_MODE
-        value: gmail
+        value: business-profile
       - key: GOOGLE_REVIEW_PLACE_ID
         value: ChIJDWJ8PaWsKycR3-r2Ijr0D0I
       - key: GOOGLE_REVIEW_BUSINESS_NAME
@@ -33,19 +33,13 @@ services:
         value: Coimbatore Service Centre
       - key: GOOGLE_REVIEW_SYNC_INTERVAL
         value: '300000'
-      - key: GOOGLE_GMAIL_CLIENT_ID
+      - key: GOOGLE_BUSINESS_CLIENT_ID
         sync: false
-      - key: GOOGLE_GMAIL_CLIENT_SECRET
+      - key: GOOGLE_BUSINESS_CLIENT_SECRET
         sync: false
-      - key: GOOGLE_GMAIL_REDIRECT_URI
-        value: https://iplanet-backend.onrender.com/api/google-gmail/callback
-      - key: GOOGLE_GMAIL_REFRESH_TOKEN
+      - key: GOOGLE_BUSINESS_REDIRECT_URI
+        value: https://iplanet-backend.onrender.com/api/google-business/callback
+      - key: GOOGLE_BUSINESS_TOKEN_ENCRYPTION_KEY
         sync: false
-      - key: GOOGLE_GMAIL_TOKEN_ENCRYPTION_KEY
-        sync: false
-      - key: GOOGLE_GMAIL_SEARCH_QUERY
-        sync: false
-      - key: GOOGLE_GMAIL_LOOKBACK_DAYS
-        value: '30'
-      - key: GOOGLE_GMAIL_DEBUG_STRUCTURE
-        value: 'false'
+      - key: GOOGLE_REVIEW_SYNC_INTERVAL
+        value: '300000'

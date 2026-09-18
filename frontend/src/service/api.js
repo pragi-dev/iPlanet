@@ -44,9 +44,10 @@ export async function getGoogleReviewAnalytics(filters = {}) {
   return request(`/google-reviews/analytics${params.toString() ? `?${params}` : ''}`);
 }
 export async function getGoogleReviewSummary() { return request('/google-reviews/summary'); }
+export async function getGoogleBusinessHealth() { return request('/google-business/health'); }
+export async function syncGoogleBusinessReviews() { return request('/google-business/reviews/sync', { method: 'POST', body: JSON.stringify({}) }); }
 export async function getGoogleReviewHealth() { return request('/google-reviews/health'); }
 export async function syncGoogleReviews() { return request('/google-reviews/sync', { method: 'POST', body: JSON.stringify({}) }); }
-export function getGoogleGmailAuthUrl() { return `${API}/google-gmail/auth`; }
 export async function acknowledgeGoogleReview(id) { return request(`/google-reviews/${id}/acknowledge`, { method: 'PATCH', body: JSON.stringify({}) }); }
 export async function resolveGoogleReview(id) { return request(`/google-reviews/${id}/resolve`, { method: 'PATCH', body: JSON.stringify({}) }); }
 export async function generateGoogleReviewResponse(id) { return request(`/google-reviews/${id}/generate-response`, { method: 'POST', body: JSON.stringify({}) }); }

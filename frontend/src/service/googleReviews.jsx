@@ -4,7 +4,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { ServiceShell } from './servicePages';
 import { Badge, Empty, Metric, PageTitle } from './components';
-import { acknowledgeGoogleReview, generateGoogleReviewResponse, getGoogleGmailAuthUrl, getGoogleReviewAnalytics, getGoogleReviewHealth, getGoogleReviews, getServiceCentres, resolveGoogleReview, syncGoogleReviews } from './api';
+import { acknowledgeGoogleReview, generateGoogleReviewResponse, getGoogleBusinessHealth, getGoogleReviewAnalytics, getGoogleReviews, getServiceCentres, resolveGoogleReview, syncGoogleBusinessReviews } from './api';
 
 const sentimentColors = { positive: '#2f8f5b', neutral: '#d4a72c', negative: '#bf4a3f' };
 const ratingColors = ['#0e7490', '#2f8f5b', '#d4a72c', '#d96f45', '#bf4a3f'];
@@ -56,7 +56,7 @@ export function GoogleReviews({ admin = false } = {}) {
         getGoogleReviews(admin ? { serviceCentreId: serviceCentreFilter !== 'All' ? serviceCentreFilter : undefined } : {}),
         getGoogleReviewAnalytics(admin ? { serviceCentreId: serviceCentreFilter !== 'All' ? serviceCentreFilter : undefined } : {}),
         getServiceCentres().catch(() => []),
-        getGoogleReviewHealth().catch(() => null)
+        getGoogleBusinessHealth().catch(() => null)
       ]);
       setReviews(reviewRows);
       setAnalytics(analyticsResult || { summary: { totalReviews: 0, averageRating: 0, positiveReviews: 0, neutralReviews: 0, negativeReviews: 0, unresolvedNegativeReviews: 0 }, byServiceCentre: [] });
@@ -131,7 +131,7 @@ export function GoogleReviews({ admin = false } = {}) {
     try {
       setSyncing(true);
       setSyncMessage('');
-      const result = await syncGoogleReviews();
+      const result = await syncGoogleBusinessReviews();
       setSyncMessage(`Sync complete: ${result.newReviews || 0} new, ${result.duplicates || 0} duplicate, ${result.failed || 0} failed.`);
       await load();
     } catch (syncError) {
@@ -141,9 +141,9 @@ export function GoogleReviews({ admin = false } = {}) {
     }
   };
 
-  const connectGmail = async () => {
+  const connectGoogleBusiness = async () => {
     try {
-      window.location.assign(getGoogleGmailAuthUrl());
+      window.location.assign('/api/google-business/auth');
     } catch (authError) {
       setError(authError.message || 'Unable to start Google authorization.');
     }
@@ -154,12 +154,12 @@ export function GoogleReviews({ admin = false } = {}) {
 
   return (
     <ServiceShell title={serviceTitle}>
-      <PageTitle title={serviceTitle} description={serviceDescription} action={<button type="button" className="button primary" onClick={syncReviews} disabled={syncing}><RefreshCw size={15} className={syncing ? 'spin' : ''} />{syncing ? 'Syncing...' : 'Sync Google Reviews'}</button>} />
-      <div className="panel review-connection-status">
-        <div className="review-connection-item"><span className="kicker">Google Reviews</span><strong className={health?.gmailConfigured ? 'connection-state connected' : 'connection-state'}>{health?.gmailConfigured ? 'Connected' : 'Not connected'}</strong><small>{health?.businessName || 'Phoenixx IT'} <span aria-hidden="true">·</span> {health?.placeId || 'Place ID not configured'}</small></div>
-        <div className="review-connection-item"><span className="kicker">Last sync</span><strong>{health?.lastSyncAt ? formatReviewDate(health.lastSyncAt) : 'Never'}</strong><small className={health?.lastSyncStatus === 'failed' ? 'sync-failed' : ''}>{health?.lastSyncStatus || 'never'}</small></div>
-        {!health?.gmailConfigured && <button type="button" className="button secondary" onClick={connectGmail}>Connect Gmail</button>}
-      </div>
+      <PageTitle title={serviceTitle} description={serviceDescription} action={admin && <button type="button" className="button primary" onClick={syncReviews} disabled={syncing}><RefreshCw size={15} className={syncing ? 'spin' : ''} />{syncing ? 'Syncing...' : 'Sync Google Reviews'}</button>} />
+      {admin && <div className="panel review-connection-status">
+        <div className="review-connection-item"><span className="kicker">Google Business Profile</span><strong className={health?.connection === 'connected' ? 'connection-state connected' : 'connection-state'}>{health?.connection === 'connected' ? 'Connected' : 'Not connected'}</strong><small>{health?.locationsDiscovered || 0} locations discovered <span aria-hidden="true">·</span> {health?.locationsMapped || 0} mapped</small></div>
+        <div className="review-connection-item"><span className="kicker">Last review sync</span><strong>{health?.lastReviewSync ? formatReviewDate(health.lastReviewSync) : 'Never'}</strong><small className={health?.lastError ? 'sync-failed' : ''}>{health?.lastError || 'No recorded error'}</small></div>
+        {health?.connection !== 'connected' && <button type="button" className="button secondary" onClick={connectGoogleBusiness}>Connect Google</button>}
+      </div>}
       {syncMessage && <p className="form-success review-error">{syncMessage}</p>}
       <div className="toolbar service-toolbar review-toolbar">
         {admin && (

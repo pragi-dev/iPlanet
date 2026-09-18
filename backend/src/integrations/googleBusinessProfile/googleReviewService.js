@@ -60,7 +60,6 @@ export function normalizeGoogleReviewInput(review = {}) {
   const originalComment = String(review.comment || review.originalReview || '').trim();
   const normalized = {
     googleReviewId: String(review.googleReviewId || review.id || `gmb-${Date.now()}`),
-    gmailMessageId: review.gmailMessageId || review.externalId || '',
     googlePlaceId: review.googlePlaceId || review.placeId || '',
     businessName: review.businessName || '',
     googleLocationId: review.googleLocationId || review.locationId || '',
@@ -72,7 +71,6 @@ export function normalizeGoogleReviewInput(review = {}) {
     comment: originalComment,
     reviewCreatedAt: safeIso(createdAtSource),
     reviewUpdatedAt: safeIso(review.reviewUpdatedAt || createdAtSource),
-    emailReceivedAt: safeIso(review.emailReceivedAt),
     reviewUrl: review.reviewUrl || '',
     source: review.source || 'google-api',
     aiProcessingStatus: review.aiProcessingStatus || 'not_attempted',
