@@ -20,6 +20,7 @@ export async function login(email, password) { return request('/auth/login', { m
 export async function getServiceDashboard() { return request('/iplanet/dashboard'); }
 export async function getServiceTickets(filters = {}) { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value && value !== 'All')); return request(`/iplanet/tickets${params.toString() ? `?${params}` : ''}`); }
 export async function getServiceTicket(id) { return request(`/iplanet/tickets/${id}`); }
+export async function getServiceReviews(filters = {}) { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value && value !== 'All')); return request(`/service/reviews${params.toString() ? `?${params}` : ''}`); }
 export async function getEngineers() { return request('/iplanet/engineers'); }
 export async function getCompanies() { return request('/iplanet/companies'); }
 export async function createCompany(payload) { return request('/iplanet/companies', { method: 'POST', body: JSON.stringify(payload) }); }

@@ -63,7 +63,19 @@ const googleReviewSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 }, { timestamps: true });
-const notificationSchema = new mongoose.Schema({ user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, portalRole: String, type: String, priority: { type: String, enum: ['normal', 'high'], default: 'normal' }, title: String, message: String, ticket: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' }, device: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, reviewId: { type: mongoose.Schema.Types.ObjectId, ref: 'GoogleReview' }, read: { type: Boolean, default: false } }, { timestamps: true });
+const reviewSchema = new mongoose.Schema({
+  ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket', required: true, unique: true, index: true },
+  corporateId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
+  customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre', index: true },
+  deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' },
+  engineerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Engineer' },
+  rating: { type: Number, required: true, min: 1, max: 5 },
+  comment: { type: String, required: true, trim: true, maxlength: 2000 },
+}, { timestamps: true });
+reviewSchema.index({ corporateId: 1, createdAt: -1 });
+reviewSchema.index({ serviceCentreId: 1, createdAt: -1 });
+const notificationSchema = new mongoose.Schema({ user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, portalRole: String, type: String, priority: { type: String, enum: ['normal', 'high'], default: 'normal' }, title: String, message: String, ticket: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' }, device: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, reviewId: { type: mongoose.Schema.Types.ObjectId, ref: 'GoogleReview' }, action: { type: Object, default: null }, read: { type: Boolean, default: false } }, { timestamps: true });
 const googleBusinessIntegrationSchema = new mongoose.Schema({
   provider: { type: String, unique: true, default: 'google-business-profile' },
   status: { type: String, enum: ['disconnected', 'connected', 'error'], default: 'disconnected' },
@@ -100,6 +112,7 @@ export const Engineer = mongoose.model('Engineer', engineerSchema);
 export const Ticket = mongoose.model('Ticket', ticketSchema);
 export const TicketTimeline = mongoose.model('TicketTimeline', timelineSchema);
 export const GoogleReview = mongoose.model('GoogleReview', googleReviewSchema);
+export const Review = mongoose.model('Review', reviewSchema);
 export const GoogleBusinessIntegration = mongoose.model('GoogleBusinessIntegration', googleBusinessIntegrationSchema);
 export const GoogleBusinessLocation = mongoose.model('GoogleBusinessLocation', googleBusinessLocationSchema);
 export const Notification = mongoose.model('Notification', notificationSchema);

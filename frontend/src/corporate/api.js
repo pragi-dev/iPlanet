@@ -14,6 +14,8 @@ export async function getDevices(search = '') { return request(`/devices${search
 export async function getDevice(id) { return request(`/devices/${id}`); }
 export async function getTickets() { return request('/tickets'); }
 export async function getTicket(id) { return request(`/tickets/${id}`); }
+export async function submitReview(payload) { return request('/reviews', { method: 'POST', body: JSON.stringify(payload) }); }
+export async function getMyReviews() { return request('/reviews/my'); }
 export async function createTicket(payload) { return request('/tickets', { method: 'POST', body: JSON.stringify(payload) }); }
 export async function uploadImages(ticketId, files) { if (!files.length || String(ticketId).startsWith('ticket-')) return; const body = new FormData(); files.forEach(file => body.append('images', file)); const response = await fetch(`${API}/tickets/${ticketId}/images`, { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body }); if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.message || `Image upload failed (${response.status})`); } }
 export async function uploadAnnotatedImages(ticketId, files) { if (!files.length || String(ticketId).startsWith('ticket-')) return; const body = new FormData(); files.forEach(file => body.append('images', file)); const response = await fetch(`${API}/tickets/${ticketId}/annotated-images`, { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body }); if (!response.ok) throw new Error('Annotated image upload failed'); return response.json(); }
@@ -29,6 +31,8 @@ export async function saveTicketCall(ticketId, payload) { return request(`/ticke
 export async function getTicketAITroubleshooting(ticketId) { return request(`/tickets/${ticketId}/ai-support`); }
 export async function startTicketAITroubleshooting(ticketId, payload) { return request(`/tickets/${ticketId}/ai-support`, { method: 'POST', body: JSON.stringify(payload) }); }
 export async function getGoogleBusinessHealth() { return request('/google-business/health'); }
+export async function getGoogleBusinessAuthorizationUrl() { return request('/google-business/auth'); }
+export async function disconnectGoogleBusiness() { return request('/google-business/disconnect', { method: 'POST', body: JSON.stringify({}) }); }
 export async function getGoogleBusinessLocations() { return request('/google-business/locations'); }
 export async function getGoogleBusinessServiceCentres() { return request('/google-business/service-centres'); }
 export async function syncGoogleBusinessLocations() { return request('/google-business/locations/sync', { method: 'POST', body: JSON.stringify({}) }); }

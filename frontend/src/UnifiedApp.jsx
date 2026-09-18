@@ -7,6 +7,7 @@ import { RequestEnhanced } from './corporate/RequestEnhanced';
 import { TicketDetailEnhanced } from './corporate/TicketDetailEnhanced';
 import { CoverageEnhanced } from './corporate/CoverageEnhanced';
 import { GoogleBusinessSettings } from './corporate/googleBusiness';
+import { ReviewPage } from './corporate/ReviewPage';
 import { AICustomerSupportPanel } from './corporate/AICustomerSupportPanel';
 import { getDevice, getTicket, login } from './corporate/api';
 import { ServiceDashboard } from './service/servicePages';
@@ -17,6 +18,7 @@ import { ServiceNotifications, EscalationMatrix } from './service/serviceExtras'
 import { OperationalTicketDetail } from './service/OperationalTicketDetail';
 import { ServiceCoverage } from './service/coverage';
 import { Engineers, ServiceReports } from './service/servicePages';
+import { InternalReviews } from './service/InternalReviews';
 import './App.css';
 import './corporate/App.css';
 import './service/App.css';
@@ -122,6 +124,7 @@ function CorporateRoutes() {
     <Route path="/corporate/notifications" element={<Protected role="corporate_admin"><CorporateNotifications /></Protected>} />
     <Route path="/corporate/profile" element={<Protected role="corporate_admin"><Profile /></Protected>} />
     <Route path="/corporate/google-business" element={<Protected role="corporate_admin"><GoogleBusinessSettings /></Protected>} />
+    <Route path="/corporate/reviews/:ticketId" element={<Protected role="corporate_admin"><ReviewPage /></Protected>} />
   </>;
 }
 
@@ -131,6 +134,7 @@ function ServiceRoutes() {
     <Route path="/service/tickets" element={<Protected role="iplanet_service"><MyTickets /></Protected>} />
     <Route path="/service/tickets/:id" element={<Protected role="iplanet_service"><OperationalTicketDetail /></Protected>} />
     <Route path="/service/google-reviews" element={<Protected role="iplanet_service"><GoogleReviews /></Protected>} />
+    <Route path="/service/reviews" element={<Protected role="iplanet_service"><InternalReviews /></Protected>} />
     <Route path="/service/device-enrollment" element={<Protected role="iplanet_service"><DeviceEnrollment /></Protected>} />
     <Route path="/service/engineers" element={<Protected role="iplanet_service"><Engineers /></Protected>} />
     <Route path="/service/reports" element={<Protected role="iplanet_service"><ServiceReports /></Protected>} />

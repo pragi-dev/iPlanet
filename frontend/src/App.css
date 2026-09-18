@@ -23,6 +23,19 @@
 .workload strong { color: var(--ink); }
 .report-metrics { grid-template-columns: repeat(5, 1fr); }
 .portal-switch { display: block; width: 100%; margin-top: 22px; border: 0; background: none; color: var(--teal); font-size: 11px; }
+.ticket-detail-actions { display: flex; align-items: center; gap: 8px; }
+.review-form-panel { max-width: 680px; margin: 0 4.5% 40px; padding: 28px; }
+.review-form-panel h2 { margin: 5px 0 18px; }
+.review-form-panel form { display: grid; gap: 16px; margin-top: 22px; }
+.review-form-panel label { display: grid; gap: 7px; font-size: 13px; font-weight: 600; }
+.review-form-panel textarea { min-height: 130px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; font: inherit; resize: vertical; }
+.rating-fieldset { border: 0; padding: 0; margin: 0; }
+.rating-fieldset legend { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.star-rating { display: flex; gap: 6px; }
+.star-rating button { border: 0; background: transparent; color: #b9c4c5; padding: 4px; cursor: pointer; border-radius: 4px; }
+.star-rating button.selected { color: #e6a817; }
+.star-rating button:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.review-stars { display: inline-flex; color: #e6a817; gap: 2px; }
 .sidebar { position: sticky; top: 0; align-self: flex-start; height: 100vh; overflow-y: auto; }
 @media (max-width: 1050px) { .service-metrics { grid-template-columns: repeat(4, 1fr); } .service-detail-grid,.service-detail-lower { grid-template-columns: 1fr; } .engineer-grid { grid-template-columns: repeat(2, 1fr); } .report-metrics { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 760px) { .service-metrics,.report-metrics { grid-template-columns: repeat(2, 1fr); } .engineer-grid { margin-left: 20px; margin-right: 20px; grid-template-columns: 1fr; } .service-detail-grid,.service-detail-lower { margin-left: 20px; margin-right: 20px; } .service-toolbar select { min-height: 38px; } .assign-row { flex-direction: column; } }

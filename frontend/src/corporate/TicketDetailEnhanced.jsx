@@ -21,7 +21,7 @@ export function TicketDetailEnhanced() {
     <div className="ticket-detail-layout">
       <div className="ticket-detail-main">
         <Link className="back-link" to="/tickets"><ArrowLeft size={16} />Back to My Tickets</Link>
-        <PageTitle title={ticket.ticketId} showTitle description={`${ticket.issueType} · ${ticket.location}`} action={<Badge>{ticket.status}</Badge>} />
+        <PageTitle title={ticket.ticketId} showTitle description={`${ticket.issueType} · ${ticket.location}`} action={<div className="ticket-detail-actions"><Badge>{ticket.status}</Badge>{data.reviewEligible && <Link className="button primary" to={`/corporate/reviews/${ticket._id}`}>Rate Our Service</Link>}{data.reviewSubmitted && <Badge>Service Rated</Badge>}</div>} />
         <div className="ticket-summary">
           <section className="panel info-card"><h3>Request details</h3>{[['Device', ticket.deviceId?.model], ['Serial number', ticket.deviceId?.serialNumber], ['Priority', ticket.priority], ['Expected TAT', ticket.expectedTAT], ['Assigned engineer', ticket.assignedEngineer || 'Unassigned']].map(([label, value]) => <div className="info-row" key={label}><span>{label}</span><strong>{value}</strong></div>)}</section>
           <section className="panel issue-card"><span className="kicker">Issue description</span><h3>{ticket.issueType}</h3><p>{ticket.description}</p><div className="upload-preview">{images.length ? images.map(image => <button type="button" key={image} className="image-thumb-button" onClick={() => setSelectedImage(mediaUrl(image))}><img src={mediaUrl(image)} alt="Reported issue" /></button>) : <span>No issue photos attached</span>}</div></section>

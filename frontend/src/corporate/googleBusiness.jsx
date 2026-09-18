@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Check, Link2, MapPin, RefreshCw, Unlink } from 'lucide-react';
 import { Shell, PageTitle, Badge, Empty } from './components';
-import { getGoogleBusinessHealth, getGoogleBusinessLocations, getGoogleBusinessServiceCentres, mapGoogleBusinessLocation, syncGoogleBusinessLocations, syncGoogleBusinessReviews } from './api';
+import { getGoogleBusinessAuthorizationUrl, getGoogleBusinessHealth, getGoogleBusinessLocations, getGoogleBusinessServiceCentres, mapGoogleBusinessLocation, syncGoogleBusinessLocations, syncGoogleBusinessReviews } from './api';
 
 export function GoogleBusinessSettings() {
   const [health, setHealth] = useState(null);
@@ -24,7 +24,7 @@ export function GoogleBusinessSettings() {
 
   useEffect(() => { void load(); }, []);
 
-  const connect = () => { window.location.assign('/api/google-business/auth'); };
+  const connect = async () => { try { const { authorizationUrl } = await getGoogleBusinessAuthorizationUrl(); window.location.assign(authorizationUrl); } catch (connectError) { setError(connectError.message); } };
   const syncLocations = async () => { try { setBusy('locations'); setMessage(''); const result = await syncGoogleBusinessLocations(); setMessage(`${result.locationsDiscovered || 0} location(s) discovered.`); await load(); } catch (syncError) { setError(syncError.message); } finally { setBusy(''); } };
   const syncReviews = async () => { try { setBusy('reviews'); setMessage(''); const result = await syncGoogleBusinessReviews(); setMessage(`${result.reviewsFound || 0} review(s) checked, ${result.newReviews || 0} new.`); await load(); } catch (syncError) { setError(syncError.message); } finally { setBusy(''); } };
   const mapLocation = async (locationId, serviceCentreId) => { if (!serviceCentreId) return; try { setBusy(locationId); await mapGoogleBusinessLocation(locationId, serviceCentreId); await load(); } catch (mapError) { setError(mapError.message); } finally { setBusy(''); } };
