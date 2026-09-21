@@ -26,6 +26,12 @@ export async function getEngineers() { return request('/iplanet/engineers'); }
 export async function getCompanies() { return request('/iplanet/companies'); }
 export async function createCompany(payload) { return request('/iplanet/companies', { method: 'POST', body: JSON.stringify(payload) }); }
 export async function getServiceCentres() { return request('/iplanet/service-centres'); }
+export async function getGoogleBusinessHealth() { return request('/google-business/health'); }
+export async function startGoogleBusinessAuth() { return request('/google-business/auth'); }
+export async function getGoogleAccounts() { return request('/google-business/accounts'); }
+export async function getGoogleLocations() { return request('/google-business/locations'); }
+export async function mapGoogleLocation(payload) { return request('/google-business/locations/map', { method: 'POST', body: JSON.stringify(payload) }); }
+export async function getGoogleReviewsSync() { return request('/google-business/reviews/sync'); }
 export async function createServiceCentre(payload) { return request('/iplanet/service-centres', { method: 'POST', body: JSON.stringify(payload) }); }
 export async function assignEngineer(ticketId, engineerId) { return request(`/iplanet/tickets/${ticketId}/assign`, { method: 'POST', body: JSON.stringify({ engineerId }) }); }
 export async function serviceAction(ticketId, action, payload = {}) { const path = action === 'updates' ? 'update' : action; return request(`/iplanet/tickets/${ticketId}/${path}`, { method: 'POST', body: JSON.stringify(payload) }); }

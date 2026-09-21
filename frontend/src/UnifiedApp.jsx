@@ -7,7 +7,6 @@ import { RequestEnhanced } from './corporate/RequestEnhanced';
 import { TicketDetailEnhanced } from './corporate/TicketDetailEnhanced';
 import { CoverageEnhanced } from './corporate/CoverageEnhanced';
 import { ReviewPage } from './corporate/ReviewPage';
-import { GoogleBusinessProfile } from './corporate/GoogleBusinessProfile';
 import { AICustomerSupportPanel } from './corporate/AICustomerSupportPanel';
 import { getDevice, getTicket, login } from './corporate/api';
 import { ServiceDashboard } from './service/servicePages';
@@ -18,6 +17,7 @@ import { OperationalTicketDetail } from './service/OperationalTicketDetail';
 import { ServiceCoverage } from './service/coverage';
 import { Engineers, ServiceReports } from './service/servicePages';
 import { InternalReviews, InternalReviewDetail } from './service/InternalReviews';
+import { GoogleBusinessProfile } from './service/GoogleBusinessProfile';
 import './App.css';
 import './corporate/App.css';
 import './service/App.css';
@@ -122,7 +122,6 @@ function CorporateRoutes() {
     <Route path="/corporate/warranty" element={<Protected role="corporate_admin"><CoverageEnhanced /></Protected>} />
     <Route path="/corporate/notifications" element={<Protected role="corporate_admin"><CorporateNotifications /></Protected>} />
     <Route path="/corporate/profile" element={<Protected role="corporate_admin"><Profile /></Protected>} />
-    <Route path="/corporate/google-business" element={<Protected role="corporate_admin"><GoogleBusinessProfile /></Protected>} />
     <Route path="/corporate/reviews/:ticketId" element={<Protected role="corporate_admin"><ReviewPage /></Protected>} />
   </>;
 }
@@ -133,6 +132,7 @@ function ServiceRoutes() {
     <Route path="/service/tickets" element={<Protected role="iplanet_service"><MyTickets /></Protected>} />
     <Route path="/service/tickets/:id" element={<Protected role="iplanet_service"><OperationalTicketDetail /></Protected>} />
     <Route path="/service/reviews" element={<Protected role="iplanet_service"><InternalReviews /></Protected>} />
+    <Route path="/service/reviews/google" element={<Protected role="iplanet_service"><GoogleBusinessProfile /></Protected>} />
     <Route path="/service/reviews/:reviewId" element={<Protected role="iplanet_service"><InternalReviewDetail /></Protected>} />
     <Route path="/service/device-enrollment" element={<Protected role="iplanet_service"><DeviceEnrollment /></Protected>} />
     <Route path="/service/engineers" element={<Protected role="iplanet_service"><Engineers /></Protected>} />

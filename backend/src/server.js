@@ -63,7 +63,7 @@ app.use(express.json());
 app.use('/uploads', express.static(uploadDir));
 app.use('/api/ai', auth, createAiSupportRouter());
 app.get('/api/health', (_, res) => res.json({ success: true, message: 'API is running' }));
-app.get('/api/google-business/health', auth, allowRoles('corporate_admin'), async (req, res) => {
+app.get('/api/google-business/health', auth, allowRoles('iplanet_service'), async (req, res) => {
   const integration = await GoogleBusinessIntegration.findOne({ companyId: req.user.companyId, userId: req.user.id }).sort({ createdAt: -1 }).select('status connectedAt accountName accountDisplayName expiresAt').lean();
   res.json({
     success: true,
@@ -73,7 +73,7 @@ app.get('/api/google-business/health', auth, allowRoles('corporate_admin'), asyn
     connection: integration || null,
   });
 });
-app.get('/api/google-business/auth', auth, allowRoles('corporate_admin'), async (req, res) => {
+app.get('/api/google-business/auth', auth, allowRoles('iplanet_service'), async (req, res) => {
   try {
     const state = JSON.stringify({ companyId: req.user.companyId, userId: req.user.id });
     const redirectUrl = buildGoogleBusinessAuthUrl({ state });
@@ -214,7 +214,7 @@ function safeGoogleBusinessAccount(account) {
   return normalized;
 }
 
-app.get('/api/google-business/accounts', auth, allowRoles('corporate_admin'), async (req, res) => {
+app.get('/api/google-business/accounts', auth, allowRoles('iplanet_service'), async (req, res) => {
   let integration;
   try {
     integration = await getValidGoogleBusinessIntegration(req.user.companyId, req.user.id);
@@ -266,7 +266,7 @@ app.get('/api/google-business/accounts', auth, allowRoles('corporate_admin'), as
   }
 });
 
-app.get('/api/google-business/locations', auth, allowRoles('corporate_admin'), async (req, res) => {
+app.get('/api/google-business/locations', auth, allowRoles('iplanet_service'), async (req, res) => {
   try {
     const integration = await getValidGoogleBusinessIntegration(req.user.companyId, req.user.id);
     if (!integration?.accessToken) {
@@ -280,7 +280,7 @@ app.get('/api/google-business/locations', auth, allowRoles('corporate_admin'), a
     res.status(status).json({ success: false, message: error.message || 'Google Business Profile access failed.' });
   }
 });
-app.get('/api/google-business/reviews/sync', auth, allowRoles('corporate_admin'), async (req, res) => {
+app.get('/api/google-business/reviews/sync', auth, allowRoles('iplanet_service'), async (req, res) => {
   const integration = await getValidGoogleBusinessIntegration(req.user.companyId, req.user.id);
   if (!integration?.accessToken) {
     return res.status(400).json({ message: 'Google Business Profile is not connected for this company.' });
@@ -298,7 +298,7 @@ app.get('/api/google-business/reviews/sync', auth, allowRoles('corporate_admin')
   }
   res.json({ success: true, results });
 });
-app.post('/api/google-business/locations/map', auth, allowRoles('corporate_admin'), async (req, res) => {
+app.post('/api/google-business/locations/map', auth, allowRoles('iplanet_service'), async (req, res) => {
   const { locationName, locationDisplayName, accountName, serviceCentreId } = req.body || {};
   if (!locationName || !serviceCentreId) return res.status(400).json({ message: 'locationName and serviceCentreId are required.' });
   const serviceCentre = await ServiceCentre.findOne({ _id: serviceCentreId, status: 'Active' });
