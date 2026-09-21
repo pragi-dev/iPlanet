@@ -22,8 +22,8 @@ const reviewSchema = new mongoose.Schema({ ticketId: { type: mongoose.Schema.Typ
 reviewSchema.index({ corporateId: 1, createdAt: -1 });
 reviewSchema.index({ serviceCentreId: 1, createdAt: -1 });
 const googleBusinessIntegrationSchema = new mongoose.Schema({
-  serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre', required: true, index: true },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  portalRole: { type: String, required: true, enum: ['iplanet_service'], default: 'iplanet_service' },
   provider: { type: String, required: true, default: 'google-business-profile' },
   accountId: { type: String, default: null },
   accountName: { type: String, default: null },
@@ -36,7 +36,7 @@ const googleBusinessIntegrationSchema = new mongoose.Schema({
   lastSyncedAt: { type: Date, default: null },
   status: { type: String, default: 'connected', enum: ['connected', 'error', 'disconnected'] }
 }, { timestamps: true });
-googleBusinessIntegrationSchema.index({ serviceCentreId: 1, provider: 1 }, { unique: true, name: 'serviceCentre_provider_unique', partialFilterExpression: { serviceCentreId: { $type: 'objectId' }, provider: 'google-business-profile' } });
+googleBusinessIntegrationSchema.index({ provider: 1 }, { unique: true, name: 'provider_1' });
 const googleBusinessLocationMappingSchema = new mongoose.Schema({
   serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre', required: true, index: true },
   locationName: { type: String, required: true },

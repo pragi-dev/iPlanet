@@ -65,7 +65,7 @@ app.use('/uploads', express.static(uploadDir));
 app.use('/api/ai', auth, createAiSupportRouter());
 app.get('/api/health', (_, res) => res.json({ success: true, message: 'API is running' }));
 app.get('/api/google-business/health', auth, allowRoles('iplanet_service'), async (req, res) => {
-  const integration = await GoogleBusinessIntegration.findOne({ serviceCentreId: req.user.serviceCentreId, userId: req.user.id }).sort({ createdAt: -1 }).select('status connectedAt accountName accountDisplayName expiresAt').lean();
+  const integration = await GoogleBusinessIntegration.findOne({ provider: GOOGLE_BUSINESS_PROVIDER }).select('status connectedAt accountName accountDisplayName expiresAt').lean();
   res.json({
     success: true,
     mode: 'business-profile',
@@ -94,17 +94,15 @@ app.get('/api/google-business/callback', async (req, res) => {
   const safeState = parseGoogleBusinessState(state || '{}');
   const userId = safeState.userId;
   const provider = GOOGLE_BUSINESS_PROVIDER;
-  const integrationLookup = { serviceCentreId: null, provider };
+  const integrationLookup = { provider };
 
   if (!userId) return res.status(400).json({ success: false, message: 'Google Business Profile OAuth state is missing the user identity.' });
 
-  const user = await User.findById(userId).select('_id role serviceCentreId').lean();
-  const serviceCentreId = user?.serviceCentreId || null;
-  integrationLookup.serviceCentreId = serviceCentreId;
-  console.info('[GOOGLE DEBUG]', { userId: String(userId), role: user?.role || null, serviceCentreId: serviceCentreId ? String(serviceCentreId) : null, provider, integrationLookup });
+  const user = await User.findById(userId).select('_id role').lean();
+  console.info('[GOOGLE DEBUG]', { userId: String(userId), role: user?.role || null, provider, integrationLookup });
 
   if (!user) return res.status(400).json({ success: false, message: 'Google Business Profile OAuth user was not found.' });
-  if (user.role !== 'iplanet_service' || !serviceCentreId) return res.status(400).json({ success: false, message: 'Google Business Profile integration requires an iPlanet Service user with a valid service context.' });
+  if (user.role !== 'iplanet_service') return res.status(403).json({ success: false, message: 'Only iPlanet Service users can connect Google Business Profile.' });
 
   try {
     const exchange = await exchangeGoogleBusinessCodeForTokens({
@@ -124,8 +122,8 @@ app.get('/api/google-business/callback', async (req, res) => {
     const integration = await GoogleBusinessIntegration.findOneAndUpdate(
       integrationLookup,
       {
-        serviceCentreId,
         userId,
+        portalRole: 'iplanet_service',
         provider: GOOGLE_BUSINESS_PROVIDER,
         accountName: safeState.accountName || null,
         accountDisplayName: safeState.accountDisplayName || null,
@@ -145,8 +143,8 @@ app.get('/api/google-business/callback', async (req, res) => {
       state: safeState,
       integration: {
         id: integration._id,
-        serviceCentreId: integration.serviceCentreId,
         userId: integration.userId,
+        portalRole: integration.portalRole,
         accountName: integration.accountName,
         accountDisplayName: integration.accountDisplayName,
         status: integration.status,
@@ -163,8 +161,8 @@ app.get('/api/google-business/callback', async (req, res) => {
   }
 });
 
-async function getValidGoogleBusinessIntegration(serviceCentreId, userId, forceRefresh = false) {
-  const integration = await GoogleBusinessIntegration.findOne({ serviceCentreId, userId }).sort({ createdAt: -1 }).lean();
+async function getValidGoogleBusinessIntegration(forceRefresh = false) {
+  const integration = await GoogleBusinessIntegration.findOne({ provider: GOOGLE_BUSINESS_PROVIDER }).sort({ createdAt: -1 }).lean();
   if (!integration) return null;
 
   if (!integration.accessToken) return null;
@@ -230,7 +228,7 @@ function safeGoogleBusinessAccount(account) {
 app.get('/api/google-business/accounts', auth, allowRoles('iplanet_service'), async (req, res) => {
   let integration;
   try {
-    integration = await getValidGoogleBusinessIntegration(req.user.serviceCentreId, req.user.id);
+    integration = await getValidGoogleBusinessIntegration();
     if (!integration?.accessToken) {
       return res.status(400).json({ success: false, message: 'Google Business Profile is not connected for this user.' });
     }
@@ -240,7 +238,7 @@ app.get('/api/google-business/accounts', auth, allowRoles('iplanet_service'), as
       accounts = await listGoogleBusinessAccounts(integration.accessToken);
     } catch (error) {
       if (error.status !== 401 || !integration.refreshToken) throw error;
-      integration = await getValidGoogleBusinessIntegration(req.user.serviceCentreId, req.user.id, true);
+      integration = await getValidGoogleBusinessIntegration(true);
       accounts = await listGoogleBusinessAccounts(integration.accessToken);
     }
 
@@ -257,7 +255,7 @@ app.get('/api/google-business/accounts', auth, allowRoles('iplanet_service'), as
 
     const savedIntegration = Object.keys(update).length
       ? await GoogleBusinessIntegration.findOneAndUpdate(
-          { _id: integration._id, serviceCentreId: req.user.serviceCentreId, userId: req.user.id },
+          { _id: integration._id, provider: GOOGLE_BUSINESS_PROVIDER },
           update,
           { new: true }
         ).select('accountId accountName accountDisplayName status connectedAt').lean()
@@ -281,9 +279,9 @@ app.get('/api/google-business/accounts', auth, allowRoles('iplanet_service'), as
 
 app.get('/api/google-business/locations', auth, allowRoles('iplanet_service'), async (req, res) => {
   try {
-    const integration = await getValidGoogleBusinessIntegration(req.user.serviceCentreId, req.user.id);
+    const integration = await getValidGoogleBusinessIntegration();
     if (!integration?.accessToken) {
-      return res.status(400).json({ message: 'Google Business Profile is not connected for this service centre.' });
+      return res.status(400).json({ message: 'Google Business Profile is not connected for iPlanet Service.' });
     }
     const locations = await discoverGoogleBusinessLocations(integration.accessToken);
     res.json({ success: true, locations });
@@ -294,11 +292,11 @@ app.get('/api/google-business/locations', auth, allowRoles('iplanet_service'), a
   }
 });
 app.get('/api/google-business/reviews/sync', auth, allowRoles('iplanet_service'), async (req, res) => {
-  const integration = await getValidGoogleBusinessIntegration(req.user.serviceCentreId, req.user.id);
+  const integration = await getValidGoogleBusinessIntegration();
   if (!integration?.accessToken) {
-    return res.status(400).json({ message: 'Google Business Profile is not connected for this service centre.' });
+    return res.status(400).json({ message: 'Google Business Profile is not connected for iPlanet Service.' });
   }
-  const mappings = await GoogleBusinessLocationMapping.find({ serviceCentreId: req.user.serviceCentreId }).lean();
+  const mappings = await GoogleBusinessLocationMapping.find().lean();
   const results = [];
   for (const mapping of mappings) {
     try {
@@ -314,7 +312,6 @@ app.get('/api/google-business/reviews/sync', auth, allowRoles('iplanet_service')
 app.post('/api/google-business/locations/map', auth, allowRoles('iplanet_service'), async (req, res) => {
   const { locationName, locationDisplayName, accountName, serviceCentreId } = req.body || {};
   if (!locationName || !serviceCentreId) return res.status(400).json({ message: 'locationName and serviceCentreId are required.' });
-  if (req.user.serviceCentreId && String(req.user.serviceCentreId) !== String(serviceCentreId)) return res.status(403).json({ message: 'You can only map Google locations to your assigned service centre.' });
   const serviceCentre = await ServiceCentre.findOne({ _id: serviceCentreId, status: 'Active' });
   if (!serviceCentre) return res.status(404).json({ message: 'Service centre not found.' });
   const mapping = await GoogleBusinessLocationMapping.findOneAndUpdate(
@@ -823,40 +820,48 @@ async function ensureReviewIndexes() { await Review.createIndexes(); }
 async function ensureGoogleBusinessIntegrationIndexes() {
   const indexes = await GoogleBusinessIntegration.collection.indexes();
   for (const index of indexes) {
-    if (index.name !== '_id_' && (index.name === 'provider_1' || Object.keys(index.key).includes('companyId'))) {
+    if (index.name !== '_id_' && (Object.keys(index.key).includes('companyId') || Object.keys(index.key).includes('serviceCentreId'))) {
       await GoogleBusinessIntegration.collection.dropIndex(index.name);
     }
   }
 
+  const incompleteIntegrations = await GoogleBusinessIntegration.find({ provider: null }).select('_id accessToken refreshToken').lean();
+  let removed = 0;
+  for (const integration of incompleteIntegrations) {
+    if (!integration.accessToken && !integration.refreshToken) {
+      await GoogleBusinessIntegration.deleteOne({ _id: integration._id });
+      removed += 1;
+    }
+  }
   await GoogleBusinessIntegration.updateMany(
-    { provider: null },
+    { provider: null, $or: [{ accessToken: { $ne: null } }, { refreshToken: { $ne: null } }] },
     { $set: { provider: GOOGLE_BUSINESS_PROVIDER } }
   );
 
-  const integrations = await GoogleBusinessIntegration.find({ provider: GOOGLE_BUSINESS_PROVIDER }).select('_id userId serviceCentreId accessToken refreshToken').lean();
-  let migrated = 0;
-  let removed = 0;
-  for (const integration of integrations) {
-    if (integration.serviceCentreId) continue;
-    const user = await User.findById(integration.userId).select('role serviceCentreId').lean();
-    if (user?.role === 'iplanet_service' && user.serviceCentreId) {
-      await GoogleBusinessIntegration.updateOne(
-        { _id: integration._id },
-        { $set: { serviceCentreId: user.serviceCentreId }, $unset: { companyId: 1 } }
-      );
-      migrated += 1;
-    } else if (!integration.accessToken && !integration.refreshToken) {
-      await GoogleBusinessIntegration.deleteOne({ _id: integration._id });
-      removed += 1;
-    } else {
-      console.warn(`[Google Business] Retaining integration ${integration._id} for manual ownership review; credentials were not deleted.`);
+  const integrations = await GoogleBusinessIntegration.find({ provider: GOOGLE_BUSINESS_PROVIDER }).select('_id accessToken refreshToken').lean();
+  if (integrations.length > 1) {
+    const tokenless = integrations.filter(integration => !integration.accessToken && !integration.refreshToken);
+    if (tokenless.length) {
+      await GoogleBusinessIntegration.deleteMany({ _id: { $in: tokenless.map(integration => integration._id) } });
+      removed += tokenless.length;
     }
+  }
+  const remainingIntegrations = await GoogleBusinessIntegration.countDocuments({ provider: GOOGLE_BUSINESS_PROVIDER });
+  if (remainingIntegrations > 1) throw new Error('Google Business integration migration found multiple credential-bearing central integrations. Resolve duplicates before creating the provider index.');
+
+  let migrated = 0;
+  if (remainingIntegrations === 1) {
+    await GoogleBusinessIntegration.collection.updateOne(
+      { provider: GOOGLE_BUSINESS_PROVIDER },
+      { $set: { provider: GOOGLE_BUSINESS_PROVIDER, portalRole: 'iplanet_service' }, $unset: { companyId: 1, serviceCentreId: 1 } }
+    );
+    migrated = 1;
   }
   if (migrated || removed) console.info(`[Google Business] Ownership migration: ${migrated} migrated, ${removed} invalid tokenless records removed.`);
 
   await GoogleBusinessIntegration.collection.createIndex(
-    { serviceCentreId: 1, provider: 1 },
-    { unique: true, name: 'serviceCentre_provider_unique', partialFilterExpression: { serviceCentreId: { $type: 'objectId' }, provider: GOOGLE_BUSINESS_PROVIDER } }
+    { provider: 1 },
+    { unique: true, name: 'provider_1' }
   );
 }
 async function ensureGoogleBusinessLocationMappingIndexes() {
