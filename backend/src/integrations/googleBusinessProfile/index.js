@@ -1,3 +1,3 @@
 export { buildGoogleBusinessAuthUrl, parseGoogleBusinessState, encryptGoogleBusinessToken, decryptGoogleBusinessToken, exchangeGoogleBusinessCodeForTokens, refreshGoogleBusinessTokens, getGoogleBusinessOauthConfig, validateGoogleBusinessOauthConfig, inspectGoogleBusinessAuthUrl } from './googleBusinessProfileAuth.js';
-export { listGoogleBusinessAccounts, listGoogleBusinessLocations, getGoogleBusinessReviews, discoverGoogleBusinessLocations } from './googleBusinessProfileProvider.js';
+export { listGoogleBusinessAccounts, normalizeGoogleBusinessAccount, listGoogleBusinessLocations, getGoogleBusinessReviews, discoverGoogleBusinessLocations } from './googleBusinessProfileProvider.js';
 export { normalizeGoogleBusinessReview, buildGoogleBusinessMappingPayload } from './googleBusinessProfileSyncService.js';

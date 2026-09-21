@@ -11,7 +11,7 @@ import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, T
 import { auth, allowRoles } from './middleware.js';
 import { createAiSupportRouter } from './routes/aiSupport.js';
 import { buildGoogleBusinessAuthUrl, parseGoogleBusinessState, encryptGoogleBusinessToken, decryptGoogleBusinessToken, exchangeGoogleBusinessCodeForTokens, refreshGoogleBusinessTokens, getGoogleBusinessOauthConfig, validateGoogleBusinessOauthConfig, inspectGoogleBusinessAuthUrl } from './integrations/googleBusinessProfile/googleBusinessProfileAuth.js';
-import { discoverGoogleBusinessLocations, getGoogleBusinessReviews } from './integrations/googleBusinessProfile/googleBusinessProfileProvider.js';
+import { listGoogleBusinessAccounts, normalizeGoogleBusinessAccount, discoverGoogleBusinessLocations, getGoogleBusinessReviews } from './integrations/googleBusinessProfile/googleBusinessProfileProvider.js';
 import { normalizeGoogleBusinessReview } from './integrations/googleBusinessProfile/googleBusinessProfileSyncService.js';
 import { getAiSupportReply } from './ai/aiEngine.js';
 import { buildSupportContext } from './ai/contextBuilder.js';
@@ -150,7 +150,7 @@ app.get('/api/google-business/callback', async (req, res) => {
   }
 });
 
-async function getValidGoogleBusinessIntegration(companyId, userId) {
+async function getValidGoogleBusinessIntegration(companyId, userId, forceRefresh = false) {
   const integration = await GoogleBusinessIntegration.findOne({ companyId, userId }).sort({ createdAt: -1 }).lean();
   if (!integration) return null;
 
@@ -158,7 +158,7 @@ async function getValidGoogleBusinessIntegration(companyId, userId) {
 
   const now = Date.now();
   const expiresAt = integration.expiresAt ? new Date(integration.expiresAt).getTime() : null;
-  if (expiresAt && expiresAt > now + 60_000) {
+  if (!forceRefresh && expiresAt && expiresAt > now + 60_000) {
     return {
       ...integration,
       accessToken: decryptGoogleBusinessToken(integration.accessToken),
@@ -166,7 +166,7 @@ async function getValidGoogleBusinessIntegration(companyId, userId) {
     };
   }
 
-  if (!integration.refreshToken) {
+  if (!forceRefresh && !integration.refreshToken) {
     return {
       ...integration,
       accessToken: decryptGoogleBusinessToken(integration.accessToken),
@@ -204,6 +204,68 @@ async function getValidGoogleBusinessIntegration(companyId, userId) {
   };
 }
 
+function googleBusinessErrorStatus(error) {
+  return [401, 403, 404, 429].includes(error?.status) ? error.status : 502;
+}
+
+function safeGoogleBusinessAccount(account) {
+  const normalized = normalizeGoogleBusinessAccount(account);
+  if (!normalized) return null;
+  return normalized;
+}
+
+app.get('/api/google-business/accounts', auth, allowRoles('corporate_admin'), async (req, res) => {
+  let integration;
+  try {
+    integration = await getValidGoogleBusinessIntegration(req.user.companyId, req.user.id);
+    if (!integration?.accessToken) {
+      return res.status(400).json({ success: false, message: 'Google Business Profile is not connected for this user.' });
+    }
+
+    let accounts;
+    try {
+      accounts = await listGoogleBusinessAccounts(integration.accessToken);
+    } catch (error) {
+      if (error.status !== 401 || !integration.refreshToken) throw error;
+      integration = await getValidGoogleBusinessIntegration(req.user.companyId, req.user.id, true);
+      accounts = await listGoogleBusinessAccounts(integration.accessToken);
+    }
+
+    const safeAccounts = accounts.map(safeGoogleBusinessAccount).filter(Boolean);
+    const update = safeAccounts.length === 1
+      ? {
+          accountId: safeAccounts[0].accountId,
+          accountName: safeAccounts[0].accountName,
+          accountDisplayName: safeAccounts[0].accountDisplayName,
+        }
+      : safeAccounts.length === 0
+        ? { accountId: null, accountName: null, accountDisplayName: null }
+        : {};
+
+    const savedIntegration = Object.keys(update).length
+      ? await GoogleBusinessIntegration.findOneAndUpdate(
+          { _id: integration._id, companyId: req.user.companyId, userId: req.user.id },
+          update,
+          { new: true }
+        ).select('accountId accountName accountDisplayName status connectedAt').lean()
+      : await GoogleBusinessIntegration.findOne({ _id: integration._id }).select('accountId accountName accountDisplayName status connectedAt').lean();
+
+    return res.json({
+      success: true,
+      accounts: safeAccounts,
+      accountCount: safeAccounts.length,
+      selectionRequired: safeAccounts.length > 1,
+      integration: savedIntegration,
+    });
+  } catch (error) {
+    console.error(`[GOOGLE_BUSINESS_ACCOUNTS_ERROR] ${error.message}`);
+    return res.status(googleBusinessErrorStatus(error)).json({
+      success: false,
+      message: error.message || 'Unable to retrieve Google Business Profile accounts.',
+    });
+  }
+});
+
 app.get('/api/google-business/locations', auth, allowRoles('corporate_admin'), async (req, res) => {
   try {
     const integration = await getValidGoogleBusinessIntegration(req.user.companyId, req.user.id);
@@ -214,7 +276,7 @@ app.get('/api/google-business/locations', auth, allowRoles('corporate_admin'), a
     res.json({ success: true, locations });
   } catch (error) {
     console.error('[GOOGLE_BUSINESS_LOCATIONS_ERROR]', error);
-    const status = [401, 403, 404, 429].includes(error.status) ? error.status : 502;
+    const status = googleBusinessErrorStatus(error);
     res.status(status).json({ success: false, message: error.message || 'Google Business Profile access failed.' });
   }
 });

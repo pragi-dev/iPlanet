@@ -24,6 +24,7 @@ reviewSchema.index({ serviceCentreId: 1, createdAt: -1 });
 const googleBusinessIntegrationSchema = new mongoose.Schema({
   companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  accountId: { type: String, default: null },
   accountName: { type: String, default: null },
   accountDisplayName: { type: String, default: null },
   accessToken: { type: String, default: null },

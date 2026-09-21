@@ -26,8 +26,32 @@ async function googleRequest(url, accessToken, description) {
 }
 
 export async function listGoogleBusinessAccounts(accessToken) {
-  const payload = await googleRequest(`${GOOGLE_ACCOUNT_MANAGEMENT_BASE_URL}/v1/accounts`, accessToken, 'load Google Business accounts');
-  return Array.isArray(payload.accounts) ? payload.accounts : [];
+  const accounts = [];
+  let pageToken = '';
+
+  do {
+    const params = new URLSearchParams({ pageSize: '100' });
+    if (pageToken) params.set('pageToken', pageToken);
+    const payload = await googleRequest(`${GOOGLE_ACCOUNT_MANAGEMENT_BASE_URL}/v1/accounts?${params}`, accessToken, 'load Google Business accounts');
+    if (Array.isArray(payload.accounts)) accounts.push(...payload.accounts);
+    pageToken = payload.nextPageToken || '';
+  } while (pageToken);
+
+  return accounts;
+}
+
+export function normalizeGoogleBusinessAccount(account) {
+  if (!account || typeof account !== 'object') return null;
+  const accountName = typeof account.name === 'string' ? account.name : '';
+  const accountId = accountName.startsWith('accounts/') ? accountName.slice('accounts/'.length) : accountName;
+  return {
+    accountId: accountId || null,
+    accountName: accountName || null,
+    accountDisplayName: typeof account.accountName === 'string' && account.accountName ? account.accountName : null,
+    type: typeof account.type === 'string' ? account.type : null,
+    role: typeof account.role === 'string' ? account.role : null,
+    verificationState: typeof account.verificationState === 'string' ? account.verificationState : null,
+  };
 }
 
 export async function listGoogleBusinessLocations(accountName, accessToken, pageToken = '') {
