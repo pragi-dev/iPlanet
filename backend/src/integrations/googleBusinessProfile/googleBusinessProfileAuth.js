@@ -8,21 +8,45 @@ dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 const GOOGLE_BUSINESS_OAUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_BUSINESS_TOKEN_URL = 'https://oauth2.googleapis.com/token';
-const GOOGLE_BUSINESS_SCOPE = process.env.GOOGLE_BUSINESS_SCOPE || process.env.GOOGLE_SCOPE || 'https://www.googleapis.com/auth/business.manage';
 
-function getGoogleBusinessOauthConfig({ clientId, clientSecret, redirectUri } = {}) {
+export function getGoogleBusinessOauthConfig({ clientId, clientSecret, redirectUri, scope } = {}) {
   return {
-    clientId: clientId || process.env.GOOGLE_BUSINESS_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || '',
-    clientSecret: clientSecret || process.env.GOOGLE_BUSINESS_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET || '',
-    redirectUri: redirectUri || process.env.GOOGLE_BUSINESS_REDIRECT_URI || process.env.GOOGLE_REDIRECT_URI || '',
+    clientId: clientId || process.env.GOOGLE_CLIENT_ID || '',
+    clientSecret: clientSecret || process.env.GOOGLE_CLIENT_SECRET || '',
+    redirectUri: redirectUri || process.env.GOOGLE_REDIRECT_URI || '',
+    scope: scope || process.env.GOOGLE_BUSINESS_SCOPE || '',
   };
+}
+
+export function validateGoogleBusinessOauthConfig(config = getGoogleBusinessOauthConfig()) {
+  const missing = ['clientId', 'clientSecret', 'redirectUri', 'scope'].filter(key => !String(config[key] || '').trim());
+  return {
+    valid: missing.length === 0,
+    missing,
+    clientIdConfigured: Boolean(config.clientId),
+    clientSecretConfigured: Boolean(config.clientSecret),
+    redirectUriConfigured: Boolean(config.redirectUri),
+    scopeConfigured: Boolean(config.scope),
+  };
+}
+
+export function inspectGoogleBusinessAuthUrl(rawUrl) {
+  const url = new URL(rawUrl);
+  const requiredParameters = ['client_id', 'redirect_uri', 'response_type', 'scope', 'access_type', 'state'];
+  return Object.fromEntries(requiredParameters.map(parameter => [parameter, Boolean(url.searchParams.get(parameter))]));
+}
+
+function requireGoogleBusinessOauthConfig(config) {
+  const diagnostics = validateGoogleBusinessOauthConfig(config);
+  if (!diagnostics.valid) {
+    throw new Error(`Google OAuth is not configured. Missing: ${diagnostics.missing.map(key => ({ clientId: 'GOOGLE_CLIENT_ID', clientSecret: 'GOOGLE_CLIENT_SECRET', redirectUri: 'GOOGLE_REDIRECT_URI', scope: 'GOOGLE_BUSINESS_SCOPE' }[key])).join(', ')}`);
+  }
 }
 
 export async function exchangeGoogleBusinessCodeForTokens({ code, clientId, clientSecret, redirectUri } = {}) {
   const config = getGoogleBusinessOauthConfig({ clientId, clientSecret, redirectUri });
-  if (!code || !config.clientId || !config.clientSecret || !config.redirectUri) {
-    throw new Error('Google Business Profile OAuth is not configured. Missing client ID, secret, redirect URI, or authorization code.');
-  }
+  requireGoogleBusinessOauthConfig(config);
+  if (!code) throw new Error('Google authorization code is missing.');
 
   const params = new URLSearchParams({
     code: String(code),
@@ -60,9 +84,8 @@ export async function refreshGoogleBusinessTokens({ refreshToken, clientId, clie
   const config = getGoogleBusinessOauthConfig({ clientId, clientSecret });
   const token = refreshToken || process.env.GOOGLE_BUSINESS_REFRESH_TOKEN || process.env.GOOGLE_REFRESH_TOKEN || '';
 
-  if (!token || !config.clientId || !config.clientSecret) {
-    throw new Error('Google Business Profile refresh requires a stored refresh token and OAuth credentials.');
-  }
+  requireGoogleBusinessOauthConfig(config);
+  if (!token) throw new Error('Google Business Profile refresh requires a stored refresh token.');
 
   const params = new URLSearchParams({
     client_id: config.clientId,
@@ -101,21 +124,25 @@ export function buildGoogleBusinessAuthUrl({
   accessType = 'offline',
   prompt = 'consent',
   includeGrantedScopes = true,
-  scope = GOOGLE_BUSINESS_SCOPE,
+  scope,
 } = {}) {
   const config = getGoogleBusinessOauthConfig({ clientId, redirectUri });
+  requireGoogleBusinessOauthConfig({ ...config, scope: scope || config.scope });
   const params = new URLSearchParams({
     client_id: config.clientId,
     redirect_uri: config.redirectUri,
     response_type: 'code',
-    scope,
+    scope: scope || config.scope,
     access_type: accessType,
     prompt,
     include_granted_scopes: String(includeGrantedScopes),
     state: state || JSON.stringify({ ts: Date.now() }),
   });
 
-  return `${GOOGLE_BUSINESS_OAUTH_URL}?${params.toString()}`;
+  const url = `${GOOGLE_BUSINESS_OAUTH_URL}?${params.toString()}`;
+  const diagnostics = inspectGoogleBusinessAuthUrl(url);
+  if (Object.values(diagnostics).some(value => !value)) throw new Error('Generated Google OAuth URL is missing a required parameter.');
+  return url;
 }
 
 export function parseGoogleBusinessState(rawState) {

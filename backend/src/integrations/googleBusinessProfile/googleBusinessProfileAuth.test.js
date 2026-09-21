@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildGoogleBusinessAuthUrl, parseGoogleBusinessState, exchangeGoogleBusinessCodeForTokens, refreshGoogleBusinessTokens } from './googleBusinessProfileAuth.js';
+import { buildGoogleBusinessAuthUrl, parseGoogleBusinessState, exchangeGoogleBusinessCodeForTokens, refreshGoogleBusinessTokens, inspectGoogleBusinessAuthUrl, validateGoogleBusinessOauthConfig } from './googleBusinessProfileAuth.js';
 
 test('buildGoogleBusinessAuthUrl includes required OAuth parameters', () => {
   const url = buildGoogleBusinessAuthUrl({
@@ -14,6 +14,22 @@ test('buildGoogleBusinessAuthUrl includes required OAuth parameters', () => {
   assert.match(url, /redirect_uri=http%3A%2F%2Flocalhost%3A5000%2Fapi%2Fgoogle-business%2Fcallback/);
   assert.match(url, /scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fbusiness.manage/);
   assert.match(url, /state=/);
+  assert.deepEqual(inspectGoogleBusinessAuthUrl(url), {
+    client_id: true,
+    redirect_uri: true,
+    response_type: true,
+    scope: true,
+    access_type: true,
+    state: true,
+  });
+});
+
+test('validateGoogleBusinessOauthConfig reports missing required values without exposing them', () => {
+  const diagnostics = validateGoogleBusinessOauthConfig({ clientId: '', clientSecret: '', redirectUri: '', scope: '' });
+
+  assert.equal(diagnostics.valid, false);
+  assert.deepEqual(diagnostics.missing, ['clientId', 'clientSecret', 'redirectUri', 'scope']);
+  assert.equal(Object.prototype.hasOwnProperty.call(diagnostics, 'clientSecret'), false);
 });
 
 test('parseGoogleBusinessState reads encoded OAuth state', () => {

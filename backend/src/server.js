@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Review, Notification, EscalationRule, CallRecord, AITroubleshootingSession, GoogleBusinessIntegration, GoogleBusinessLocationMapping } from './models.js';
 import { auth, allowRoles } from './middleware.js';
 import { createAiSupportRouter } from './routes/aiSupport.js';
-import { buildGoogleBusinessAuthUrl, parseGoogleBusinessState, encryptGoogleBusinessToken, decryptGoogleBusinessToken, exchangeGoogleBusinessCodeForTokens, refreshGoogleBusinessTokens } from './integrations/googleBusinessProfile/googleBusinessProfileAuth.js';
+import { buildGoogleBusinessAuthUrl, parseGoogleBusinessState, encryptGoogleBusinessToken, decryptGoogleBusinessToken, exchangeGoogleBusinessCodeForTokens, refreshGoogleBusinessTokens, getGoogleBusinessOauthConfig, validateGoogleBusinessOauthConfig, inspectGoogleBusinessAuthUrl } from './integrations/googleBusinessProfile/googleBusinessProfileAuth.js';
 import { discoverGoogleBusinessLocations, getGoogleBusinessReviews } from './integrations/googleBusinessProfile/googleBusinessProfileProvider.js';
 import { normalizeGoogleBusinessReview } from './integrations/googleBusinessProfile/googleBusinessProfileSyncService.js';
 import { getAiSupportReply } from './ai/aiEngine.js';
@@ -21,6 +21,12 @@ import { demoEnrollmentDevices } from './demoData.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '../.env') });
+const googleOAuthDiagnostics = validateGoogleBusinessOauthConfig(getGoogleBusinessOauthConfig());
+console.info(`[Google OAuth] Client ID configured: ${googleOAuthDiagnostics.clientIdConfigured}`);
+console.info(`[Google OAuth] Client secret configured: ${googleOAuthDiagnostics.clientSecretConfigured}`);
+console.info(`[Google OAuth] Redirect URI configured: ${googleOAuthDiagnostics.redirectUriConfigured}`);
+console.info(`[Google OAuth] Scope configured: ${googleOAuthDiagnostics.scopeConfigured}`);
+if (!googleOAuthDiagnostics.valid) console.error(`[Google OAuth] Missing required configuration: ${googleOAuthDiagnostics.missing.join(', ')}`);
 const uploadDir = path.join(__dirname, '../../uploads');
 fs.mkdirSync(uploadDir, { recursive: true });
 const upload = multer({ dest: uploadDir, limits: { fileSize: 5 * 1024 * 1024 }, fileFilter: (_, file, cb) => cb(null, /^image\//.test(file.mimetype)) });
@@ -62,19 +68,22 @@ app.get('/api/google-business/health', auth, allowRoles('corporate_admin'), asyn
   res.json({
     success: true,
     mode: 'business-profile',
-    configured: Boolean((process.env.GOOGLE_BUSINESS_CLIENT_ID || process.env.GOOGLE_CLIENT_ID) && (process.env.GOOGLE_BUSINESS_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET)),
+    configured: googleOAuthDiagnostics.valid,
     connected: integration?.status === 'connected',
     connection: integration || null,
   });
 });
 app.get('/api/google-business/auth', auth, allowRoles('corporate_admin'), async (req, res) => {
-  const state = JSON.stringify({ companyId: req.user.companyId, userId: req.user.id });
-  const redirectUrl = buildGoogleBusinessAuthUrl({
-    clientId: process.env.GOOGLE_BUSINESS_CLIENT_ID || process.env.GOOGLE_CLIENT_ID,
-    redirectUri: process.env.GOOGLE_BUSINESS_REDIRECT_URI || process.env.GOOGLE_REDIRECT_URI,
-    state,
-  });
-  res.json({ success: true, url: redirectUrl, state });
+  try {
+    const state = JSON.stringify({ companyId: req.user.companyId, userId: req.user.id });
+    const redirectUrl = buildGoogleBusinessAuthUrl({ state });
+    const urlDiagnostics = inspectGoogleBusinessAuthUrl(redirectUrl);
+    console.info(`[Google OAuth] Authorization URL parameters: ${Object.entries(urlDiagnostics).filter(([, configured]) => configured).map(([parameter]) => parameter).join(', ')}`);
+    return res.json({ success: true, url: redirectUrl, state });
+  } catch (error) {
+    console.error(`[Google OAuth] Authorization unavailable: ${error.message}`);
+    return res.status(503).json({ success: false, message: error.message || 'Google OAuth is not configured on the backend.' });
+  }
 });
 app.get('/api/google-business/callback', async (req, res) => {
   const { code, state, error } = req.query;
@@ -88,9 +97,9 @@ app.get('/api/google-business/callback', async (req, res) => {
   try {
     const exchange = await exchangeGoogleBusinessCodeForTokens({
       code: String(code),
-      clientId: process.env.GOOGLE_BUSINESS_CLIENT_ID || process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_BUSINESS_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET,
-      redirectUri: process.env.GOOGLE_BUSINESS_REDIRECT_URI || process.env.GOOGLE_REDIRECT_URI,
+      clientId: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      redirectUri: process.env.GOOGLE_REDIRECT_URI,
     });
 
     const accessToken = encryptGoogleBusinessToken(exchange.accessToken);
@@ -167,8 +176,8 @@ async function getValidGoogleBusinessIntegration(companyId, userId) {
 
   const refreshed = await refreshGoogleBusinessTokens({
     refreshToken: decryptGoogleBusinessToken(integration.refreshToken),
-    clientId: process.env.GOOGLE_BUSINESS_CLIENT_ID || process.env.GOOGLE_CLIENT_ID,
-    clientSecret: process.env.GOOGLE_BUSINESS_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET,
+    clientId: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
   });
 
   const encryptedAccessToken = encryptGoogleBusinessToken(refreshed.accessToken);
