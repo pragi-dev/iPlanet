@@ -24,6 +24,7 @@ reviewSchema.index({ serviceCentreId: 1, createdAt: -1 });
 const googleBusinessIntegrationSchema = new mongoose.Schema({
   companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  provider: { type: String, required: true, default: 'google-business-profile' },
   accountId: { type: String, default: null },
   accountName: { type: String, default: null },
   accountDisplayName: { type: String, default: null },
@@ -35,6 +36,7 @@ const googleBusinessIntegrationSchema = new mongoose.Schema({
   lastSyncedAt: { type: Date, default: null },
   status: { type: String, default: 'connected', enum: ['connected', 'error', 'disconnected'] }
 }, { timestamps: true });
+googleBusinessIntegrationSchema.index({ companyId: 1, provider: 1 }, { unique: true, name: 'companyId_provider_unique' });
 const googleBusinessLocationMappingSchema = new mongoose.Schema({
   companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
   locationName: { type: String, required: true },

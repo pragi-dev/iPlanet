@@ -22,6 +22,7 @@ import { demoEnrollmentDevices } from './demoData.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '../.env') });
 const googleOAuthDiagnostics = validateGoogleBusinessOauthConfig(getGoogleBusinessOauthConfig());
+const GOOGLE_BUSINESS_PROVIDER = 'google-business-profile';
 console.info(`[Google OAuth] Client ID configured: ${googleOAuthDiagnostics.clientIdConfigured}`);
 console.info(`[Google OAuth] Client secret configured: ${googleOAuthDiagnostics.clientSecretConfigured}`);
 console.info(`[Google OAuth] Redirect URI configured: ${googleOAuthDiagnostics.redirectUriConfigured}`);
@@ -103,17 +104,18 @@ app.get('/api/google-business/callback', async (req, res) => {
     });
 
     const accessToken = encryptGoogleBusinessToken(exchange.accessToken);
-    const existingIntegration = await GoogleBusinessIntegration.findOne({ companyId, userId }).select('refreshToken').lean();
+    const existingIntegration = await GoogleBusinessIntegration.findOne({ companyId, userId, provider: GOOGLE_BUSINESS_PROVIDER }).select('refreshToken').lean();
     const refreshToken = exchange.refreshToken
       ? encryptGoogleBusinessToken(exchange.refreshToken)
       : existingIntegration?.refreshToken || null;
     const expiresAt = exchange.expiresAt ? new Date(exchange.expiresAt) : null;
 
     const integration = await GoogleBusinessIntegration.findOneAndUpdate(
-      { companyId, userId },
+      { companyId, userId, provider: GOOGLE_BUSINESS_PROVIDER },
       {
         companyId,
         userId,
+        provider: GOOGLE_BUSINESS_PROVIDER,
         accountName: safeState.accountName || null,
         accountDisplayName: safeState.accountDisplayName || null,
         accessToken,
@@ -806,6 +808,27 @@ const port = process.env.PORT || 5000;
 async function ensureEscalationRules() { const defaults = [{ name: 'SLA Approaching', level: 1, trigger: 'SLA Approaching', priority: 'All', slaThreshold: 80, action: 'Notify Service Coordinator' }, { name: 'SLA Breach', level: 2, trigger: 'SLA Breached', priority: 'All', slaThreshold: 100, action: 'Escalate to Service Manager' }, { name: 'Critical SLA Breach', level: 3, trigger: 'Critical SLA Breach', priority: 'Critical', slaThreshold: 100, action: 'Escalate to Regional Operations Manager' }]; if (await EscalationRule.countDocuments() === 0) await EscalationRule.insertMany(defaults); }
 async function ensureServiceCentres() { if (await ServiceCentre.countDocuments() === 0) await ServiceCentre.insertMany(['Chennai', 'Coimbatore', 'Bengaluru', 'Madurai'].map(location => ({ name: `${location} Service Centre`, location, status: 'Active' }))); }
 async function ensureReviewIndexes() { await Review.createIndexes(); }
+async function ensureGoogleBusinessIntegrationIndexes() {
+  const indexes = await GoogleBusinessIntegration.collection.indexes();
+  if (indexes.some(index => index.name === 'provider_1')) await GoogleBusinessIntegration.collection.dropIndex('provider_1');
+
+  await GoogleBusinessIntegration.updateMany(
+    { provider: null },
+    { $set: { provider: GOOGLE_BUSINESS_PROVIDER } }
+  );
+
+  const conflicts = await GoogleBusinessIntegration.aggregate([
+    { $match: { provider: GOOGLE_BUSINESS_PROVIDER, companyId: { $ne: null } } },
+    { $group: { _id: '$companyId', count: { $sum: 1 } } },
+    { $match: { count: { $gt: 1 } } },
+  ]);
+  if (conflicts.length) throw new Error('Google Business integration migration found multiple integrations for the same company. Resolve ownership before creating the company-scoped provider index.');
+
+  await GoogleBusinessIntegration.collection.createIndex(
+    { companyId: 1, provider: 1 },
+    { unique: true, name: 'companyId_provider_unique' }
+  );
+}
 async function ensureDemoEnrollmentDevices() {
   await Promise.all(demoEnrollmentDevices.map(device => DeviceMaster.updateOne({ serialNumber: device.serialNumber }, { $setOnInsert: device }, { upsert: true })));
 }
@@ -824,4 +847,4 @@ async function ensureDemoAccounts() {
   );
 }
  
-mongoose.connect(process.env.MONGODB_URI).then(async () => { await ensureDemoAccounts(); await ensureDemoEnrollmentDevices(); await ensureEscalationRules(); await ensureServiceCentres(); await ensureReviewIndexes(); app.listen(port, '0.0.0.0', () => console.log(`API running at http://localhost:${port}`)); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });
+mongoose.connect(process.env.MONGODB_URI).then(async () => { await ensureDemoAccounts(); await ensureDemoEnrollmentDevices(); await ensureEscalationRules(); await ensureServiceCentres(); await ensureReviewIndexes(); await ensureGoogleBusinessIntegrationIndexes(); app.listen(port, '0.0.0.0', () => console.log(`API running at http://localhost:${port}`)); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });
