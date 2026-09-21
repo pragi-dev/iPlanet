@@ -92,8 +92,22 @@ app.get('/api/google-business/callback', async (req, res) => {
   if (!code) return res.status(400).json({ success: false, message: 'Missing Google authorization code.' });
 
   const safeState = parseGoogleBusinessState(state || '{}');
-  const companyId = safeState.companyId || req.query.companyId;
-  const userId = safeState.userId || req.query.userId;
+  const userId = safeState.userId;
+  const provider = GOOGLE_BUSINESS_PROVIDER;
+  const integrationLookup = { companyId: null, provider };
+
+  if (!userId) return res.status(400).json({ success: false, message: 'Google Business Profile OAuth state is missing the user identity.' });
+
+  const user = await User.findById(userId).select('_id companyId').lean();
+  const companyId = user?.companyId || null;
+  integrationLookup.companyId = companyId;
+  console.info('[GOOGLE DEBUG]', { userId: String(userId), companyId: companyId ? String(companyId) : null, provider, integrationLookup });
+
+  if (!user) return res.status(400).json({ success: false, message: 'Google Business Profile OAuth user was not found.' });
+  if (!companyId) return res.status(400).json({ success: false, message: 'Google Business Profile integration requires the user to be associated with a company.' });
+  if (safeState.companyId && String(safeState.companyId) !== String(companyId)) {
+    return res.status(400).json({ success: false, message: 'Google Business Profile OAuth state does not match the user company.' });
+  }
 
   try {
     const exchange = await exchangeGoogleBusinessCodeForTokens({
@@ -104,14 +118,14 @@ app.get('/api/google-business/callback', async (req, res) => {
     });
 
     const accessToken = encryptGoogleBusinessToken(exchange.accessToken);
-    const existingIntegration = await GoogleBusinessIntegration.findOne({ companyId, userId, provider: GOOGLE_BUSINESS_PROVIDER }).select('refreshToken').lean();
+    const existingIntegration = await GoogleBusinessIntegration.findOne(integrationLookup).select('refreshToken').lean();
     const refreshToken = exchange.refreshToken
       ? encryptGoogleBusinessToken(exchange.refreshToken)
       : existingIntegration?.refreshToken || null;
     const expiresAt = exchange.expiresAt ? new Date(exchange.expiresAt) : null;
 
     const integration = await GoogleBusinessIntegration.findOneAndUpdate(
-      { companyId, userId, provider: GOOGLE_BUSINESS_PROVIDER },
+      integrationLookup,
       {
         companyId,
         userId,
