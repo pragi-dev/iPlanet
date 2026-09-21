@@ -127,7 +127,7 @@ export function parseGoogleBusinessState(rawState) {
   }
 }
 
-export function encryptGoogleBusinessToken(value, secretKey = process.env.GOOGLE_BUSINESS_TOKEN_ENCRYPTION_KEY) {
+export function encryptGoogleBusinessToken(value, secretKey = process.env.GOOGLE_BUSINESS_TOKEN_ENCRYPTION_KEY || process.env.JWT_SECRET) {
   if (!value) return '';
   if (!secretKey) return value;
   const key = crypto.createHash('sha256').update(String(secretKey)).digest();
@@ -137,7 +137,7 @@ export function encryptGoogleBusinessToken(value, secretKey = process.env.GOOGLE
   return `${iv.toString('hex')}:${encrypted.toString('hex')}`;
 }
 
-export function decryptGoogleBusinessToken(value, secretKey = process.env.GOOGLE_BUSINESS_TOKEN_ENCRYPTION_KEY) {
+export function decryptGoogleBusinessToken(value, secretKey = process.env.GOOGLE_BUSINESS_TOKEN_ENCRYPTION_KEY || process.env.JWT_SECRET) {
   if (!value) return '';
   if (!secretKey || !String(value).includes(':')) return value;
   const [ivHex, encryptedHex] = String(value).split(':');

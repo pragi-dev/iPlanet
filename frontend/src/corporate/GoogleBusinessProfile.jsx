@@ -42,7 +42,7 @@ export function GoogleBusinessProfile() {
     try {
       const result = await request('/google-business/auth');
       window.open(result.url, '_blank', 'noopener,noreferrer');
-      setStatus({ connected: true, mode: 'business-profile' });
+      setStatus(current => ({ ...(current || {}), mode: 'business-profile', connectionPending: true }));
     } catch (loadError) {
       setError(loadError.message || 'Unable to start Google Business Profile authorization.');
     } finally {

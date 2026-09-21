@@ -31,7 +31,7 @@ test('buildGoogleBusinessAuthUrl falls back to the active Google OAuth env vars'
   });
 
   assert.match(url, /client_id=353090434146-5ttsesn1vok7k9kdk1mn2558dco06ioe.apps.googleusercontent.com/);
-  assert.match(url, /redirect_uri=https%3A%2F%2Fiplanet-backend.onrender.com%2Fapi%2Fgoogle%2Fcallback/);
+  assert.match(url, /redirect_uri=https%3A%2F%2Fiplanet-backend.onrender.com%2Fapi%2Fgoogle-business%2Fcallback/);
 });
 
 test('Google OAuth token helpers build the expected grant request payloads', async () => {

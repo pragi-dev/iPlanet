@@ -23,3 +23,13 @@ services:
         value: gemini-2.5-flash
       - key: GEMINI_TIMEOUT_MS
         value: '60000'
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      - key: GOOGLE_BUSINESS_SCOPE
+        value: https://www.googleapis.com/auth/business.manage
+      - key: GOOGLE_BUSINESS_TOKEN_ENCRYPTION_KEY
+        sync: false

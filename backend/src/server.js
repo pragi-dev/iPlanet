@@ -57,12 +57,21 @@ app.use(express.json());
 app.use('/uploads', express.static(uploadDir));
 app.use('/api/ai', auth, createAiSupportRouter());
 app.get('/api/health', (_, res) => res.json({ success: true, message: 'API is running' }));
-app.get('/api/google-business/health', (_, res) => res.json({ success: true, mode: 'business-profile', configured: Boolean(process.env.GOOGLE_BUSINESS_CLIENT_ID && process.env.GOOGLE_BUSINESS_CLIENT_SECRET) }));
+app.get('/api/google-business/health', auth, allowRoles('corporate_admin'), async (req, res) => {
+  const integration = await GoogleBusinessIntegration.findOne({ companyId: req.user.companyId, userId: req.user.id }).sort({ createdAt: -1 }).select('status connectedAt accountName accountDisplayName expiresAt').lean();
+  res.json({
+    success: true,
+    mode: 'business-profile',
+    configured: Boolean((process.env.GOOGLE_BUSINESS_CLIENT_ID || process.env.GOOGLE_CLIENT_ID) && (process.env.GOOGLE_BUSINESS_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET)),
+    connected: integration?.status === 'connected',
+    connection: integration || null,
+  });
+});
 app.get('/api/google-business/auth', auth, allowRoles('corporate_admin'), async (req, res) => {
   const state = JSON.stringify({ companyId: req.user.companyId, userId: req.user.id });
   const redirectUrl = buildGoogleBusinessAuthUrl({
-    clientId: process.env.GOOGLE_BUSINESS_CLIENT_ID,
-    redirectUri: process.env.GOOGLE_BUSINESS_REDIRECT_URI,
+    clientId: process.env.GOOGLE_BUSINESS_CLIENT_ID || process.env.GOOGLE_CLIENT_ID,
+    redirectUri: process.env.GOOGLE_BUSINESS_REDIRECT_URI || process.env.GOOGLE_REDIRECT_URI,
     state,
   });
   res.json({ success: true, url: redirectUrl, state });
@@ -85,7 +94,10 @@ app.get('/api/google-business/callback', async (req, res) => {
     });
 
     const accessToken = encryptGoogleBusinessToken(exchange.accessToken);
-    const refreshToken = exchange.refreshToken ? encryptGoogleBusinessToken(exchange.refreshToken) : null;
+    const existingIntegration = await GoogleBusinessIntegration.findOne({ companyId, userId }).select('refreshToken').lean();
+    const refreshToken = exchange.refreshToken
+      ? encryptGoogleBusinessToken(exchange.refreshToken)
+      : existingIntegration?.refreshToken || null;
     const expiresAt = exchange.expiresAt ? new Date(exchange.expiresAt) : null;
 
     const integration = await GoogleBusinessIntegration.findOneAndUpdate(
@@ -184,16 +196,17 @@ async function getValidGoogleBusinessIntegration(companyId, userId) {
 }
 
 app.get('/api/google-business/locations', auth, allowRoles('corporate_admin'), async (req, res) => {
-  const integration = await getValidGoogleBusinessIntegration(req.user.companyId, req.user.id);
-  if (!integration?.accessToken) {
-    return res.status(400).json({ message: 'Google Business Profile is not connected for this company.' });
-  }
   try {
+    const integration = await getValidGoogleBusinessIntegration(req.user.companyId, req.user.id);
+    if (!integration?.accessToken) {
+      return res.status(400).json({ message: 'Google Business Profile is not connected for this company.' });
+    }
     const locations = await discoverGoogleBusinessLocations(integration.accessToken);
     res.json({ success: true, locations });
   } catch (error) {
     console.error('[GOOGLE_BUSINESS_LOCATIONS_ERROR]', error);
-    res.status(401).json({ success: false, message: error.message || 'Google Business Profile access failed.' });
+    const status = [401, 403, 404, 429].includes(error.status) ? error.status : 502;
+    res.status(status).json({ success: false, message: error.message || 'Google Business Profile access failed.' });
   }
 });
 app.get('/api/google-business/reviews/sync', auth, allowRoles('corporate_admin'), async (req, res) => {
