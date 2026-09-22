@@ -249,6 +249,69 @@ svg { display: block; flex: 0 0 auto; }
 .drawer-backdrop { position: fixed; inset: 0; background: rgba(16, 47, 54, 0.46); z-index: 1100; display: grid; place-items: center; padding: 20px; }
 .negative-review-row { background: rgba(191, 74, 63, 0.04); }
 
+.google-business-page { padding-bottom: 40px; }
+.google-business-page > .page-title { margin: 30px 4.5% 18px; align-items: flex-end; gap: 20px; }
+.google-business-page > .page-title > div { min-width: 0; }
+.google-business-page > .page-title h2 { font-size: clamp(22px, 2.1vw, 28px); }
+.google-business-page > .page-title p { max-width: 720px; line-height: 1.5; }
+.google-business-page > .page-title .button { flex: 0 0 auto; }
+.google-error { margin: 0 4.5% 18px; display: grid; gap: 4px; max-height: 112px; overflow: auto; overflow-wrap: anywhere; line-height: 1.45; }
+.google-error strong { color: #8d4d2d; font-size: 12px; }
+.google-error span { color: #a85b38; }
+.google-status-grid { margin: 0 4.5% 18px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.google-status-grid .stat-box { min-width: 0; min-height: 84px; padding: 18px 20px; display: flex; align-items: center; gap: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: 0 5px 18px rgba(16,47,54,.035); }
+.google-status-grid .stat-box > svg { color: var(--teal); flex: 0 0 auto; }
+.google-status-grid .stat-box div { display: grid; gap: 5px; min-width: 0; }
+.google-status-grid .stat-box small { color: var(--muted); font-size: 11px; }
+.google-status-grid .stat-box strong { color: var(--ink); font-size: 16px; overflow-wrap: anywhere; }
+.google-section { margin: 0 4.5% 18px; overflow: hidden; }
+.google-section > .page-title { padding: 20px 22px 16px; border-bottom: 1px solid var(--line); }
+.google-section > .page-title h2 { font-size: 18px; letter-spacing: -.2px; }
+.google-section > .page-title p { margin-top: 5px; line-height: 1.45; }
+.google-section > .table-wrap { border: 0; border-radius: 0; }
+.google-section > .empty { margin: 18px 22px 22px; }
+.google-section > .muted { display: block; margin: 16px 22px 0; line-height: 1.5; }
+.google-map-controls { margin: 18px 22px; align-items: end; }
+.google-map-controls label { flex: 1 1 220px; min-width: 0; display: grid; gap: 7px; }
+.google-map-controls select { width: 100%; }
+.google-map-controls .button { flex: 0 0 auto; }
+.google-footnote { margin: 4px 4.5% 0; display: flex; align-items: flex-start; gap: 8px; line-height: 1.5; }
+.google-footnote svg { margin-top: 2px; flex: 0 0 auto; }
+
+@media (max-width: 900px) {
+  .google-business-page > .page-title { align-items: flex-start; flex-direction: column; }
+  .google-business-page > .page-title .button { width: 100%; }
+  .google-map-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .google-map-controls .button { grid-column: 1 / -1; width: 100%; }
+}
+
+@media (max-width: 760px) {
+  .google-business-page { padding-bottom: 28px; }
+  .google-business-page > .page-title,
+  .google-error,
+  .google-status-grid,
+  .google-section,
+  .google-footnote { margin-left: 0; margin-right: 0; }
+  .google-business-page > .page-title { margin-top: 22px; }
+  .google-status-grid { grid-template-columns: 1fr; gap: 10px; }
+  .google-section > .page-title { padding: 18px 16px 14px; }
+  .google-section > .empty { margin-left: 16px; margin-right: 16px; }
+  .google-section > .muted { margin-left: 16px; margin-right: 16px; }
+  .google-map-controls { margin: 16px; grid-template-columns: 1fr; }
+  .google-map-controls .button { grid-column: auto; }
+  .google-footnote { font-size: 11px; }
+}
+
+@media (max-width: 480px) {
+  .google-business-page > .page-title h2 { font-size: 21px; }
+  .google-business-page > .page-title p { font-size: 11px; }
+  .google-error { max-height: 150px; font-size: 11px; }
+  .google-status-grid .stat-box { padding: 15px 16px; }
+  .google-section > .page-title { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .google-section > .page-title .button { width: 100%; }
+  .google-section .table-wrap table { min-width: 560px; }
+}
+
 .search,.input-icon { min-height: var(--control-height); }
 .search > svg,.input-icon > svg { flex: 0 0 auto; }
 .search input,.input-icon input { min-height: 0; height: 38px; line-height: 1.3; }
