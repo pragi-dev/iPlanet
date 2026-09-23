@@ -1,8 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Building2, ExternalLink, MapPinned, RefreshCcw, ShieldCheck } from 'lucide-react';
-import { ServiceShell } from './servicePages';
-import { Empty, PageTitle } from './components';
+import { ExternalLink, Link2, MapPinned, RefreshCcw } from 'lucide-react';
+import { ServiceShell } from './components';
+import { ReviewTabs } from './InternalReviews';
 import { getGoogleAccounts, getGoogleBusinessHealth, getGoogleLocations, getGoogleReviewsSync, getServiceCentres, mapGoogleLocation, startGoogleBusinessAuth } from './api';
+import { Avatar, Badge, Button, Card, EmptyState, Field, InlineAlert, PageHeader, Skeleton, Stars, formatDate, friendlyError } from '../ui';
+
+function GoogleBadge() {
+  return <Badge tone="google"><span className="google-g" aria-hidden="true">G</span>Google</Badge>;
+}
 
 export function GoogleBusinessProfile() {
   const [status, setStatus] = useState(null);
@@ -12,22 +17,15 @@ export function GoogleBusinessProfile() {
   const [serviceCentres, setServiceCentres] = useState([]);
   const [selectedLocation, setSelectedLocation] = useState('');
   const [selectedServiceCentre, setSelectedServiceCentre] = useState('');
-  const [mappingMessage, setMappingMessage] = useState('');
+  const [mapping, setMapping] = useState(null);
   const [syncResult, setSyncResult] = useState(null);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState('');
 
   const loadHealth = async () => {
-    try {
-      const result = await getGoogleBusinessHealth();
-      setStatus(result);
-      return result;
-    } catch (loadError) {
-      setStatus({ connected: false, configured: false, mode: 'business-profile' });
-      setError(loadError.message || 'Unable to load Google Business Profile status.');
-      return null;
-    }
+    try { const result = await getGoogleBusinessHealth(); setStatus(result); return result; }
+    catch (loadError) { setStatus({ connected: false, configured: false, mode: 'business-profile' }); setError(friendlyError(loadError, 'Unable to load Google Business Profile status.')); return null; }
   };
-
   const loadAccountsAndLocations = async () => {
     try {
       const accountResult = await getGoogleAccounts();
@@ -39,14 +37,12 @@ export function GoogleBusinessProfile() {
     } catch (loadError) {
       setAccounts([]);
       setLocations([]);
-      setError(loadError.message || 'Unable to load Google Business Profile accounts or locations.');
+      setError(friendlyError(loadError, 'Unable to load Google Business Profile accounts or locations.'));
     }
   };
 
   useEffect(() => {
-    loadHealth().then(result => {
-      if (result?.connected) loadAccountsAndLocations();
-    });
+    loadHealth().then(result => { if (result?.connected) void loadAccountsAndLocations(); });
     getServiceCentres().then(setServiceCentres).catch(() => setServiceCentres([]));
   }, []);
 
@@ -57,58 +53,83 @@ export function GoogleBusinessProfile() {
       const result = await startGoogleBusinessAuth();
       window.open(result.url, '_blank', 'noopener,noreferrer');
       setStatus(current => ({ ...(current || {}), mode: 'business-profile', connectionPending: true }));
-    } catch (loadError) {
-      setError(loadError.message || 'Unable to start Google Business Profile authorization.');
-    } finally {
-      setConnecting(false);
-    }
+    } catch (loadError) { setError(friendlyError(loadError, 'Unable to start Google Business Profile authorization.')); }
+    finally { setConnecting(false); }
   };
-
   const mapSelectedLocation = async () => {
     const selected = locations.find(location => location.name === selectedLocation);
-    if (!selected || !selectedServiceCentre) {
-      setMappingMessage('Select both a Google location and an iPlanet service centre.');
-      return;
-    }
+    if (!selected || !selectedServiceCentre) { setMapping({ tone: 'warning', text: 'Select both a Google location and an iPlanet service centre.' }); return; }
     try {
-      const result = await mapGoogleLocation({
-        locationName: selected.name,
-        locationDisplayName: selected.title || selected.locationName || selected.name,
-        accountName: selected.accountName || '',
-        serviceCentreId: selectedServiceCentre,
-      });
-      setMappingMessage(`Mapped ${selected.title || selected.name} to ${result.mapping.serviceCentreName}.`);
-    } catch (mapError) {
-      setMappingMessage(mapError.message || 'Unable to map the Google Business Profile location.');
-    }
+      const result = await mapGoogleLocation({ locationName: selected.name, locationDisplayName: selected.title || selected.locationName || selected.name, accountName: selected.accountName || '', serviceCentreId: selectedServiceCentre });
+      setMapping({ tone: 'success', text: `Mapped ${selected.title || selected.name} to ${result.mapping.serviceCentreName}.` });
+    } catch (mapError) { setMapping({ tone: 'critical', text: friendlyError(mapError, 'Unable to map the Google Business Profile location.') }); }
   };
-
   const syncReviews = async () => {
-    try {
-      const result = await getGoogleReviewsSync();
-      setSyncResult(result);
-      setError('');
-    } catch (syncError) {
-      setError(syncError.message || 'Unable to sync Google reviews.');
-    }
+    setSyncing(true);
+    try { setSyncResult(await getGoogleReviewsSync()); setError(''); }
+    catch (syncError) { setError(friendlyError(syncError, 'Unable to sync Google reviews.')); }
+    finally { setSyncing(false); }
   };
 
-  const reviewSummary = useMemo(() => (syncResult?.results || []).reduce((sum, item) => sum + (Number(item.reviewCount) || 0), 0), [syncResult]);
+  const centreName = id => serviceCentres.find(item => String(item._id) === String(id))?.name;
+  const reviews = useMemo(() => (syncResult?.results || []).flatMap(result => (result.reviews || []).filter(Boolean).map(review => ({ ...review, serviceCentre: centreName(result.serviceCentreId) }))).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)), [syncResult, serviceCentres]); // eslint-disable-line react-hooks/exhaustive-deps
   const connected = status?.connected;
 
-  return <ServiceShell title="Google Reviews"><div className="google-business-page"><PageTitle showTitle title="Google Business Profile" description="Manage the connected Google account, map Business Profile locations to iPlanet service centres, and retrieve Google reviews." action={<button className="button primary" onClick={connectGoogle} disabled={connecting}>{connecting ? 'Connecting...' : connected ? 'Reconnect Google' : 'Connect Google Business Profile'}</button>} />
-    {error && <div className="form-error google-error" role="alert"><strong>Google connection issue</strong><span>{error}</span></div>}
-    <div className="google-status-grid">
-      <div className="panel-row stat-box"><Building2 size={18} /><div><small>Connection status</small><strong>{connected ? 'Connected' : 'Not connected'}</strong></div></div>
-      <div className="panel-row stat-box"><ShieldCheck size={18} /><div><small>Accessible locations</small><strong>{connected ? locations.length : 'Not available'}</strong></div></div>
-    </div>
-    {!connected ? <div className="empty google-empty"><MapPinned size={18} /><p>Connect your Google Business Profile to view accounts, locations, and reviews.</p></div> : <>
-      <section className="panel google-section"><PageTitle showTitle title="Google accounts" description="Accounts accessible to the connected Google user." />{accounts.length ? <div className="table-wrap"><table><thead><tr><th>Account</th><th>Account ID</th><th>Role</th><th>Verification</th></tr></thead><tbody>{accounts.map(account => <tr key={account.accountId || account.accountName}><td>{account.accountDisplayName || account.accountName || 'Unnamed account'}</td><td>{account.accountId || 'Not available'}</td><td>{account.role || 'Not available'}</td><td>{account.verificationState || 'Not available'}</td></tr>)}</tbody></table></div> : <Empty message="No Google Business Profile accounts found." />}</section>
-      <section className="panel google-section"><PageTitle showTitle title="Google locations" description="Map each Google location to its iPlanet service centre." />{locations.length ? <><div className="row-controls google-map-controls"><label>Google location<select value={selectedLocation} onChange={event => setSelectedLocation(event.target.value)}>{locations.map(location => <option key={location.name} value={location.name}>{location.title || location.name}</option>)}</select></label><label>iPlanet service centre<select value={selectedServiceCentre} onChange={event => setSelectedServiceCentre(event.target.value)}><option value="">Select a service centre</option>{serviceCentres.map(centre => <option key={centre._id} value={centre._id}>{centre.name}</option>)}</select></label><button className="button primary" onClick={mapSelectedLocation}>Map location</button></div>{mappingMessage && <p className="muted">{mappingMessage}</p>}<div className="table-wrap"><table><thead><tr><th>Location</th><th>Account</th><th>Action</th></tr></thead><tbody>{locations.map(location => <tr key={location.name}><td>{location.title || location.name}</td><td>{location.accountDisplayName || location.accountName || 'Google Business Profile'}</td><td><button className="button tiny" onClick={() => setSelectedLocation(location.name)}>Select</button></td></tr>)}</tbody></table></div></> : <Empty message="No Google Business Profile locations found." />}</section>
-      <section className="panel google-section"><PageTitle showTitle title="Google reviews" description="Reviews retrieved from mapped Google Business Profile locations." action={<button className="button secondary" onClick={syncReviews}><RefreshCcw size={16} />Sync Google reviews</button>} />{reviewSummary > 0 && <p className="muted">{reviewSummary} Google review(s) returned in the last sync.</p>}{syncResult?.results?.length ? <div className="table-wrap"><table><thead><tr><th>Service centre</th><th>Location</th><th>Reviews</th></tr></thead><tbody>{syncResult.results.map(result => <tr key={result.locationName}><td>{serviceCentres.find(item => String(item._id) === String(result.serviceCentreId))?.name || 'Mapped centre'}</td><td>{result.locationName}</td><td>{result.reviewCount}</td></tr>)}</tbody></table></div> : <Empty message="No Google review sync results yet." />}</section>
-    </>}
-    <div className="footnote google-footnote"><ExternalLink size={14} /> Google Business Profile is an external review source. Internal iPlanet reviews remain available in the Internal tab.</div>
-  </div>
+  return <ServiceShell title="Google Reviews" crumbs={[{ label: 'Reviews', to: '/service/reviews' }, { label: 'Google reviews' }]}>
+    <PageHeader title="Reviews" description="Customer feedback from closed service requests and your Google Business Profile." />
+    <ReviewTabs current="/service/reviews/google" />
+    {error && <InlineAlert title="Google connection issue">{error}</InlineAlert>}
+
+    <Card>
+      {!status ? <Skeleton height={40} /> : <div className="row-between">
+        <div className="connection-strip">
+          <GoogleBadge />
+          <span className="connection-status"><span className={`status-light ${connected ? 'on' : ''}`} aria-hidden="true" />{connected ? 'Business Profile connected' : status.connectionPending ? 'Waiting for authorization in the new tab' : 'Not connected'}</span>
+          {connected && <span className="text-muted text-small">{accounts.length} account{accounts.length === 1 ? '' : 's'} · {locations.length} location{locations.length === 1 ? '' : 's'}</span>}
+        </div>
+        <div className="row">
+          {status.connectionPending && !connected && <Button icon={RefreshCcw} onClick={() => loadHealth().then(result => { if (result?.connected) void loadAccountsAndLocations(); })}>Check status</Button>}
+          <Button variant={connected ? 'secondary' : 'primary'} icon={Link2} onClick={connectGoogle} disabled={connecting}>{connecting ? 'Connecting…' : connected ? 'Reconnect' : 'Connect Google Business Profile'}</Button>
+        </div>
+      </div>}
+    </Card>
+
+    {status && !connected ? <div className="card"><EmptyState icon={MapPinned} title="Google Business Profile is not connected" description="Connect your Business Profile to map locations to iPlanet service centres and retrieve public Google reviews." /></div>
+      : connected && <>
+        <Card title="Google reviews" description="Public reviews retrieved from mapped Business Profile locations" actions={<Button icon={RefreshCcw} onClick={syncReviews} disabled={syncing}>{syncing ? 'Syncing…' : 'Sync Google reviews'}</Button>}>
+          {!syncResult ? <EmptyState compact title="No reviews synced in this session" description="Sync to retrieve the latest reviews from Google." />
+            : <div className="stack-16">
+              {syncResult.results?.some(result => result.error) && <InlineAlert tone="warning" title="Some locations could not be synced">{syncResult.results.filter(result => result.error).map(result => result.locationName).join(', ')}</InlineAlert>}
+              {reviews.length ? <div className="review-cards">{reviews.map((review, index) => <article className="review-card" key={review.googleReviewId || index}>
+                <div className="review-card-head"><GoogleBadge /><Stars rating={review.rating} /></div>
+                <div className="review-author"><Avatar name={review.authorName} size={32} /><div><strong>{review.authorName}</strong><span>{review.locationName || review.serviceCentre || 'Google Business Profile'}</span></div></div>
+                {review.comment ? <p className="review-text">{review.comment}</p> : <p className="text-muted text-small">Rating only, no written review.</p>}
+                <div className="review-card-foot">
+                  <span>Published {formatDate(review.createdAt)}</span>
+                  <a className="row-action" href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(review.locationName || review.serviceCentre || '')}`} target="_blank" rel="noopener noreferrer">View on Google<ExternalLink size={13} aria-hidden="true" /></a>
+                </div>
+              </article>)}</div> : <EmptyState compact title="No Google reviews returned" description={syncResult.results?.length ? 'The mapped locations have no reviews yet.' : 'Map a Google location to a service centre first.'} />}
+            </div>}
+        </Card>
+
+        <Card title="Location mapping" description="Link each Google location to its iPlanet service centre">
+          {locations.length ? <div className="stack-16">
+            <div className="form-grid" style={{ alignItems: 'end' }}>
+              <Field label="Google location">{props => <select {...props} value={selectedLocation} onChange={event => setSelectedLocation(event.target.value)}>{locations.map(location => <option key={location.name} value={location.name}>{location.title || location.name}</option>)}</select>}</Field>
+              <Field label="iPlanet service centre">{props => <select {...props} value={selectedServiceCentre} onChange={event => setSelectedServiceCentre(event.target.value)}><option value="">Select a service centre</option>{serviceCentres.map(centre => <option key={centre._id} value={centre._id}>{centre.name}</option>)}</select>}</Field>
+            </div>
+            <div className="form-actions" style={{ justifyContent: 'flex-start' }}><Button variant="primary" onClick={mapSelectedLocation}>Map location</Button></div>
+            {mapping && <InlineAlert tone={mapping.tone} title={mapping.text} />}
+          </div> : <EmptyState compact icon={MapPinned} title="No Business Profile locations found" />}
+        </Card>
+
+        <Card flush title="Google accounts" description="Accounts accessible to the connected Google user">
+          {accounts.length ? <div className="table-scroll"><table className="table">
+            <thead><tr><th>Account</th><th>Account ID</th><th>Role</th><th>Verification</th></tr></thead>
+            <tbody>{accounts.map(account => <tr key={account.accountId || account.accountName}><td className="cell-primary">{account.accountDisplayName || account.accountName || 'Unnamed account'}</td><td className="mono">{account.accountId || '—'}</td><td>{account.role || '—'}</td><td>{account.verificationState ? <Badge>{account.verificationState}</Badge> : '—'}</td></tr>)}</tbody>
+          </table></div> : <EmptyState compact title="No Google Business Profile accounts found" />}
+        </Card>
+      </>}
+    <p className="text-muted text-small row"><ExternalLink size={13} aria-hidden="true" />Google reviews come from an external public source and are separate from internal iPlanet service reviews.</p>
   </ServiceShell>;
 }
-

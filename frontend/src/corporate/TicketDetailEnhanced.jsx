@@ -1,49 +1,68 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, CheckCircle2, ShieldAlert } from 'lucide-react';
-import { Shell, Badge, PageTitle } from './components';
+import { ArrowLeft, Sparkles, Star } from 'lucide-react';
+import { Shell } from './components';
 import { getTicket, mediaUrl } from './api';
-import { ModalLayer } from './ModalLayer';
+import { Badge, Button, Card, DeviceIcon, ErrorState, Evidence, InfoList, Lightbox, PageHeader, PageSkeleton, SLAPanel, Timeline, Workflow, formatDate, formatDateTime, friendlyError, slaLabel, useAIAssistant, useAsync } from '../ui';
 
 export function TicketDetailEnhanced() {
   const { id } = useParams();
-  const [data, setData] = useState(null);
-  const [error, setError] = useState('');
+  const ai = useAIAssistant();
+  const state = useAsync(() => getTicket(id), [id]);
   const [selectedImage, setSelectedImage] = useState(null);
+  const crumbs = [{ label: 'Service Requests', to: '/corporate/service-requests' }, { label: state.data?.ticket?.ticketId || 'Request details' }];
 
-  useEffect(() => { setData(null); setError(''); getTicket(id).then(setData).catch(loadError => setError(loadError.message || 'Unable to load this ticket.')); }, [id]);
-  if (!data) return <Shell title="Ticket details"><div className="loading">{error || 'Loading ticket...'}</div></Shell>;
+  if (state.loading && !state.data) return <Shell title="Request details" crumbs={crumbs}><PageSkeleton variant="detail" /></Shell>;
+  if (state.error) return <Shell title="Request details" crumbs={crumbs}><PageHeader title="Request details" back={{ to: '/corporate/service-requests', label: 'Service Requests' }} /><div className="card"><ErrorState title={state.error.status === 404 ? 'Request not found' : 'Unable to load this request'} message={friendlyError(state.error)} onRetry={state.reload} /></div></Shell>;
 
-  const { ticket, timeline, escalation } = data;
-  const images = [...new Set([...(ticket.originalImages || ticket.images || []), ...(ticket.annotatedImages || [])])];
+  const { ticket, timeline, escalation, escalationContact } = state.data;
+  const device = ticket.deviceId || {};
+  const sla = slaLabel(ticket);
 
-  return <Shell title="Ticket details">
-    <div className="ticket-detail-layout">
-      <div className="ticket-detail-main">
-        <Link className="back-link" to="/tickets"><ArrowLeft size={16} />Back to My Tickets</Link>
-        <PageTitle title={ticket.ticketId} showTitle description={`${ticket.issueType} · ${ticket.location}`} action={<div className="ticket-detail-actions"><Badge>{ticket.status}</Badge>{data.reviewEligible && <Link className="button primary" to={`/corporate/reviews/${ticket._id}`}>Rate Our Service</Link>}{data.reviewSubmitted && <Badge>Service Rated</Badge>}</div>} />
-        <div className="ticket-summary">
-          <section className="panel info-card"><h3>Request details</h3>{[['Device', ticket.deviceId?.model], ['Serial number', ticket.deviceId?.serialNumber], ['Priority', ticket.priority], ['Expected TAT', ticket.expectedTAT], ['Assigned engineer', ticket.assignedEngineer || 'Unassigned']].map(([label, value]) => <div className="info-row" key={label}><span>{label}</span><strong>{value}</strong></div>)}</section>
-          <section className="panel issue-card"><span className="kicker">Issue description</span><h3>{ticket.issueType}</h3><p>{ticket.description}</p><div className="upload-preview">{images.length ? images.map(image => <button type="button" key={image} className="image-thumb-button" onClick={() => setSelectedImage(mediaUrl(image))}><img src={mediaUrl(image)} alt="Reported issue" /></button>) : <span>No issue photos attached</span>}</div></section>
+  return <Shell title={ticket.ticketId} crumbs={crumbs}>
+    <div className="page-header">
+      <Link className="back-link" to="/corporate/service-requests"><ArrowLeft size={15} aria-hidden="true" />Service Requests</Link>
+      <div className="page-header-row">
+        <div className="page-header-text">
+          <p className="eyebrow">{ticket.category || 'Service'} request</p>
+          <h1 className="page-title mono" style={{ fontSize: 26 }}>{ticket.ticketId}</h1>
+          <div className="page-meta"><Badge dot>{ticket.status}</Badge><Badge>{`${ticket.priority || 'Medium'} priority`}</Badge><Badge>{`SLA: ${sla}`}</Badge><span>{ticket.issueType}{ticket.location ? ` · ${ticket.location}` : ''}</span></div>
         </div>
-        {selectedImage && <ModalLayer className="image-lightbox"><div role="dialog" aria-modal="true" aria-label="Ticket attachment preview" onClick={() => setSelectedImage(null)}><button type="button" className="image-lightbox-close" aria-label="Close image preview" onClick={() => setSelectedImage(null)}>×</button><img src={selectedImage} alt="Ticket attachment preview" onClick={event => event.stopPropagation()} /></div></ModalLayer>}
-        <section className="panel escalation-card">
-          <div className="escalation-status-compact">
-            <div className="escalation-icon"><ShieldAlert size={18} /></div>
-            <div className="sla-heading">
-              <span className="kicker">Support status</span>
-              <h3><Badge>{escalation?.status || 'Healthy'}</Badge></h3>
-              <p>{escalation?.reason || 'Ticket health is normal.'}</p>
-            </div>
-          </div>
-          <div className="sla-table" role="table" aria-label="Escalation details">
-            <div className="sla-row" role="row"><span role="cell">Response target</span><strong role="cell">{ticket.responseTarget || 'Not available'}</strong></div>
-            <div className="sla-row" role="row"><span role="cell">Resolution target</span><strong role="cell">{ticket.resolutionTarget || 'Not available'}</strong></div>
-            <div className="sla-row" role="row"><span role="cell">Escalation</span><strong role="cell">{ticket.escalationStatus || 'Not escalated'} · Level {ticket.escalationLevel || 0}</strong></div>
-          </div>
-        </section>
-        <section className="panel timeline-panel"><span className="kicker">Timeline</span><h3>Ticket history</h3><div className="timeline">{timeline.map((event, index) => <div className="timeline-item" key={`${event.status}-${index}`}><div className="timeline-dot"><CheckCircle2 size={14} /></div><div><strong>{event.status}</strong><p>{event.message}</p><small>{event.updatedBy || 'Support Desk'} · {event.timestamp ? new Date(event.timestamp).toLocaleString() : 'Recently'}</small></div></div>)}</div></section>
+        <div className="page-actions">
+          <Button icon={Sparkles} onClick={ai.open}>Get AI help</Button>
+          {state.data.reviewEligible && <Button variant="primary" icon={Star} to={`/corporate/reviews/${ticket._id}`}>Rate our service</Button>}
+          {state.data.reviewSubmitted && <Badge tone="success" dot>Service rated</Badge>}
+        </div>
       </div>
     </div>
+
+    <div className="summary-strip">
+      <div><span className="summary-label">Status</span><span className="summary-value">{ticket.status}</span></div>
+      <div><span className="summary-label">Engineer</span><span className="summary-value">{ticket.assignedEngineer || 'Not yet assigned'}</span></div>
+      <div><span className="summary-label">Created</span><span className="summary-value">{formatDateTime(ticket.createdAt)}</span></div>
+      <div><span className="summary-label">Expected turnaround</span><span className="summary-value">{ticket.expectedTAT || ticket.resolutionTarget || '—'}</span></div>
+    </div>
+
+    <div className="detail-layout">
+      <div className="detail-main">
+        <Card title="Request summary">
+          <InfoList columns={2} items={[['Category', ticket.category || 'Service'], ['Issue type', ticket.issueType], ['Priority', ticket.priority], ['Service location', ticket.location], ['Preferred date', formatDate(ticket.preferredServiceDate, '')], ['Service centre', ticket.serviceCentreId?.name]]} />
+        </Card>
+        <Card title="Issue details"><p className="description-text">{ticket.description || 'No description provided.'}</p></Card>
+        <Card title="Issue evidence" description="Original photos and annotated damage markings"><Evidence ticket={ticket} resolve={mediaUrl} onOpen={setSelectedImage} /></Card>
+        <Card title="Timeline" description="Every update on this request"><Timeline events={timeline} /></Card>
+      </div>
+      <aside className="detail-side">
+        <Card title="Device" actions={device._id && <Button size="sm" variant="ghost" to={`/corporate/devices/${device._id}`}>View device</Button>}>
+          <div className="stack-12">
+            <div className="person-cell"><span className="asset-icon" style={{ width: 40, height: 40 }}><DeviceIcon type={device.deviceType} model={device.model} /></span><div><strong>{device.model || 'Device'}</strong><span className="cell-sub mono">{device.serialNumber}</span></div></div>
+            <InfoList items={[['Employee', device.employeeName], ['Warranty', device.warrantyStatus && <Badge>{device.warrantyStatus}</Badge>], ['AMC', device.amcStatus && <Badge>{device.amcStatus}</Badge>]]} />
+          </div>
+        </Card>
+        <Card title="SLA & escalation"><SLAPanel ticket={ticket} reason={escalation?.reason} contact={escalationContact} /></Card>
+        <Card title="Progress"><Workflow ticket={ticket} timeline={timeline} /></Card>
+      </aside>
+    </div>
+    {selectedImage && <Lightbox src={selectedImage} alt="Ticket attachment preview" onClose={() => setSelectedImage(null)} />}
   </Shell>;
 }

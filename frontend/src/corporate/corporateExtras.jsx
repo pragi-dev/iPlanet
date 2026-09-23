@@ -1,59 +1,94 @@
-import { useEffect, useState } from 'react';
-import { Bell, Check, CheckCheck, UserRound } from 'lucide-react';
-import { Shell, PageTitle, Badge, Empty } from './components';
-import { ModalLayer } from './ModalLayer';
-import { assignDeviceToEmployee, getDevices, getNotifications, markAllNotificationsRead, markNotificationRead } from './api';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { CheckCircle2, UserRoundCheck, UserRoundPlus } from 'lucide-react';
+import { Shell } from './components';
+import { assignDeviceToEmployee, getDevices, getNotifications, markAllNotificationsRead, markNotificationRead } from './api';
+import { Badge, Button, DeviceIcon, EmptyState, Field, FilterBar, InlineAlert, Modal, NotificationCenter, PageHeader, SearchInput, TableCard, formatDate, friendlyError, useAsync } from '../ui';
 
 const employeeKey = employee => `${employee.employeeName} (${employee.employeeId})`;
 
-export function UnassignedDevices() {
-  const [devices, setDevices] = useState([]);
-  const [employees, setEmployees] = useState([]);
-  const [selected, setSelected] = useState(null);
-  const [employee, setEmployee] = useState('');
+async function loadInventory() {
+  const items = await getDevices();
+  const employees = [...new Map(items.filter(item => item.employeeName && item.employeeId).map(item => [item.employeeId, item])).values()];
+  return { employees, devices: items.filter(item => item.deviceAllocationStatus === 'Unassigned') };
+}
 
-  const load = async () => {
-    const items = await getDevices();
-    const people = [...new Map(items.filter(item => item.employeeName && item.employeeId).map(item => [item.employeeId, item])).values()];
-    setEmployees(people);
-    setDevices(items.filter(item => item.deviceAllocationStatus === 'Unassigned'));
-  };
-  useEffect(() => { void load(); }, []);
-  const selectEmployee = value => {
-    setEmployee(value);
-  };
+function AssignDeviceModal({ device, employees, onClose, onAssigned }) {
+  const [employee, setEmployee] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const person = employees.find(item => employeeKey(item) === employee);
   const submit = async event => {
     event.preventDefault();
-    const person = employees.find(item => employeeKey(item) === employee);
-    if (!person || !selected) return;
-    await assignDeviceToEmployee(selected._id, { employeeName: person.employeeName, employeeId: person.employeeId, department: person.department, location: person.location });
-    setSelected(null);
-    setEmployee('');
-    await load();
+    if (!person) { setError('Select an employee from the list.'); return; }
+    setSaving(true);
+    setError('');
+    try {
+      await assignDeviceToEmployee(device._id, { employeeName: person.employeeName, employeeId: person.employeeId, department: person.department, location: person.location });
+      onAssigned(person);
+    } catch (assignError) {
+      setError(friendlyError(assignError, 'Unable to assign this device.'));
+      setSaving(false);
+    }
   };
-  return <Shell title="Unassigned devices"><PageTitle title="Unassigned Devices" description="Devices registered to your company and ready for employee assignment" /><section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>Device</th><th>Serial</th><th>Asset ID</th><th>Warranty</th><th>AMC</th><th>Status</th><th></th></tr></thead><tbody>{devices.map(device => <tr key={device._id}><td><strong>{device.model}</strong><small>{device.deviceType}</small></td><td>{device.serialNumber}</td><td>{device.assetId}</td><td><Badge>{device.warrantyStatus}</Badge></td><td><Badge>{device.amcStatus}</Badge></td><td><Badge>Unassigned</Badge></td><td><button className="button primary" onClick={() => setSelected(device)}><UserRound size={15} />Assign</button></td></tr>)}</tbody></table>{!devices.length && <Empty message="All company devices are assigned." />}</div></section>{selected && <ModalLayer><form className="modal panel" onSubmit={submit}><div className="panel-heading"><div><span className="kicker">Employee assignment</span><h3>{selected.model}</h3></div><button type="button" className="modal-close" onClick={() => setSelected(null)}>×</button></div><label>Employee<input required list="company-employees" value={employee} onChange={event => selectEmployee(event.target.value)} placeholder="Search by employee name or ID" /><datalist id="company-employees">{employees.map(person => <option key={person.employeeId} value={employeeKey(person)} />)}</datalist></label><button className="button primary" disabled={!employees.some(person => employeeKey(person) === employee)}>Assign Device</button></form></ModalLayer>}</Shell>;
+  return <Modal as="form" onSubmit={submit} onClose={onClose} eyebrow="Employee assignment" title={`Assign ${device.model}`} description={`Serial ${device.serialNumber}`}
+    footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" type="submit" icon={UserRoundCheck} disabled={saving || !person}>{saving ? 'Assigning…' : 'Assign device'}</Button></>}>
+    <Field label="Employee" required hint="Search by employee name or ID. Employees come from your existing device records." error={employee && !person ? 'Choose an employee from the suggestions.' : undefined}>
+      {props => <><input {...props} required list="company-employees" value={employee} onChange={event => setEmployee(event.target.value)} placeholder="e.g. Priya Sharma (EMP-102)" autoComplete="off" />
+        <datalist id="company-employees">{employees.map(item => <option key={item.employeeId} value={employeeKey(item)} />)}</datalist></>}
+    </Field>
+    {person && <div className="device-card"><div className="device-card-body"><strong>{person.employeeName}</strong><span>{[person.employeeId, person.department, person.location].filter(Boolean).join(' · ')}</span></div></div>}
+    {!employees.length && <InlineAlert tone="warning" title="No employees on record">Employees appear here once at least one device is assigned to them.</InlineAlert>}
+    {error && <InlineAlert title={error} />}
+  </Modal>;
+}
+
+export function UnassignedDevices() {
+  const state = useAsync(loadInventory, []);
+  const [selected, setSelected] = useState(null);
+  const [search, setSearch] = useState('');
+  const [assigned, setAssigned] = useState(null);
+  const devices = (state.data?.devices || []).filter(device => JSON.stringify(device).toLowerCase().includes(search.toLowerCase()));
+  return <Shell title="Unassigned Devices">
+    <PageHeader title="Unassigned Devices" description="Devices registered to your organization that are ready to be assigned to an employee." />
+    {assigned && <InlineAlert tone="success" title={`${assigned.model} assigned to ${assigned.employee}`} action={<Button size="sm" variant="ghost" onClick={() => setAssigned(null)}>Dismiss</Button>} />}
+    <TableCard
+      columns={7}
+      loading={state.loading && !state.data}
+      error={state.error && friendlyError(state.error)}
+      errorTitle="Unable to load unassigned devices"
+      onRetry={state.reload}
+      toolbar={<FilterBar summary={state.data ? `${devices.length} unassigned` : null}><SearchInput value={search} onChange={setSearch} placeholder="Search model, serial or asset ID" label="Search unassigned devices" /></FilterBar>}
+      isEmpty={!devices.length}
+      empty={<EmptyState icon={CheckCircle2} title={search ? 'No devices match your search' : 'All devices are assigned'} description={search ? 'Try a different search term.' : 'Newly enrolled devices will appear here for assignment.'} action={!search && <Button size="sm" to="/corporate/devices">View all devices</Button>} />}
+    >
+      <table className="table">
+        <thead><tr><th>Device</th><th>Serial</th><th>Asset ID</th><th>Warranty</th><th>AMC</th><th>Status</th><th><span className="sr-only">Action</span></th></tr></thead>
+        <tbody>{devices.map(device => <tr key={device._id}>
+          <td><div className="person-cell"><span className="asset-icon" style={{ width: 32, height: 32, borderRadius: 8 }}><DeviceIcon type={device.deviceType} model={device.model} size={16} /></span><div><Link className="cell-link" to={`/corporate/devices/${device._id}`}>{device.model}</Link><span className="cell-sub">{device.deviceType}</span></div></div></td>
+          <td className="mono cell-nowrap">{device.serialNumber}</td>
+          <td>{device.assetId || '—'}</td>
+          <td className="cell-nowrap"><Badge>{device.warrantyStatus}</Badge><span className="cell-sub">{device.warrantyExpiry ? `Ends ${formatDate(device.warrantyExpiry)}` : ''}</span></td>
+          <td className="cell-nowrap"><Badge>{device.amcStatus}</Badge><span className="cell-sub">{device.amcExpiry ? `Ends ${formatDate(device.amcExpiry)}` : ''}</span></td>
+          <td><Badge dot>Unassigned</Badge></td>
+          <td className="cell-right"><Button size="sm" variant="primary" icon={UserRoundPlus} onClick={() => setSelected(device)}>Assign</Button></td>
+        </tr>)}</tbody>
+      </table>
+    </TableCard>
+    {selected && <AssignDeviceModal device={selected} employees={state.data.employees} onClose={() => setSelected(null)} onAssigned={person => { setAssigned({ model: selected.model, employee: person.employeeName }); setSelected(null); void state.reload({ silent: true }); }} />}
+  </Shell>;
+}
+
+function corporateRoute(item) {
+  if (item.action?.route) return item.action.route;
+  if (item.ticket?._id) return `/corporate/service-requests/${item.ticket._id}`;
+  if (item.type === 'NEW_DEVICE') return '/corporate/unassigned-devices';
+  if (item.device?._id) return `/corporate/devices/${item.device._id}`;
+  return null;
 }
 
 export function Notifications() {
-  const [items, setItems] = useState([]);
-  const [error, setError] = useState('');
-
-  const load = () => getNotifications().then(setItems).catch(err => setError(err.message));
-
-  useEffect(() => { void load(); }, []);
-
-  const read = async item => {
-    if (!item.read) {
-      await markNotificationRead(item._id);
-      setItems(current => current.map(entry => entry._id === item._id ? { ...entry, read: true } : entry));
-    }
-  };
-
-  const readAll = async () => {
-    await markAllNotificationsRead();
-    setItems(current => current.map(item => ({ ...item, read: true })));
-  };
-
-  return <Shell title="Notifications"><PageTitle title="Notifications" description="Updates from the iPlanet Service team" action={<button className="button secondary" onClick={readAll}><CheckCheck size={15} />Mark all read</button>} />{error && <p className="form-error">{error}</p>}<section className="notification-list">{items.map(item => <article className={`panel notification-item ${item.read ? '' : 'unread'}`} key={item._id}><div className="notification-icon"><Bell size={18} /></div><div><span className="kicker">{item.type}</span><h3>{item.title}</h3><p>{item.message}</p><small>{item.device?.model} · {item.device?.serialNumber}</small>{item.ticket && <Link className="text-link" to={item.action?.route || `/tickets/${item.ticket._id}`} onClick={() => read(item)}>Open {item.ticket.ticketId}</Link>}</div>{!item.read && <button className="icon-button" title="Mark as read" onClick={() => read(item)}><Check size={17} /></button>}</article>)}{!items.length && !error && <Empty message="No notifications yet." />}</section></Shell>;
+  return <Shell title="Notifications">
+    <NotificationCenter load={getNotifications} markRead={markNotificationRead} markAllRead={markAllNotificationsRead} resolveRoute={corporateRoute} description="Updates on your devices, service requests and coverage from iPlanet Service." />
+  </Shell>;
 }

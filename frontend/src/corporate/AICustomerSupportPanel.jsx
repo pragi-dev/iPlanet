@@ -1,26 +1,32 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, Mic, RefreshCcw, SendHorizonal, ShieldAlert, Sparkles, Volume2, X } from 'lucide-react';
-import { ModalLayer } from './ModalLayer';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Bot, FilePlus2, Info, Laptop, Mic, RefreshCcw, SendHorizonal, ShieldCheck, Sparkles, Stethoscope, Ticket, Volume2, Wrench } from 'lucide-react';
+import { Button, Drawer, IconButton, InlineAlert } from '../ui';
 import { getTicketAITroubleshooting, sendAiSupportMessage } from './api';
 
-const defaultMessage = "Hi! I'm your AI Support Assistant.\n\nTell me what you're experiencing with your device, and I'll help you troubleshoot it step by step.";
-const welcomeSuggestions = [
-  'My iPhone is not charging',
-  'My MacBook is running slow',
-  'My keyboard is not working',
-  'My screen is flickering'
-];
-const localSupportFallback = message => {
-  const normalized = String(message).toLowerCase();
-  if (normalized.includes('charg')) return 'Here are safe steps for a device that is not charging:\n\nInspect the cable, adapter, and outlet for visible damage or loose connections. Try a known-good Apple or certified accessory and a different outlet. Allow a very low battery to charge undisturbed for several minutes, then restart the device if it is responsive.\n\nDoes the charging indicator appear, and have you tried another known-good cable, adapter, and outlet?';
-  if (normalized.includes('battery')) return 'Here are safe steps for fast battery drain:\n\nCheck Battery usage for unusually high-use apps. Turn on Low Power Mode when immediate runtime is needed, install available compatible software updates, and restart the device after saving work.\n\nDid the drain begin after installing an app or update?';
-  return 'I could not reach the AI service, but I can still help. Please describe the device, what changed, and any visible warning or damage.';
-};
+const unavailablePattern = /AI (Support|troubleshooting) is (temporarily |currently )?unavailable/i;
+
+function contextDevice(ticket, device) {
+  return ticket?.deviceId && typeof ticket.deviceId === 'object' ? ticket.deviceId : device;
+}
+
+// Suggested actions use whatever the current page already knows, so the
+// assistant is never asked for a device or ticket that is on screen.
+function suggestedActions(ticket, device) {
+  const known = contextDevice(ticket, device);
+  const name = known?.model ? `my ${known.model}${known.serialNumber ? ` (${known.serialNumber})` : ''}` : 'my device';
+  return [
+    { key: 'diagnose', icon: Stethoscope, label: 'Diagnose an issue', prompt: `I need help diagnosing an issue with ${name}.` },
+    { key: 'warranty', icon: ShieldCheck, label: 'Check warranty', prompt: `What is the warranty status of ${name}?` },
+    { key: 'amc', icon: Wrench, label: 'Check AMC', prompt: `What is the AMC coverage status of ${name}?` },
+    { key: 'track', icon: Ticket, label: 'Track service', prompt: ticket?.ticketId ? `What is the current status of service request ${ticket.ticketId}?` : `Where is the latest service request for ${name}?` },
+    { key: 'raise', icon: FilePlus2, label: 'Raise service request', navigate: true },
+  ];
+}
 
 export function AICustomerSupportPanel({ ticket, device, open = false, onClose }) {
   const navigate = useNavigate();
-  const [messages, setMessages] = useState([{ role: 'assistant', content: defaultMessage }]);
+  const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -32,82 +38,53 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
   const [speakingIndex, setSpeakingIndex] = useState(null);
   const listRef = useRef(null);
   const recognitionRef = useRef(null);
+  const inputRef = useRef(null);
 
-  const loadSession = async () => {
-    if (!ticket?._id) {
-      setMessages([{ role: 'assistant', content: defaultMessage }]);
-      setConversationId(null);
-      setRequestData(null);
-      return;
-    }
-
-    try {
-      const result = await getTicketAITroubleshooting(ticket._id);
-      const session = result?.session;
-      if (session?.messages?.length) {
-        const visibleMessages = session.messages
-          .filter(message => !(message.role === 'assistant' && /AI (Support|troubleshooting) is (temporarily )?unavailable/i.test(message.content)))
-          .map(message => ({ role: message.role, content: message.content }));
-        setMessages(visibleMessages.length ? visibleMessages : [{ role: 'assistant', content: defaultMessage }]);
-        setConversationId(session.sessionId || session._id || null);
-      } else {
-        setMessages([{ role: 'assistant', content: defaultMessage }]);
-        setConversationId(null);
-      }
-    } catch {
-      setMessages([{ role: 'assistant', content: defaultMessage }]);
-      setConversationId(null);
-    }
-  };
+  const reset = () => { setMessages([]); setConversationId(null); setRequestData(null); setError(''); setFailedMessage(''); };
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) return undefined;
+    let ignore = false;
+    reset();
     if (ticket?._id) {
-      void loadSession();
-      return;
+      getTicketAITroubleshooting(ticket._id).then(result => {
+        if (ignore) return;
+        const session = result?.session;
+        const visible = (session?.messages || []).filter(message => !(message.role === 'assistant' && unavailablePattern.test(message.content))).map(message => ({ role: message.role, content: message.content }));
+        setMessages(visible);
+        setConversationId(visible.length ? session.sessionId || session._id || null : null);
+      }).catch(() => { /* A new conversation starts when no session exists. */ });
     }
-    setMessages([{ role: 'assistant', content: defaultMessage }]);
-    setConversationId(null);
-    setRequestData(null);
+    return () => { ignore = true; };
   }, [open, ticket?._id]);
 
   useEffect(() => {
-    if (!open) return;
-    const onKeyDown = event => {
-      if (event.key === 'Escape') onClose?.();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, onClose]);
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [messages, loading, requestData, error]);
 
   useEffect(() => {
-    if (!listRef.current) return;
-    listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [messages, loading]);
+    setVoiceSupported(Boolean(window.SpeechRecognition || window.webkitSpeechRecognition));
+    return () => { recognitionRef.current?.stop(); window.speechSynthesis?.cancel(); };
+  }, []);
 
   const sendMessage = async (nextMessage, { appendUser = true } = {}) => {
-    const value = String(nextMessage || draft).trim();
+    const value = String(nextMessage ?? draft).trim();
     if (!value || loading) return;
-
-    const userMessage = { role: 'user', content: value };
-    if (appendUser) setMessages(current => [...current, userMessage]);
+    if (appendUser) setMessages(current => [...current, { role: 'user', content: value }]);
     setDraft('');
     setLoading(true);
     setError('');
     setFailedMessage('');
-
     try {
       const result = await sendAiSupportMessage(ticket?._id || null, {
         message: value,
         conversationId,
-        deviceId: device?._id || null,
+        deviceId: contextDevice(ticket, device)?._id || null,
         // Preserves the recent non-ticket conversation through the backend.
-        conversation: messages
+        conversation: messages,
       });
-      let response = result?.reply || result?.message;
-      if (!response || /AI Support is temporarily unavailable|AI support is currently unavailable/i.test(response)) {
-        response = localSupportFallback(value);
-      }
+      const response = result?.reply || result?.message;
+      if (!response || unavailablePattern.test(response)) throw new Error('unavailable');
       setMessages(current => [...current, { role: 'assistant', content: response }]);
       setConversationId(result?.conversationId || conversationId);
       setRequestData(result?.requestData || null);
@@ -121,13 +98,8 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
 
   const speakMessage = (content, index) => {
     if (!('speechSynthesis' in window)) return;
-    if (speakingIndex === index) {
-      window.speechSynthesis.cancel();
-      setSpeakingIndex(null);
-      return;
-    }
-
     window.speechSynthesis.cancel();
+    if (speakingIndex === index) { setSpeakingIndex(null); return; }
     const utterance = new SpeechSynthesisUtterance(content);
     utterance.lang = navigator.language || 'en-IN';
     utterance.onend = () => setSpeakingIndex(null);
@@ -138,114 +110,94 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
 
   const toggleVoiceCapture = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setError('Voice input is not supported in this browser.');
-      return;
-    }
-
-    if (voiceActive && recognitionRef.current) {
-      recognitionRef.current.stop();
-      setVoiceActive(false);
-      return;
-    }
-
+    if (!SpeechRecognition) { setError('Voice input is not supported in this browser.'); return; }
+    if (voiceActive && recognitionRef.current) { recognitionRef.current.stop(); setVoiceActive(false); return; }
     const recognition = new SpeechRecognition();
     recognition.lang = navigator.language || 'en-IN';
     recognition.continuous = false;
     recognition.interimResults = false;
     let finalTranscript = '';
-
     recognition.onstart = () => setVoiceActive(true);
     recognition.onresult = event => {
-      const transcript = Array.from(event.results).map(result => result[0]?.transcript || '').join(' ').trim();
-      finalTranscript = transcript;
-      if (transcript) {
-        setDraft(transcript);
-      }
+      finalTranscript = Array.from(event.results).map(result => result[0]?.transcript || '').join(' ').trim();
+      if (finalTranscript) setDraft(finalTranscript);
     };
-    recognition.onend = () => {
-      setVoiceActive(false);
-      if (finalTranscript.trim()) setDraft(finalTranscript.trim());
-    };
-    recognition.onerror = () => {
-      setVoiceActive(false);
-      setError('Voice capture was interrupted. Please try again.');
-    };
+    recognition.onend = () => { setVoiceActive(false); if (finalTranscript.trim()) setDraft(finalTranscript.trim()); };
+    recognition.onerror = () => { setVoiceActive(false); setError('Voice capture was interrupted. Please try again.'); };
     recognitionRef.current = recognition;
     recognition.start();
   };
 
-  const handleComposerKeyDown = event => {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      void sendMessage();
+  const runSuggestion = action => {
+    if (action.navigate) {
+      const known = contextDevice(ticket, device);
+      onClose?.();
+      navigate(known?._id ? `/corporate/raise-request?device=${known._id}` : '/corporate/raise-request');
+      return;
     }
+    void sendMessage(action.prompt);
   };
-
-  useEffect(() => {
-    setVoiceSupported(Boolean(window.SpeechRecognition || window.webkitSpeechRecognition));
-    return () => {
-      recognitionRef.current?.stop();
-      window.speechSynthesis?.cancel();
-    };
-  }, []);
-
-  const suggestionList = useMemo(() => welcomeSuggestions, []);
 
   if (!open) return null;
 
-  return <ModalLayer className="ai-chat-backdrop">
-    <aside className="ai-chat-drawer" role="dialog" aria-modal="true" aria-label="AI Support chatbot panel">
-      <div className="ai-chat-header">
-        <div className="ai-chat-title">
-          <div className="ai-icon"><Sparkles size={16} /></div>
-          <div>
-            <strong>AI Support</strong>
-            <small>L1 Device Assistance</small>
-          </div>
+  const known = contextDevice(ticket, device);
+  const hasConversation = messages.some(item => item.role === 'user');
+  const speechAvailable = voiceSupported && 'speechSynthesis' in window;
+
+  return <Drawer
+    className="ai-drawer"
+    width={460}
+    title="AI Support"
+    eyebrow="Device assistance"
+    icon={<Sparkles size={18} />}
+    onClose={onClose}
+    actions={<IconButton label="Start a new conversation" icon={RefreshCcw} onClick={reset} />}
+  >
+    <div className="ai-context">
+      {known ? <><Laptop size={15} aria-hidden="true" /><span>Using <strong>{known.model || 'device'}</strong>{known.serialNumber && <> · <span className="mono">{known.serialNumber}</span></>}{ticket?.ticketId && <> · Ticket <strong>{ticket.ticketId}</strong></>}</span></>
+        : <><Info size={15} aria-hidden="true" /><span>No device selected. Share a serial number and the assistant will look it up.</span></>}
+    </div>
+
+    <div className="ai-thread" ref={listRef} aria-live="polite">
+      {!hasConversation && <div className="ai-welcome">
+        <h3>How can I help with your device?</h3>
+        <p>Ask in any language and I'll reply in the same language.</p>
+      </div>}
+
+      {messages.map((message, index) => <div key={`${message.role}-${index}`} className={`ai-msg ${message.role}`}>
+        {message.role === 'assistant' && <span className="ai-msg-avatar" aria-hidden="true"><Bot size={15} /></span>}
+        <div>
+          <div className="ai-msg-bubble">{message.content}</div>
+          {message.role === 'assistant' && speechAvailable && <div className="ai-msg-tools">
+            <button type="button" className={speakingIndex === index ? 'active' : ''} aria-label={speakingIndex === index ? 'Stop reading response' : 'Read response aloud'} onClick={() => speakMessage(message.content, index)}><Volume2 size={12} aria-hidden="true" />{speakingIndex === index ? 'Stop' : 'Listen'}</button>
+          </div>}
         </div>
-        <div className="ai-header-actions">
-          <span className="presence-dot" aria-label="AI Support" />
-          <button type="button" className="icon-btn" aria-label="New conversation" onClick={() => { setMessages([{ role: 'assistant', content: defaultMessage }]); setConversationId(null); setRequestData(null); setError(''); setFailedMessage(''); }}><RefreshCcw size={14} /></button>
-          {onClose && <button type="button" className="icon-btn" aria-label="Close AI panel" onClick={onClose}><X size={14} /></button>}
-        </div>
+      </div>)}
+
+      {loading && <div className="ai-msg assistant"><span className="ai-msg-avatar" aria-hidden="true"><Bot size={15} /></span><div className="ai-msg-bubble"><span className="typing" aria-label="Assistant is typing"><i /><i /><i /></span></div></div>}
+
+      {!hasConversation && !loading && <div className="ai-suggestions">
+        <p>Suggested actions</p>
+        {suggestedActions(ticket, device).map(action => <button key={action.key} type="button" className="ai-suggestion" onClick={() => runSuggestion(action)}><action.icon size={16} aria-hidden="true" />{action.label}</button>)}
+      </div>}
+
+      {error && <InlineAlert title={error} action={failedMessage ? <Button size="sm" onClick={() => void sendMessage(failedMessage, { appendUser: false })} disabled={loading}>Retry</Button> : null} />}
+
+      {requestData && <div className="ai-draft">
+        <strong>Service request draft ready</strong>
+        <span>{[requestData.deviceName, requestData.issueType].filter(Boolean).join(' · ')}</span>
+        <Button variant="primary" size="sm" icon={FilePlus2} onClick={() => { onClose?.(); navigate(`/corporate/raise-request?source=ai&conversationId=${encodeURIComponent(conversationId || '')}`, { state: { aiRequest: requestData } }); }}>Review request</Button>
+      </div>}
+    </div>
+
+    <form className="ai-composer" onSubmit={event => { event.preventDefault(); void sendMessage(); }}>
+      <div className="ai-composer-box">
+        <label htmlFor="ai-composer-input" className="sr-only">Message AI Support</label>
+        <textarea id="ai-composer-input" data-autofocus ref={inputRef} rows={1} value={draft} placeholder="Describe your issue…" onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
+        {voiceSupported && <IconButton className={voiceActive ? 'recording' : ''} label={voiceActive ? 'Stop voice input' : 'Start voice input'} icon={Mic} aria-pressed={voiceActive} onClick={toggleVoiceCapture} />}
+        <button type="submit" className="btn btn-primary ai-send" aria-label="Send message" disabled={!draft.trim() || loading}><SendHorizonal size={16} aria-hidden="true" /></button>
       </div>
-
-      <div className="ai-context-box">
-        {ticket ? <>
-          <p><strong>Device:</strong> {ticket.deviceId?.model || 'Unknown device'} · {ticket.deviceId?.serialNumber || 'Unknown serial'}</p>
-          <p><strong>Issue:</strong> {ticket.issueType || 'General support'}</p>
-          <p><strong>Ticket:</strong> {ticket.ticketId}</p>
-        </> : device ? <p><strong>Device:</strong> {device.model || 'Device'} · {device.serialNumber || 'Verified device'}</p> : <p><strong>Context:</strong> General support conversation</p>}
-      </div>
-
-      <div className="ai-chat-body" ref={listRef}>
-        {messages.map((message, index) => <div key={`${message.role}-${index}`} className={`ai-message ${message.role}`}>
-          {message.role === 'assistant' && <div className="message-icon"><Bot size={14} /></div>}
-          <div className="message-text-wrap">
-            <div className="message-text">{message.content.split('\n').map((line, lineIndex) => <span key={`${line}-${lineIndex}`}>{line}{lineIndex < message.content.split('\n').length - 1 && <br />}</span>)}</div>
-            {message.role === 'assistant' && voiceSupported && 'speechSynthesis' in window && <button type="button" className={`ai-listen-button ${speakingIndex === index ? 'active' : ''}`} aria-label="Listen to AI response" onClick={() => speakMessage(message.content, index)}><Volume2 size={12} /></button>}
-          </div>
-        </div>)}
-
-        {loading && <div className="ai-message assistant typing"><div className="message-icon"><Bot size={14} /></div><div className="message-text"><span className="typing-dots"><i /><i /><i /></span></div></div>}
-
-        {!messages.some(item => item.role === 'user') && !loading && <>
-          <p className="ai-language-tip">Ask in any language — I'll reply in the same language.</p>
-          <div className="ai-suggestions"><p>Try asking:</p>
-            {suggestionList.map(item => <button key={item} type="button" className="suggestion-pill" onClick={() => void sendMessage(item)}>{item}</button>)}
-          </div>
-        </>}
-
-        {error && <div className="ai-alert" role="alert"><ShieldAlert size={15} /><span>{error}</span>{failedMessage && <button type="button" onClick={() => void sendMessage(failedMessage, { appendUser: false })} disabled={loading}>Try Again</button>}</div>}
-        {requestData && <div className="ai-review-request"><strong>Request draft ready</strong><span>{requestData.deviceName} · {requestData.issueType}</span><button type="button" className="button primary" onClick={() => { onClose?.(); navigate(`/request?source=ai&conversationId=${encodeURIComponent(conversationId || '')}`, { state: { aiRequest: requestData } }); }}>Review Request</button></div>}
-      </div>
-
-      <div className="ai-chat-form">
-        <textarea value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} placeholder="Describe your issue..." aria-label="Describe your issue" rows={1} />
-        {voiceSupported && <button type="button" className={`voice-button ${voiceActive ? 'active' : ''}`} aria-label={voiceActive ? 'Stop voice input' : 'Start voice input'} aria-pressed={voiceActive} onClick={toggleVoiceCapture}><Mic size={17} /><span>{voiceActive ? 'Stop' : 'Voice'}</span></button>}
-        <button type="button" className="button primary ai-send-button" disabled={!draft.trim() || loading} onClick={() => void sendMessage()}><SendHorizonal size={15} />Send</button>
-      </div>
-    </aside>
-  </ModalLayer>;
+      <p className="ai-footnote">AI guidance may be incomplete. Raise a service request for hardware faults.</p>
+    </form>
+  </Drawer>;
 }

@@ -1,26 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowRight, LockKeyhole, Mail, ShieldCheck, Sparkles, Wrench } from 'lucide-react';
+import { ArrowRight, BellRing, LockKeyhole, Mail, ShieldCheck, Sparkles, Ticket } from 'lucide-react';
 import { Dashboard, Devices, DeviceDetail, Tickets, Profile } from './corporate/pages';
 import { UnassignedDevices, Notifications as CorporateNotifications } from './corporate/corporateExtras';
 import { RequestEnhanced } from './corporate/RequestEnhanced';
 import { TicketDetailEnhanced } from './corporate/TicketDetailEnhanced';
 import { CoverageEnhanced } from './corporate/CoverageEnhanced';
-import { ReviewPage } from './corporate/ReviewPage';
+import { ReviewPage, CorporateReviews } from './corporate/ReviewPage';
 import { AICustomerSupportPanel } from './corporate/AICustomerSupportPanel';
 import { getDevice, getTicket, login } from './corporate/api';
-import { ServiceDashboard } from './service/servicePages';
+import { ServiceDashboard, Engineers, ServiceReports, ServiceSettings } from './service/servicePages';
 import { MyTickets } from './service/companyQueue';
 import { DeviceEnrollment } from './service/enrollment';
 import { ServiceNotifications, EscalationMatrix } from './service/serviceExtras';
 import { OperationalTicketDetail } from './service/OperationalTicketDetail';
 import { ServiceCoverage } from './service/coverage';
-import { Engineers, ServiceReports } from './service/servicePages';
 import { InternalReviews, InternalReviewDetail } from './service/InternalReviews';
 import { GoogleBusinessProfile } from './service/GoogleBusinessProfile';
-import './App.css';
-import './corporate/App.css';
-import './service/App.css';
+import { AIAssistantContext, Field, InlineAlert } from './ui';
 
 const TOKEN_KEY = 'iplanet_token';
 const USER_KEY = 'iplanet_user';
@@ -43,25 +40,64 @@ function sessionIsValid() {
 function Login() {
   const profiles = {
     corporate: { label: 'Corporate Admin', email: 'karthik.raj@democorporation.in' },
-    service: { label: 'iPlanet Service', email: 'service@iplanet.local' }
+    service: { label: 'iPlanet Service', email: 'service@iplanet.local' },
   };
   const [profile, setProfile] = useState('corporate');
   const [email, setEmail] = useState('karthik.raj@democorporation.in');
   const [password, setPassword] = useState('Demo@123');
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
+  useEffect(() => { document.title = 'Sign in · iPlanetCare'; }, []);
   const submit = async event => {
     event.preventDefault();
     setError('');
+    setBusy(true);
     try {
       const result = await login(email, password);
       localStorage.setItem(TOKEN_KEY, result.token);
       localStorage.setItem(USER_KEY, JSON.stringify(result.user));
       navigate(result.user.role === 'iplanet_service' ? serviceHome : corporateHome, { replace: true });
-    } catch (loginError) { setError(loginError.message); }
+    } catch (loginError) {
+      setError(loginError.message || 'Unable to sign in. Please try again.');
+    } finally {
+      setBusy(false);
+    }
   };
   const selectProfile = nextProfile => { setProfile(nextProfile); setEmail(profiles[nextProfile].email); setError(''); };
-  return <main className="login-page"><div className="login-art"><div className="art-brand"><div className="brand-mark">i</div><strong>iPlanet</strong></div><div className="art-copy"><span className="kicker">Apple device care</span><h1>One workspace for every service journey.</h1><p>Manage devices, coverage, troubleshooting, and service operations from one secure workspace.</p></div><div className="art-footer"><ShieldCheck size={16} />Corporate Admin and iPlanet Service</div></div><div className="login-panel"><div className="login-inner"><span className="kicker">Welcome back</span><h2>Sign in to iPlanet</h2><p className="muted">Choose an account profile, then authenticate through the backend.</p><div className="portal-picker" aria-label="Demo profile selector"><button type="button" className={profile === 'corporate' ? 'portal-option active' : 'portal-option'} onClick={() => selectProfile('corporate')}>Corporate Admin</button><button type="button" className={profile === 'service' ? 'portal-option active' : 'portal-option'} onClick={() => selectProfile('service')}><Wrench size={14} />iPlanet Service</button></div><form onSubmit={submit}><label>Email address<div className="input-icon"><Mail size={17} /><input type="email" value={email} onChange={event => setEmail(event.target.value)} required /></div></label><label>Password<div className="input-icon"><LockKeyhole size={17} /><input type="password" value={password} onChange={event => setPassword(event.target.value)} required /></div></label>{error && <p className="form-error">{error}</p>}<button className="button primary login-button" type="submit"><ArrowRight size={17} />Sign in as {profiles[profile].label}</button></form><div className="demo-note"><strong>Demo password</strong><span>Demo@123</span></div></div></div></main>;
+  return <main className="login">
+    <section className="login-brand" aria-label="iPlanetCare">
+      <div className="brand"><span className="brand-mark" aria-hidden="true">i</span><span className="brand-text"><strong>iPlanetCare</strong><small>Service &amp; Self-Care Platform</small></span></div>
+      <div className="login-copy">
+        <h1>Device care and service operations, in one place.</h1>
+        <p>Corporate teams manage their devices and requests. iPlanet Service runs the operations behind them.</p>
+        <ul className="login-points">
+          <li><Ticket size={16} aria-hidden="true" />Raise and track service requests end to end</li>
+          <li><ShieldCheck size={16} aria-hidden="true" />Warranty and AMC coverage for every device</li>
+          <li><BellRing size={16} aria-hidden="true" />SLA monitoring with escalation alerts</li>
+          <li><Sparkles size={16} aria-hidden="true" />AI-assisted first-line device support</li>
+        </ul>
+      </div>
+      <p className="login-foot">Corporate Self-Care · iPlanet Service Operations</p>
+    </section>
+    <section className="login-panel">
+      <form className="login-form" onSubmit={submit} noValidate>
+        <div>
+          <h2>Sign in</h2>
+          <p>Choose your workspace and sign in with your account.</p>
+        </div>
+        <div className="segmented" role="group" aria-label="Workspace">
+          <button type="button" aria-pressed={profile === 'corporate'} onClick={() => selectProfile('corporate')}>Corporate Admin</button>
+          <button type="button" aria-pressed={profile === 'service'} onClick={() => selectProfile('service')}>iPlanet Service</button>
+        </div>
+        <Field label="Email address">{props => <div className="input-with-icon"><Mail size={17} aria-hidden="true" /><input {...props} type="email" autoComplete="username" value={email} onChange={event => setEmail(event.target.value)} required /></div>}</Field>
+        <Field label="Password">{props => <div className="input-with-icon"><LockKeyhole size={17} aria-hidden="true" /><input {...props} type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} required /></div>}</Field>
+        {error && <InlineAlert title="Sign-in failed">{error}</InlineAlert>}
+        <button className="btn btn-primary btn-lg btn-block" type="submit" disabled={busy || !email || !password}>{busy ? 'Signing in…' : <>Sign in as {profiles[profile].label}<ArrowRight size={16} aria-hidden="true" /></>}</button>
+        <div className="login-note"><span>Demo password</span><strong className="mono">Demo@123</strong></div>
+      </form>
+    </section>
+  </main>;
 }
 
 function Protected({ role, children }) {
@@ -73,8 +109,9 @@ function Protected({ role, children }) {
 
 function RoleAlias({ corporate, service }) {
   const user = readUser();
+  const location = useLocation();
   if (!sessionIsValid()) return <Navigate to="/login" replace />;
-  return <Navigate to={user?.role === 'iplanet_service' ? service : corporate} replace />;
+  return <Navigate to={`${user?.role === 'iplanet_service' ? service : corporate}${location.search}`} replace />;
 }
 
 function RoleDetailAlias({ corporateBase, serviceBase }) {
@@ -91,13 +128,16 @@ function logout() {
   localStorage.removeItem('iplanet_service_user');
 }
 
-function GlobalAISupportDock() {
+// Provides the corporate AI Support drawer to the header, sidebar and the
+// floating button, and loads device/ticket context from the current route.
+function AIAssistantProvider({ children }) {
   const location = useLocation();
   const [isOpen, setIsOpen] = useState(false);
   const [ticket, setTicket] = useState(null);
   const [device, setDevice] = useState(null);
+  const corporate = sessionIsValid() && readUser()?.role === 'corporate_admin' && location.pathname.startsWith('/corporate/');
   useEffect(() => {
-    if (!sessionIsValid() || readUser()?.role !== 'corporate_admin') { setTicket(null); setDevice(null); return undefined; }
+    if (!corporate) { setTicket(null); setDevice(null); setIsOpen(false); return undefined; }
     const ticketMatch = location.pathname.match(/^\/corporate\/(?:service-requests|tickets)\/([^/]+)$/);
     const deviceMatch = location.pathname.match(/^\/corporate\/devices\/([^/]+)$/);
     if (!ticketMatch && !deviceMatch) { setTicket(null); setDevice(null); return undefined; }
@@ -105,9 +145,15 @@ function GlobalAISupportDock() {
     const load = ticketMatch ? getTicket(ticketMatch[1]).then(result => ({ ticket: result?.ticket || null, device: result?.ticket?.deviceId || null })) : getDevice(deviceMatch[1]).then(result => ({ ticket: null, device: result }));
     load.then(result => { if (!ignore) { setTicket(result.ticket); setDevice(result.device); } }).catch(() => { if (!ignore) { setTicket(null); setDevice(null); } });
     return () => { ignore = true; };
-  }, [location.pathname]);
-  if (!sessionIsValid() || readUser()?.role !== 'corporate_admin') return null;
-  return <>{!isOpen && <button type="button" className="floating-ai-button" title="AI Support" aria-label="Open AI Support" onClick={() => setIsOpen(true)}><Sparkles size={18} /></button>}<AICustomerSupportPanel ticket={ticket} device={device} open={isOpen} onClose={() => setIsOpen(false)} /></>;
+  }, [location.pathname, corporate]);
+  const open = useCallback(() => setIsOpen(true), []);
+  const close = useCallback(() => setIsOpen(false), []);
+  const value = useMemo(() => ({ available: corporate, open }), [corporate, open]);
+  return <AIAssistantContext.Provider value={value}>
+    {children}
+    {corporate && !isOpen && <button type="button" className="ai-fab" aria-label="Open AI Support" onClick={open}><Sparkles size={18} aria-hidden="true" /><span>AI Support</span></button>}
+    {corporate && <AICustomerSupportPanel ticket={ticket} device={device} open={isOpen} onClose={close} />}
+  </AIAssistantContext.Provider>;
 }
 
 function CorporateRoutes() {
@@ -122,6 +168,7 @@ function CorporateRoutes() {
     <Route path="/corporate/warranty" element={<Protected role="corporate_admin"><CoverageEnhanced /></Protected>} />
     <Route path="/corporate/notifications" element={<Protected role="corporate_admin"><CorporateNotifications /></Protected>} />
     <Route path="/corporate/profile" element={<Protected role="corporate_admin"><Profile /></Protected>} />
+    <Route path="/corporate/reviews" element={<Protected role="corporate_admin"><CorporateReviews /></Protected>} />
     <Route path="/corporate/reviews/:ticketId" element={<Protected role="corporate_admin"><ReviewPage /></Protected>} />
   </>;
 }
@@ -140,12 +187,37 @@ function ServiceRoutes() {
     <Route path="/service/warranty" element={<Protected role="iplanet_service"><ServiceCoverage /></Protected>} />
     <Route path="/service/notifications" element={<Protected role="iplanet_service"><ServiceNotifications /></Protected>} />
     <Route path="/service/escalation" element={<Protected role="iplanet_service"><EscalationMatrix /></Protected>} />
-    <Route path="/service/settings" element={<Protected role="iplanet_service"><ServiceDashboard /></Protected>} />
+    <Route path="/service/settings" element={<Protected role="iplanet_service"><ServiceSettings /></Protected>} />
   </>;
 }
 
 export default function UnifiedApp() {
-  return <BrowserRouter><GlobalAISupportDock /><Routes><Route path="/" element={<Navigate to="/login" replace />} /><Route path="/login" element={sessionIsValid() ? <RoleAlias corporate={corporateHome} service={serviceHome} /> : <Login />} />{CorporateRoutes()}{ServiceRoutes()}<Route path="/dashboard" element={<RoleAlias corporate={corporateHome} service={serviceHome} />} /><Route path="/devices" element={<RoleAlias corporate="/corporate/devices" service={serviceHome} />} /><Route path="/devices/:id" element={<RoleDetailAlias corporateBase="/corporate/devices" serviceBase="/service/tickets" />} /><Route path="/unassigned-devices" element={<RoleAlias corporate="/corporate/unassigned-devices" service={serviceHome} />} /><Route path="/request" element={<RoleAlias corporate="/corporate/raise-request" service={serviceHome} />} /><Route path="/coverage" element={<RoleAlias corporate="/corporate/warranty" service="/service/warranty" />} /><Route path="/notifications" element={<RoleAlias corporate="/corporate/notifications" service="/service/notifications" />} /><Route path="/profile" element={<RoleAlias corporate="/corporate/profile" service={serviceHome} />} /><Route path="/my-tickets" element={<RoleAlias corporate={corporateHome} service="/service/tickets" />} /><Route path="/enrollment" element={<RoleAlias corporate={corporateHome} service="/service/device-enrollment" />} /><Route path="/engineers" element={<RoleAlias corporate={corporateHome} service="/service/engineers" />} /><Route path="/reports" element={<RoleAlias corporate={corporateHome} service="/service/reports" />} /><Route path="/escalation-matrix" element={<RoleAlias corporate={corporateHome} service="/service/escalation" />} /><Route path="/tickets" element={<RoleAlias corporate="/corporate/service-requests" service="/service/tickets" />} /><Route path="/tickets/:id" element={<RoleDetailAlias corporateBase="/corporate/service-requests" serviceBase="/service/tickets" />} /><Route path="*" element={<Navigate to="/login" replace />} /></Routes></BrowserRouter>;
+  return <BrowserRouter>
+    <AIAssistantProvider>
+      <Routes>
+        <Route path="/" element={<Navigate to="/login" replace />} />
+        <Route path="/login" element={sessionIsValid() ? <RoleAlias corporate={corporateHome} service={serviceHome} /> : <Login />} />
+        {CorporateRoutes()}
+        {ServiceRoutes()}
+        <Route path="/dashboard" element={<RoleAlias corporate={corporateHome} service={serviceHome} />} />
+        <Route path="/devices" element={<RoleAlias corporate="/corporate/devices" service={serviceHome} />} />
+        <Route path="/devices/:id" element={<RoleDetailAlias corporateBase="/corporate/devices" serviceBase="/service/tickets" />} />
+        <Route path="/unassigned-devices" element={<RoleAlias corporate="/corporate/unassigned-devices" service={serviceHome} />} />
+        <Route path="/request" element={<RoleAlias corporate="/corporate/raise-request" service={serviceHome} />} />
+        <Route path="/coverage" element={<RoleAlias corporate="/corporate/warranty" service="/service/warranty" />} />
+        <Route path="/notifications" element={<RoleAlias corporate="/corporate/notifications" service="/service/notifications" />} />
+        <Route path="/profile" element={<RoleAlias corporate="/corporate/profile" service="/service/settings" />} />
+        <Route path="/my-tickets" element={<RoleAlias corporate="/corporate/service-requests" service="/service/tickets" />} />
+        <Route path="/enrollment" element={<RoleAlias corporate={corporateHome} service="/service/device-enrollment" />} />
+        <Route path="/engineers" element={<RoleAlias corporate={corporateHome} service="/service/engineers" />} />
+        <Route path="/reports" element={<RoleAlias corporate={corporateHome} service="/service/reports" />} />
+        <Route path="/escalation-matrix" element={<RoleAlias corporate={corporateHome} service="/service/escalation" />} />
+        <Route path="/tickets" element={<RoleAlias corporate="/corporate/service-requests" service="/service/tickets" />} />
+        <Route path="/tickets/:id" element={<RoleDetailAlias corporateBase="/corporate/service-requests" serviceBase="/service/tickets" />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    </AIAssistantProvider>
+  </BrowserRouter>;
 }
 
 export { logout };

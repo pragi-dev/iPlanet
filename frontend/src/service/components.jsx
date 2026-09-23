@@ -1,10 +1,43 @@
-import { NavLink } from 'react-router-dom';
-import { Search, ArrowUpRight } from 'lucide-react';
-export function Badge({ children }) { return <span className={`badge badge-${String(children).toLowerCase().replaceAll(' ', '-').replaceAll('/', '')}`}>{children}</span>; }
-export function Empty({ message }) { return <div className="empty"><Search size={20} /><p>{message}</p></div>; }
-export function Metric({ label, value, note, accent }) { return <div className="metric"><div className={`metric-icon ${accent || ''}`}><ArrowUpRight size={16} /></div><span>{label}</span><strong>{value}</strong><small>{note}</small></div>; }
-// Route titles belong to the shell header. PageTitle retains the page-specific
-// description and actions, and only renders a title for a genuinely distinct
-// piece of content (such as a ticket identifier).
-export function PageTitle({ title, description, action, showTitle = false }) { return <div className="page-title"><div>{showTitle && <h2>{title}</h2>}{description && <p>{description}</p>}</div>{action}</div>; }
-export function ShellLink({ to, children }) { return <NavLink to={to}>{children}</NavLink>; }
+import { BarChart3, Bell, LayoutDashboard, MessageSquareText, ScanLine, Settings, ShieldCheck, Siren, Ticket, UsersRound } from 'lucide-react';
+import { AppShell, Badge as UIBadge, EmptyState, KPI, PageHeader } from '../ui';
+import { getServiceNotificationUnreadCount } from './api';
+
+export const servicePortal = {
+  key: 'service',
+  portalName: 'iPlanet Service Operations',
+  roleLabel: 'iPlanet Service',
+  home: '/service/dashboard',
+  notificationsRoute: '/service/notifications',
+  accountRoute: '/service/settings',
+  accountLabel: 'Settings',
+  fetchUnread: getServiceNotificationUnreadCount,
+  search: { route: '/service/tickets', placeholder: 'Search tickets, serials, companies' },
+  groups: [
+    { label: 'Overview', items: [{ to: '/service/dashboard', icon: LayoutDashboard, label: 'Dashboard' }] },
+    { label: 'Operations', items: [
+      { to: '/service/tickets', icon: Ticket, label: 'Tickets' },
+      { to: '/service/device-enrollment', icon: ScanLine, label: 'Device Enrollment' },
+      { to: '/service/engineers', icon: UsersRound, label: 'Engineers' },
+    ] },
+    { label: 'Monitoring', items: [
+      { to: '/service/reports', icon: BarChart3, label: 'Reports' },
+      { to: '/service/warranty', icon: ShieldCheck, label: 'Warranty & Coverage' },
+      { to: '/service/escalation', icon: Siren, label: 'Escalation Matrix' },
+    ] },
+    { label: 'Communication', items: [
+      { to: '/service/notifications', icon: Bell, label: 'Notifications', badge: 'unread' },
+      { to: '/service/reviews', icon: MessageSquareText, label: 'Reviews' },
+    ] },
+    { label: 'Account', items: [{ to: '/service/settings', icon: Settings, label: 'Settings' }] },
+  ],
+};
+
+export function ServiceShell({ children, title, crumbs }) {
+  return <AppShell config={servicePortal} title={title} crumbs={crumbs}>{children}</AppShell>;
+}
+
+// Compatibility exports for modules that still import the previous helpers.
+export const Badge = UIBadge;
+export function Empty({ message }) { return <EmptyState compact title={message} />; }
+export function Metric({ label, value, note }) { return <KPI label={label} value={value} hint={note} />; }
+export function PageTitle({ title, description, action, showTitle = false }) { return <PageHeader title={showTitle ? title : undefined} description={description} actions={action} />; }

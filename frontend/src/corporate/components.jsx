@@ -1,21 +1,44 @@
-import { useEffect, useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Smartphone, PlusCircle, Ticket, ShieldCheck, UserRound, LogOut, Bell, Search, ChevronRight, ArrowUpRight, UserRoundCheck, BellRing } from 'lucide-react';
+import { Bell, FilePlus2, Laptop, LayoutDashboard, MessageSquareText, ShieldCheck, Sparkles, Ticket, UserRound, UserRoundPlus } from 'lucide-react';
+import { AppShell, Badge as UIBadge, EmptyState, PageHeader, RowAction, KPI } from '../ui';
 import { getNotificationUnreadCount } from './api';
 
-export function Badge({ children }) { return <span className={`badge badge-${String(children).toLowerCase().replaceAll(' ', '-').replaceAll('/', '')}`}>{children}</span>; }
-export function Sidebar() {
-  const navigate = useNavigate(); const [unread, setUnread] = useState(0);
-  const links = [['/corporate/dashboard', LayoutDashboard, 'Dashboard'], ['/corporate/devices', Smartphone, 'My Devices'], ['/corporate/unassigned-devices', UserRoundCheck, 'Unassigned Devices'], ['/corporate/raise-request', PlusCircle, 'Raise Request'], ['/corporate/service-requests', Ticket, 'My Tickets'], ['/corporate/warranty', ShieldCheck, 'Warranty & AMC'], ['/corporate/notifications', BellRing, 'Notifications'], ['/corporate/profile', UserRound, 'Profile']];
-  useEffect(() => { getNotificationUnreadCount().then(result => setUnread(result.count)).catch(() => setUnread(0)); }, []);
-  return <aside className="sidebar"><div className="brand"><div className="brand-mark">i</div><div><strong>iPlanet</strong><small>Customer care</small></div></div><nav>{links.map(([to, Icon, label]) => <NavLink key={to} to={to} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}><Icon size={17} />{label}{label === 'Notifications' && unread > 0 && <span className="nav-count">{unread}</span>}</NavLink>)}</nav><div className="sidebar-foot"><div className="secure"><ShieldCheck size={16} /><span>Secure workspace<small>Customer portal</small></span></div><button className="logout" onClick={() => { localStorage.clear(); navigate('/login'); }}><LogOut size={16} />Sign out</button></div></aside>;
+export const corporatePortal = {
+  key: 'corporate',
+  portalName: 'Corporate Self-Care',
+  roleLabel: 'Corporate Admin',
+  home: '/corporate/dashboard',
+  notificationsRoute: '/corporate/notifications',
+  accountRoute: '/corporate/profile',
+  accountLabel: 'Profile',
+  fetchUnread: getNotificationUnreadCount,
+  search: { route: '/corporate/devices', placeholder: 'Search devices, serials, employees' },
+  groups: [
+    { label: 'Overview', items: [{ to: '/corporate/dashboard', icon: LayoutDashboard, label: 'Dashboard' }] },
+    { label: 'Operations', items: [
+      { to: '/corporate/devices', icon: Laptop, label: 'Devices' },
+      { to: '/corporate/unassigned-devices', icon: UserRoundPlus, label: 'Unassigned Devices' },
+      { to: '/corporate/service-requests', icon: Ticket, label: 'Service Requests' },
+    ] },
+    { label: 'Service', items: [
+      { to: '/corporate/raise-request', icon: FilePlus2, label: 'Raise Request' },
+      { to: '/corporate/warranty', icon: ShieldCheck, label: 'Warranty & Coverage' },
+    ] },
+    { label: 'Communication', items: [
+      { to: '/corporate/notifications', icon: Bell, label: 'Notifications', badge: 'unread' },
+      { to: '/corporate/reviews', icon: MessageSquareText, label: 'Reviews' },
+    ] },
+    { label: 'Support', items: [{ action: 'ai', icon: Sparkles, label: 'AI Support' }] },
+    { label: 'Account', items: [{ to: '/corporate/profile', icon: UserRound, label: 'Profile' }] },
+  ],
+};
+
+export function Shell({ children, title, crumbs }) {
+  return <AppShell config={corporatePortal} title={title} crumbs={crumbs}>{children}</AppShell>;
 }
-export function Header({ title, eyebrow }) { const navigate = useNavigate(); const [unread, setUnread] = useState(0); useEffect(() => { getNotificationUnreadCount().then(result => setUnread(result.count)).catch(() => setUnread(0)); }, [title]); return <header className="topbar"><div><p className="eyebrow">{eyebrow || 'Customer self-care portal'}</p><h1>{title}</h1></div><div className="top-actions"><button className="icon-button" title="Notifications" onClick={() => navigate('/corporate/notifications')}><Bell size={18} />{unread > 0 && <span className="notification-count">{unread}</span>}</button><div className="avatar">AK</div><div className="profile-label"><strong>Arun Kumar</strong><span>IT Admin</span></div></div></header>; }
-export function Shell({ children, title, eyebrow }) { return <div className="app-shell"><Sidebar /><main className="main"><Header title={title} eyebrow={eyebrow} />{children}</main></div>; }
-// Route titles belong to the shell header. PageTitle retains the page-specific
-// description and actions, and only renders a title for a genuinely distinct
-// piece of content (such as a ticket identifier).
-export function PageTitle({ title, description, action, showTitle = false }) { return <div className="page-title"><div>{showTitle && <h2>{title}</h2>}{description && <p>{description}</p>}</div>{action}</div>; }
-export function Empty({ message }) { return <div className="empty"><Search size={20} /><p>{message}</p></div>; }
-export function RowLink({ children, to }) { return <NavLink className="row-link" to={to}>{children}<ChevronRight size={16} /></NavLink>; }
-export function Metric({ label, value, note, accent }) { return <div className="metric"><div className={`metric-icon ${accent || ''}`}><ArrowUpRight size={16} /></div><span>{label}</span><strong>{value}</strong><small>{note}</small></div>; }
+
+// Compatibility exports for modules that still import the previous helpers.
+export const Badge = UIBadge;
+export function PageTitle({ title, description, action, showTitle = false }) { return <PageHeader title={showTitle ? title : undefined} description={description} actions={action} />; }
+export function Empty({ message }) { return <EmptyState compact title={message} />; }
+export function RowLink({ children, to }) { return <RowAction to={to} label={children} />; }
+export function Metric({ label, value, note }) { return <KPI label={label} value={value} hint={note} />; }
