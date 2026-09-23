@@ -1,13 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ExternalLink, Link2, MapPinned, RefreshCcw } from 'lucide-react';
 import { ServiceShell } from './components';
-import { ReviewTabs } from './InternalReviews';
+import { GoogleBadge, GoogleReviewCard, ReviewTabs, flattenGoogleReviews, getCachedGoogleSync, setCachedGoogleSync } from './reviewShared';
 import { getGoogleAccounts, getGoogleBusinessHealth, getGoogleLocations, getGoogleReviewsSync, getServiceCentres, mapGoogleLocation, startGoogleBusinessAuth } from './api';
-import { Avatar, Badge, Button, Card, EmptyState, Field, InlineAlert, PageHeader, Skeleton, Stars, formatDate, friendlyError } from '../ui';
-
-function GoogleBadge() {
-  return <Badge tone="google"><span className="google-g" aria-hidden="true">G</span>Google</Badge>;
-}
+import { Badge, Button, Card, EmptyState, Field, InlineAlert, PageHeader, Skeleton, friendlyError } from '../ui';
 
 export function GoogleBusinessProfile() {
   const [status, setStatus] = useState(null);
@@ -18,7 +14,7 @@ export function GoogleBusinessProfile() {
   const [selectedLocation, setSelectedLocation] = useState('');
   const [selectedServiceCentre, setSelectedServiceCentre] = useState('');
   const [mapping, setMapping] = useState(null);
-  const [syncResult, setSyncResult] = useState(null);
+  const [syncResult, setSyncResult] = useState(getCachedGoogleSync);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState('');
 
@@ -66,13 +62,13 @@ export function GoogleBusinessProfile() {
   };
   const syncReviews = async () => {
     setSyncing(true);
-    try { setSyncResult(await getGoogleReviewsSync()); setError(''); }
+    try { const result = await getGoogleReviewsSync(); setCachedGoogleSync(result); setSyncResult(result); setError(''); }
     catch (syncError) { setError(friendlyError(syncError, 'Unable to sync Google reviews.')); }
     finally { setSyncing(false); }
   };
 
   const centreName = id => serviceCentres.find(item => String(item._id) === String(id))?.name;
-  const reviews = useMemo(() => (syncResult?.results || []).flatMap(result => (result.reviews || []).filter(Boolean).map(review => ({ ...review, serviceCentre: centreName(result.serviceCentreId) }))).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)), [syncResult, serviceCentres]); // eslint-disable-line react-hooks/exhaustive-deps
+  const reviews = useMemo(() => flattenGoogleReviews(syncResult, centreName).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)), [syncResult, serviceCentres]); // eslint-disable-line react-hooks/exhaustive-deps
   const connected = status?.connected;
 
   return <ServiceShell title="Google Reviews" crumbs={[{ label: 'Reviews', to: '/service/reviews' }, { label: 'Google reviews' }]}>
@@ -100,15 +96,7 @@ export function GoogleBusinessProfile() {
           {!syncResult ? <EmptyState compact title="No reviews synced in this session" description="Sync to retrieve the latest reviews from Google." />
             : <div className="stack-16">
               {syncResult.results?.some(result => result.error) && <InlineAlert tone="warning" title="Some locations could not be synced">{syncResult.results.filter(result => result.error).map(result => result.locationName).join(', ')}</InlineAlert>}
-              {reviews.length ? <div className="review-cards">{reviews.map((review, index) => <article className="review-card" key={review.googleReviewId || index}>
-                <div className="review-card-head"><GoogleBadge /><Stars rating={review.rating} /></div>
-                <div className="review-author"><Avatar name={review.authorName} size={32} /><div><strong>{review.authorName}</strong><span>{review.locationName || review.serviceCentre || 'Google Business Profile'}</span></div></div>
-                {review.comment ? <p className="review-text">{review.comment}</p> : <p className="text-muted text-small">Rating only, no written review.</p>}
-                <div className="review-card-foot">
-                  <span>Published {formatDate(review.createdAt)}</span>
-                  <a className="row-action" href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(review.locationName || review.serviceCentre || '')}`} target="_blank" rel="noopener noreferrer">View on Google<ExternalLink size={13} aria-hidden="true" /></a>
-                </div>
-              </article>)}</div> : <EmptyState compact title="No Google reviews returned" description={syncResult.results?.length ? 'The mapped locations have no reviews yet.' : 'Map a Google location to a service centre first.'} />}
+              {reviews.length ? <div className="review-cards">{reviews.map((review, index) => <GoogleReviewCard key={review.googleReviewId || index} review={review} />)}</div> : <EmptyState compact title="No Google reviews returned" description={syncResult.results?.length ? 'The mapped locations have no reviews yet.' : 'Map a Google location to a service centre first.'} />}
             </div>}
         </Card>
 

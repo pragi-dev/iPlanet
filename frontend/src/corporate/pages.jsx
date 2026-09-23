@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { CalendarClock, CheckCircle2, ChevronRight, CircleCheck, Clock3, FilePlus2, KeyRound, Laptop, LogOut, Package, Search, ShieldAlert, ShieldCheck, Star, Ticket, TriangleAlert, UserRoundPlus, Wrench } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, ChevronRight, Clock3, FilePlus2, KeyRound, Laptop, LogOut, Search, ShieldCheck, Star, Ticket, UserRoundPlus } from 'lucide-react';
 import { Shell } from './components';
 import { getCoverage, getDashboard, getDevice, getDevices, getMyReviews, getProfile, getTickets } from './api';
 import {
-  Avatar, Badge, BarList, Button, Card, ColumnChart, CoverageTiles, DeviceIcon, EmptyState, ErrorState, FilterBar, FilterSelect, InfoList, KPI, KPIGrid,
-  PageHeader, PageSkeleton, RowAction, SearchInput, SectionHeader, TableCard, formatDate, formatDateTime, formatRelative, friendlyError, greeting,
-  monthlyVolume, readSessionUser, slaLabel, todayLabel, useAsync,
+  Avatar, Badge, Button, CoverageTiles, DeviceIcon, EmptyState, ErrorState, FilterBar, FilterSelect, InfoList, KPI, KPIGrid,
+  PageHeader, PageSkeleton, RowAction, SearchInput, Section, SectionHeader, Surface, TableCard, formatDate, formatDateTime, formatRelative, friendlyError, greeting,
+  readSessionUser, slaLabel, statusTone, todayLabel, useAsync,
 } from '../ui';
 
 const ticketStatuses = ['Open', 'Engineer Assigned', 'Engineer Accepted', 'In Progress', 'Waiting for Parts', 'Completed', 'Closed'];
@@ -39,85 +39,90 @@ export function Dashboard() {
   const coverage = useAsync(getCoverage, []);
   const reviews = useAsync(getMyReviews, []);
 
-  if (main.loading && !main.data) return <Shell title="Dashboard"><PageSkeleton kpis={5} /></Shell>;
+  if (main.loading && !main.data) return <Shell title="Dashboard"><PageSkeleton kpis={4} /></Shell>;
   if (main.error) return <Shell title="Dashboard"><PageHeader title="Dashboard" /><div className="card"><ErrorState title="Unable to load your dashboard" message={friendlyError(main.error)} onRetry={main.reload} /></div></Shell>;
 
-  const { stats: s, locations, tickets } = main.data;
+  const { stats: s, tickets } = main.data;
   const firstName = (user.name || '').split(' ')[0];
-  const waitingParts = tickets.filter(ticket => ticket.status === 'Waiting for Parts').length;
-  // Attention counts only active requests; closed tickets keep their historical SLA state.
   const activeTickets = tickets.filter(ticket => activeStatuses.includes(ticket.status));
-  const activeCount = state => activeTickets.filter(ticket => slaLabel(ticket) === state || ticket.escalationStatus === state).length;
-  const breached = activeCount('SLA Breached');
-  const escalated = activeTickets.filter(ticket => ticket.escalationStatus === 'Escalated').length;
-  const atRisk = activeCount('At Risk');
+  const needsAttention = activeTickets.filter(ticket => ['At Risk', 'SLA Breached', 'Escalated'].includes(slaLabel(ticket)) || ['At Risk', 'SLA Breached', 'Escalated'].includes(ticket.escalationStatus));
   const devices = coverage.data?.devices || [];
+  const summary = coverage.data?.summary || {};
   const unassigned = devices.filter(device => device.deviceAllocationStatus === 'Unassigned').length;
   const reviewedIds = new Set((reviews.data || []).map(review => String(review.ticketId?._id || review.ticketId)));
   const awaitingReview = reviews.data ? tickets.filter(ticket => ticket.status === 'Closed' && !reviewedIds.has(String(ticket._id))).length : 0;
   const attention = [
-    breached > 0 && { to: '/corporate/service-requests?sla=SLA%20Breached', tone: 'critical', icon: ShieldAlert, title: 'SLA breached', detail: 'Active requests past their resolution target', count: breached },
-    escalated > 0 && { to: '/corporate/service-requests?sla=Escalated', tone: 'critical', icon: TriangleAlert, title: 'Escalated requests', detail: 'Escalated to iPlanet service management', count: escalated },
-    atRisk > 0 && { to: '/corporate/service-requests?sla=At%20Risk', tone: 'warning', icon: Clock3, title: 'SLA at risk', detail: 'Approaching their resolution target', count: atRisk },
-    waitingParts > 0 && { to: '/corporate/service-requests?status=Waiting%20for%20Parts', tone: 'warning', icon: Package, title: 'Waiting for parts', detail: 'Repairs paused until parts arrive', count: waitingParts },
-    unassigned > 0 && { to: '/corporate/unassigned-devices', tone: 'info', icon: UserRoundPlus, title: 'Unassigned devices', detail: 'Ready to be assigned to an employee', count: unassigned },
-    coverage.data?.summary?.expiringSoon > 0 && { to: '/corporate/warranty', tone: 'warning', icon: CalendarClock, title: 'Coverage expiring soon', detail: 'Warranty or AMC ending shortly', count: coverage.data.summary.expiringSoon },
+    needsAttention.length > 0 && { to: '/corporate/service-requests', tone: needsAttention.some(ticket => slaLabel(ticket) === 'SLA Breached' || ticket.escalationStatus === 'SLA Breached') ? 'critical' : 'warning', icon: Clock3, title: 'Requests outside SLA targets', detail: 'At risk, escalated or breached', count: needsAttention.length },
+    unassigned > 0 && { to: '/corporate/unassigned-devices', tone: 'info', icon: UserRoundPlus, title: 'Devices awaiting assignment', detail: 'Ready to be assigned to an employee', count: unassigned },
     awaitingReview > 0 && { to: '/corporate/reviews', tone: 'info', icon: Star, title: 'Awaiting your review', detail: 'Closed requests you can rate', count: awaitingReview },
   ].filter(Boolean);
+  const pct = (part, total) => (total ? Math.round((part / total) * 100) : 0);
+  const recent = [...tickets].sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt)).slice(0, 5);
 
   return <Shell title="Dashboard">
     <div className="dashboard-intro">
       <div className="page-header-text">
         <p className="eyebrow">{todayLabel()}</p>
-        <h1 className="page-title">{greeting()}{firstName ? `, ${firstName}` : ''}</h1>
-        <p className="page-description">Here's what's happening across your devices and service requests.</p>
+        <h1 className="page-title">{greeting()}{firstName ? `, ${firstName}` : ''}.</h1>
+        <p className="page-description">Here's what's happening with your organization's devices and services.</p>
       </div>
       <Button variant="primary" icon={FilePlus2} to="/corporate/raise-request">Raise request</Button>
     </div>
 
-    <KPIGrid columns={5}>
-      <KPI label="Total devices" value={s.totalDevices} icon={Laptop} to="/corporate/devices" hint={coverage.data ? `${unassigned} unassigned` : undefined} />
-      <KPI label="Open requests" value={s.openTickets} icon={Ticket} tone="info" to="/corporate/service-requests?status=Open" />
-      <KPI label="In progress" value={s.inProgress} icon={Wrench} tone="info" to="/corporate/service-requests?status=In%20Progress" />
-      <KPI label="Closed" value={s.closedTickets} icon={CircleCheck} tone="success" to="/corporate/service-requests?status=Closed" hint={s.completedTickets ? `${s.completedTickets} completed, pending closure` : undefined} />
-      <KPI label="Warranty active" value={s.warrantyDevices} icon={ShieldCheck} tone="success" to="/corporate/warranty" hint={`${s.amcDevices} with active AMC`} />
+    <KPIGrid columns={4}>
+      <KPI label="Open requests" value={s.openTickets} to="/corporate/service-requests?status=Open" tone={needsAttention.length ? 'warning' : 'neutral'} hint={needsAttention.length ? `${needsAttention.length} outside SLA targets` : 'All within SLA'} />
+      <KPI label="In progress" value={s.inProgress} to="/corporate/service-requests?status=In%20Progress" hint="With iPlanet engineers" />
+      <KPI label="Completed" value={s.completedTickets + s.closedTickets} to="/corporate/service-requests?status=Closed" hint={`${s.closedTickets} closed`} />
+      <KPI label="Devices" value={s.totalDevices} to="/corporate/devices" hint={coverage.data ? `${unassigned} unassigned` : undefined} />
     </KPIGrid>
 
-    <section aria-labelledby="quick-actions" className="stack-12">
+    <section className="page-section" aria-labelledby="quick-actions">
       <SectionHeader id="quick-actions" title="Quick actions" />
       <div className="quick-actions">
         {[
-          ['/corporate/raise-request', FilePlus2, 'Raise request', 'Service, buyback, e-waste'],
+          ['/corporate/raise-request', FilePlus2, 'Raise request', 'Service, health camp, buyback or e-waste'],
           ['/corporate/devices', Search, 'Find device', 'Search by serial or employee'],
-          ['/corporate/unassigned-devices', UserRoundPlus, 'Assign device', 'Allocate to an employee'],
-          ['/corporate/service-requests', Ticket, 'Track request', 'Follow service progress'],
-          ['/corporate/warranty', ShieldCheck, 'Check coverage', 'Warranty and AMC'],
-        ].map(([to, Icon, label, hint]) => <Link key={to} to={to} className="quick-action"><span className="quick-action-icon" aria-hidden="true"><Icon size={16} /></span><span>{label}<small>{hint}</small></span></Link>)}
+          ['/corporate/service-requests', Ticket, 'Track service', 'Follow every request'],
+          ['/corporate/warranty', ShieldCheck, 'Check coverage', 'Warranty and AMC status'],
+        ].map(([to, Icon, label, hint]) => <Link key={to} to={to} className="quick-action"><span className="quick-action-icon" aria-hidden="true"><Icon size={17} /></span><span>{label}<small>{hint}</small></span></Link>)}
       </div>
     </section>
 
-    <div className="grid-2">
-      <Card flush title="Needs attention" description="Items that may need action from your team">
-        {coverage.loading || reviews.loading ? <div className="card-body"><div className="skeleton" style={{ height: 120 }} /></div>
-          : attention.length ? <div className="attention-list">{attention.map(item => <AttentionRow key={item.title} {...item} />)}</div>
-          : <div className="all-clear"><CheckCircle2 size={18} aria-hidden="true" />Nothing needs your attention right now.</div>}
-        {coverage.error && <ErrorState compact title="Coverage alerts unavailable" message={friendlyError(coverage.error)} onRetry={coverage.reload} />}
-      </Card>
-      <Card flush title="Recent service activity" actions={<Button variant="ghost" size="sm" to="/corporate/service-requests">View all</Button>}>
-        {tickets.length ? <ActivityList tickets={tickets.slice(0, 6)} base="/corporate/service-requests" /> : <EmptyState compact icon={Ticket} title="No service requests yet" description="When a request is raised, it will appear here." action={<Button variant="primary" size="sm" to="/corporate/raise-request">Raise request</Button>} />}
-      </Card>
-    </div>
+    <section className="page-section" aria-labelledby="active-service">
+      <SectionHeader id="active-service" title="Active service" description={activeTickets.length ? `${activeTickets.length} request${activeTickets.length === 1 ? '' : 's'} in progress with iPlanet Service` : undefined} actions={<Button variant="ghost" size="sm" to="/corporate/service-requests">View all</Button>} />
+      <div className="card card-flush">
+        {attention.length > 0 && <div className="attention-list" style={{ borderBottom: '1px solid var(--color-divider)' }}>{attention.map(item => <AttentionRow key={item.title} {...item} />)}</div>}
+        {activeTickets.length ? <ul className="activity-list">{activeTickets.slice(0, 6).map(ticket => <li key={ticket._id}><Link to={`/corporate/service-requests/${ticket._id}`} className="activity-item">
+          <span className="activity-title"><span>{ticket.deviceId?.model || 'Device'}</span><span className="mono">{ticket.ticketId}</span></span>
+          <span className="activity-sub">{[ticket.issueType, ticket.assignedEngineer ? `Engineer ${ticket.assignedEngineer}` : 'Awaiting engineer'].filter(Boolean).join(' · ')}</span>
+          <span className="activity-side"><Badge dot>{ticket.status}</Badge>{slaLabel(ticket) !== 'Healthy' && <Badge>{slaLabel(ticket)}</Badge>}</span>
+        </Link></li>)}</ul>
+          : <EmptyState compact icon={CheckCircle2} title="No active service requests" description="Requests you raise will be tracked here until they're closed." action={<Button size="sm" to="/corporate/raise-request">Raise request</Button>} />}
+      </div>
+    </section>
 
-    <div className="grid-main-side">
-      <Card title="Service requests by month" description={`Requests raised by your organization in ${new Date().getFullYear()}`}>
-        <ColumnChart data={monthlyVolume(tickets)} dataKey="tickets" nameKey="month" seriesName="Requests" emptyText="No requests raised this year." />
-      </Card>
-      <Card title="Devices by location" description="Where your registered devices are deployed">
-        <BarList data={locations} emptyText="No devices registered yet." />
-      </Card>
-    </div>
+    <section className="page-section" aria-labelledby="coverage-overview">
+      <SectionHeader id="coverage-overview" title="Coverage" description={coverage.data ? `${summary.total} registered device${summary.total === 1 ? '' : 's'}` : undefined} actions={<Button variant="ghost" size="sm" to="/corporate/warranty">View coverage</Button>} />
+      <div className="card">
+        {coverage.loading && !coverage.data ? <div className="card-body"><div className="skeleton" style={{ height: 88 }} /></div>
+          : coverage.error ? <ErrorState compact title="Coverage unavailable" message={friendlyError(coverage.error)} onRetry={coverage.reload} />
+          : <div className="coverage-summary">
+            <div><span>Warranty active</span><strong>{summary.warrantyActive}</strong><span>{pct(summary.warrantyActive, summary.total)}% of devices</span><div className="meter" aria-hidden="true"><i style={{ width: `${pct(summary.warrantyActive, summary.total)}%` }} /></div></div>
+            <div><span>AMC active</span><strong>{summary.amcActive}</strong><span>{pct(summary.amcActive, summary.total)}% of devices</span><div className="meter" aria-hidden="true"><i style={{ width: `${pct(summary.amcActive, summary.total)}%` }} /></div></div>
+            <div><span>Expiring soon</span><strong style={summary.expiringSoon ? { color: 'var(--color-warning-text)' } : undefined}>{summary.expiringSoon}</strong><span>{summary.expired ? `${summary.expired} already expired` : 'None expired'}</span></div>
+          </div>}
+      </div>
+    </section>
+
+    <section className="page-section" aria-labelledby="recent-activity">
+      <SectionHeader id="recent-activity" title="Recent activity" />
+      <div className="card card-flush">
+        {recent.length ? <ActivityList tickets={recent} base="/corporate/service-requests" /> : <EmptyState compact icon={Ticket} title="No service activity yet" description="When a request is raised, its progress appears here." />}
+      </div>
+    </section>
   </Shell>;
 }
+
 
 function TicketTable({ tickets, base = '/corporate/service-requests' }) {
   const navigate = useNavigate();
@@ -170,7 +175,7 @@ export function Devices() {
       <table className="table">
         <thead><tr><th>Device</th><th>Serial number</th><th>Employee</th><th>Location</th><th>Warranty</th><th>AMC</th><th>Status</th><th><span className="sr-only">Action</span></th></tr></thead>
         <tbody>{devices.map(device => <tr key={device._id} className="row-clickable" onClick={event => { if (!event.target.closest('a')) navigate(`/corporate/devices/${device._id}`); }}>
-          <td><div className="person-cell"><span className="asset-icon" style={{ width: 32, height: 32, borderRadius: 8 }}><DeviceIcon type={device.deviceType} model={device.model} size={16} /></span><div><Link className="cell-link" to={`/corporate/devices/${device._id}`}>{device.model}</Link><span className="cell-sub">{[device.assetId, device.deviceType].filter(Boolean).join(' · ')}</span></div></div></td>
+          <td><div className="person-cell"><span className="thumb"><DeviceIcon type={device.deviceType} model={device.model} size={16} /></span><div><Link className="cell-link" to={`/corporate/devices/${device._id}`}>{device.model}</Link><span className="cell-sub">{[device.assetId, device.deviceType].filter(Boolean).join(' · ')}</span></div></div></td>
           <td className="mono cell-nowrap">{device.serialNumber}</td>
           <td>{device.employeeName ? <><span className="cell-primary">{device.employeeName}</span><span className="cell-sub">{[device.department, device.employeeId].filter(Boolean).join(' · ')}</span></> : <span className="text-muted">Not assigned</span>}</td>
           <td>{device.location || '—'}</td>
@@ -184,12 +189,13 @@ export function Devices() {
   </Shell>;
 }
 
+
 export function DeviceDetail() {
   const { id } = useParams();
   const user = readSessionUser();
   const state = useAsync(() => Promise.all([getDevice(id), getTickets()]).then(([device, all]) => ({ device, tickets: all.filter(ticket => String(ticket.deviceId?._id || ticket.deviceId) === id) })), [id]);
   const crumbs = [{ label: 'Devices', to: '/corporate/devices' }, { label: state.data?.device?.model || 'Device details' }];
-  if (state.loading && !state.data) return <Shell title="Device details" crumbs={crumbs}><PageSkeleton variant="detail" /></Shell>;
+  if (state.loading && !state.data) return <Shell title="Device details" crumbs={crumbs}><PageSkeleton variant="detail" kpis={0} /></Shell>;
   if (state.error) return <Shell title="Device details" crumbs={crumbs}><PageHeader title="Device details" back={{ to: '/corporate/devices', label: 'Devices' }} /><div className="card"><ErrorState title="Unable to load this device" message={friendlyError(state.error)} onRetry={state.reload} /></div></Shell>;
 
   const { device, tickets } = state.data;
@@ -197,14 +203,15 @@ export function DeviceDetail() {
   const unassigned = device.deviceAllocationStatus === 'Unassigned';
   const allocation = activeTicket ? 'Under Service' : unassigned ? 'Unassigned' : 'Assigned';
   return <Shell title={device.model} crumbs={crumbs}>
-    <div className="page-header">
-      <Link className="back-link" to="/corporate/devices"><ChevronRight size={15} style={{ transform: 'rotate(180deg)' }} aria-hidden="true" />Devices</Link>
+    <div className="page-header asset-hero">
+      <Link className="back-link" to="/corporate/devices"><ChevronLeft size={16} aria-hidden="true" />Devices</Link>
       <div className="asset-header">
         <div className="asset-identity">
-          <span className="asset-icon"><DeviceIcon type={device.deviceType} model={device.model} size={26} /></span>
+          <span className="asset-icon"><DeviceIcon type={device.deviceType} model={device.model} size={30} /></span>
           <div className="page-header-text">
+            <p className="eyebrow">Corporate device{device.deviceType ? ` · ${device.deviceType}` : ''}</p>
             <h1 className="page-title">{device.model}</h1>
-            <div className="page-meta"><span>Serial <span className="mono">{device.serialNumber}</span></span><span className="meta-sep" /><span>{device.assetId}</span><span className="meta-sep" /><Badge dot tone={allocation === 'Under Service' ? 'warning' : undefined}>{allocation}</Badge></div>
+            <div className="page-meta"><span>Serial <span className="mono">{device.serialNumber}</span></span><span className="meta-sep" /><Badge dot tone={allocation === 'Under Service' ? 'warning' : allocation === 'Unassigned' ? 'neutral' : 'success'}>{allocation}</Badge></div>
           </div>
         </div>
         <div className="page-actions">
@@ -215,31 +222,30 @@ export function DeviceDetail() {
       </div>
     </div>
 
-    <div className="summary-strip">
-      <div><span className="summary-label">Employee</span><span className="summary-value">{device.employeeName || 'Not assigned'}</span></div>
-      <div><span className="summary-label">Location</span><span className="summary-value">{device.location || '—'}</span></div>
-      <div><span className="summary-label">Warranty</span><span className="summary-value"><Badge>{device.warrantyStatus || 'Not available'}</Badge></span></div>
-      <div><span className="summary-label">AMC</span><span className="summary-value"><Badge>{device.amcStatus || 'Not available'}</Badge></span></div>
-    </div>
-
-    <div className="detail-layout">
-      <div className="detail-main">
-        <Card title="Device information">
-          <InfoList columns={2} items={[['Model', device.model], ['Device type', device.deviceType], ['Serial number', <span className="mono">{device.serialNumber}</span>], ['Asset ID', device.assetId], ['Purchase date', formatDate(device.purchaseDate, '')], ['Device status', device.deviceStatus], ['Corporate', user.company], ['Last service', formatDate(device.lastServiceDate, '')]]} />
-        </Card>
-        <Card title="Assignment">
-          <InfoList columns={2} items={[['Employee', device.employeeName], ['Employee ID', device.employeeId], ['Department', device.department], ['Location', device.location]]} />
-        </Card>
-        <Card flush title="Service history" description="Every service request raised for this device">
-          {tickets.length ? <ActivityList tickets={tickets} base="/corporate/service-requests" /> : <EmptyState compact icon={Ticket} title="No service history" description="Requests raised for this device will appear here." action={<Button size="sm" to={`/corporate/raise-request?device=${device._id}`}>Raise request</Button>} />}
-        </Card>
-      </div>
-      <aside className="detail-side">
-        <Card title="Coverage"><CoverageTiles device={device} /></Card>
-      </aside>
-    </div>
+    <Surface label="Device profile">
+      <Section title="Device" description="Hardware and purchase record">
+        <InfoList columns={2} items={[['Model', device.model], ['Serial number', <span className="mono">{device.serialNumber}</span>], ['Device type', device.deviceType], ['Asset ID', device.assetId], ['Purchase date', formatDate(device.purchaseDate, '')], ['Location', device.location], ['Device status', device.deviceStatus], ['Corporate', user.company]]} />
+      </Section>
+      <Section title="Current assignment" description={unassigned ? 'This device is not assigned to an employee.' : 'The employee using this device'} actions={unassigned ? <Button size="sm" icon={UserRoundPlus} to="/corporate/unassigned-devices">Assign device</Button> : null}>
+        <InfoList columns={2} items={[['Employee', device.employeeName], ['Employee ID', device.employeeId], ['Department', device.department], ['Location', device.location]]} />
+      </Section>
+      <Section title="Coverage" description="Warranty and AMC validity">
+        <CoverageTiles device={device} />
+      </Section>
+      <Section title="Service history" description={tickets.length ? `${tickets.length} request${tickets.length === 1 ? '' : 's'} raised for this device` : 'No requests raised yet'} actions={<Button size="sm" variant="ghost" to={`/corporate/raise-request?device=${device._id}`}>Raise request</Button>}>
+        {tickets.length ? <ol className="timeline">{tickets.map((ticket, index) => <li key={ticket._id} className={`timeline-item timeline-${statusTone(ticket.status)} ${index === 0 ? 'timeline-latest' : ''}`}>
+          <span className="timeline-marker" aria-hidden="true" />
+          <div className="timeline-content">
+            <Link className="timeline-title" to={`/corporate/service-requests/${ticket._id}`}>{ticket.issueType || 'Service request'}</Link>
+            <p className="timeline-text"><span className="mono">{ticket.ticketId}</span> · {ticket.status}{ticket.assignedEngineer ? ` · ${ticket.assignedEngineer}` : ''}</p>
+            <p className="timeline-meta"><time dateTime={ticket.createdAt}>{formatDateTime(ticket.createdAt)}</time></p>
+          </div>
+        </li>)}</ol> : <p className="text-muted">Service requests raised for this device will appear here.</p>}
+      </Section>
+    </Surface>
   </Shell>;
 }
+
 
 export function Tickets() {
   const [params] = useSearchParams();
@@ -282,6 +288,7 @@ function sessionExpiry() {
   } catch { return null; }
 }
 
+
 export function Profile() {
   const navigate = useNavigate();
   const state = useAsync(getProfile, []);
@@ -290,24 +297,22 @@ export function Profile() {
   const profile = state.data;
   const company = profile.companyId && typeof profile.companyId === 'object' ? profile.companyId : {};
   const expires = sessionExpiry();
-  const sections = [['personal', 'Personal information'], ['contact', 'Contact'], ['role', 'Role'], ['organization', 'Organization'], ['security', 'Security']];
   return <Shell title="Profile">
-    <PageHeader title="Profile" description="Your account and organization details." />
-    <div className="settings-layout">
-      <nav className="settings-nav" aria-label="Profile sections">{sections.map(([id, label]) => <a key={id} href={`#${id}`}>{label}</a>)}</nav>
-      <div className="settings-sections">
-        <div className="card"><div className="card-body profile-banner">
-          <Avatar name={profile.name} size={56} tone="accent" />
-          <div><h2>{profile.name}</h2><p>{profile.company || company.name} · Corporate Admin</p></div>
-        </div></div>
-        <div id="personal" className="settings-section"><Card title="Personal information"><InfoList columns={2} items={[['Full name', profile.name], ['Email', profile.email]]} /></Card></div>
-        <div id="contact" className="settings-section"><Card title="Contact"><InfoList columns={2} items={[['Email', profile.email], ['Phone', profile.phone]]} /></Card></div>
-        <div id="role" className="settings-section"><Card title="Role" description="Your access level in iPlanetCare"><InfoList items={[['Role', <Badge tone="info">Corporate Admin</Badge>], ['Access', 'Devices, service requests, coverage, notifications and reviews for your organization']]} /></Card></div>
-        <div id="organization" className="settings-section"><Card title="Organization"><InfoList columns={2} items={[['Company', profile.company || company.name], ['Company ID', company.companyId], ['Primary location', profile.primaryLocation], ['Managed devices', profile.numberOfDevices], ['Company contact', company.contactName], ['Contact email', company.contactEmail]]} /></Card></div>
-        <div id="security" className="settings-section"><Card title="Security" actions={<Button icon={LogOut} onClick={() => { localStorage.clear(); navigate('/login', { replace: true }); }}>Sign out</Button>}>
-          <InfoList items={[['Sign-in method', <span className="row"><KeyRound size={14} aria-hidden="true" />Email and password</span>], ['Current session expires', expires ? formatDateTime(expires) : null]]} />
-        </Card></div>
+    <div className="profile-banner">
+      <Avatar name={profile.name} size={72} tone="accent" />
+      <div className="page-header-text">
+        <h1 className="page-title">{profile.name}</h1>
+        <p className="page-description">{profile.company || company.name} · Corporate Admin</p>
       </div>
     </div>
+    <Surface label="Account">
+      <Section title="Personal information"><InfoList columns={2} items={[['Full name', profile.name], ['Email', profile.email]]} /></Section>
+      <Section title="Contact"><InfoList columns={2} items={[['Email', profile.email], ['Phone', profile.phone]]} /></Section>
+      <Section title="Role" description="Your access in iPlanetCare"><InfoList items={[['Role', <Badge tone="info">Corporate Admin</Badge>], ['Access', 'Devices, service requests, coverage, notifications and reviews for your organization']]} /></Section>
+      <Section title="Organization"><InfoList columns={2} items={[['Company', profile.company || company.name], ['Company ID', company.companyId], ['Primary location', profile.primaryLocation], ['Managed devices', profile.numberOfDevices], ['Company contact', company.contactName], ['Contact email', company.contactEmail]]} /></Section>
+      <Section title="Security" actions={<Button size="sm" icon={LogOut} onClick={() => { localStorage.clear(); navigate('/login', { replace: true }); }}>Sign out</Button>}>
+        <InfoList items={[['Sign-in method', <span className="row"><KeyRound size={14} aria-hidden="true" />Email and password</span>], ['Current session expires', expires ? formatDateTime(expires) : null]]} />
+      </Section>
+    </Surface>
   </Shell>;
 }

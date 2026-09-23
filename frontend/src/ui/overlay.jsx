@@ -84,13 +84,23 @@ export function Modal({ title, eyebrow, description, onClose, children, footer, 
         </div>
         <button type="button" className="icon-button ghost" aria-label="Close dialog" onClick={onClose}><X size={18} /></button>
       </header>
-      <div className="modal-body">{children}</div>
+      {children && <div className="modal-body">{children}</div>}
       {footer && <footer className="modal-footer">{footer}</footer>}
     </Element>
   </ModalLayer>;
 }
 
-export function Drawer({ title, eyebrow, icon, onClose, children, footer, actions, width = 440, className = '', label }) {
+export function ConfirmDialog({ title, description, confirmLabel = 'Confirm', tone = 'primary', busy = false, onConfirm, onClose, children }) {
+  return <Modal size="sm" title={title} description={description} onClose={onClose}
+    footer={<>
+      <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+      <button type="button" className={`btn btn-${tone === 'danger' ? 'danger' : 'primary'}`} disabled={busy} onClick={onConfirm} data-autofocus>{busy ? 'Working…' : confirmLabel}</button>
+    </>}>
+    {children}
+  </Modal>;
+}
+
+export function Drawer({ title, eyebrow, icon, onClose, children, footer, actions, width = 420, className = '', label }) {
   const titleId = useId();
   return <ModalLayer className="overlay overlay-drawer" onDismiss={onClose}>
     <aside className={`drawer ${className}`} style={{ '--drawer-width': `${width}px` }} role="dialog" aria-modal="true" aria-labelledby={label ? undefined : titleId} aria-label={label}>

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Edit3, Plus, Siren } from 'lucide-react';
 import { ServiceShell } from './components';
 import { createEscalationRule, getEscalationMatrix, getEscalationRules, getServiceNotifications, markAllServiceNotificationsRead, markServiceNotificationRead, updateEscalationRule } from './api';
-import { Badge, Button, Card, EmptyState, ErrorState, Field, IconButton, InlineAlert, Modal, NotificationCenter, PageHeader, PageSkeleton, friendlyError, useAsync } from '../ui';
+import { Button, ConfirmDialog, EmptyState, ErrorState, Field, InlineAlert, Modal, NotificationCenter, PageHeader, PageSkeleton, SectionHeader, friendlyError, useAsync } from '../ui';
 
 function serviceRoute(item) {
   if (item.action?.route) return item.action.route;
@@ -76,44 +76,44 @@ export function EscalationMatrix() {
   if (state.loading && !state.data) return <ServiceShell title="Escalation Matrix"><PageSkeleton kpis={0} /></ServiceShell>;
   if (state.error) return <ServiceShell title="Escalation Matrix"><PageHeader title="Escalation Matrix" /><div className="card"><ErrorState title="Unable to load the escalation matrix" message={friendlyError(state.error)} onRetry={state.reload} /></div></ServiceShell>;
   const { levels, rules } = state.data;
+  const contactFor = level => levels.find(item => Number(item.level) === Number(level));
   const sortedRules = [...rules].sort((a, b) => a.level - b.level || a.slaThreshold - b.slaThreshold);
 
   return <ServiceShell title="Escalation Matrix">
-    <PageHeader title="Escalation Matrix" description="Who is notified at each escalation level, and the rules that trigger escalation." actions={<Button variant="primary" icon={Plus} onClick={() => setEditing({})}>Add rule</Button>} />
+    <PageHeader title="Escalation Matrix" description="When active tickets escalate, and who is notified at each level." actions={<Button variant="primary" icon={Plus} onClick={() => setEditing({})}>Add rule</Button>} />
     {error && <InlineAlert title={error} action={<Button size="sm" variant="ghost" onClick={() => setError('')}>Dismiss</Button>} />}
 
-    <Card flush title="Escalation levels" description="Contacts notified when a ticket reaches each level">
-      {levels.length ? <div className="table-scroll"><table className="table">
-        <thead><tr><th>Level</th><th>Escalation to</th><th>Contact</th><th>Trigger</th></tr></thead>
-        <tbody>{levels.map(level => <tr key={level.level}>
-          <td><LevelPill level={level.level} /></td>
-          <td className="cell-primary">{level.name}</td>
-          <td><div className="contact-cell"><strong style={{ fontWeight: 500 }}>{level.contactName}</strong><span>{level.email}</span></div></td>
-          <td>{level.trigger}</td>
-        </tr>)}</tbody>
-      </table></div> : <EmptyState compact icon={Siren} title="No escalation levels configured" />}
-    </Card>
+    <section className="page-section" aria-labelledby="escalation-rules">
+      <SectionHeader id="escalation-rules" title="Escalation rules" description={`${rules.filter(rule => rule.isActive).length} of ${rules.length} active · evaluated against every active ticket's SLA`} />
+      <div className="card card-flush">
+        {sortedRules.length ? <div className="table-scroll"><table className="table">
+          <thead><tr><th>Level</th><th>Trigger</th><th>Response target</th><th>Escalation to</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead>
+          <tbody>{sortedRules.map(rule => { const contact = contactFor(rule.level); return <tr key={rule._id}>
+            <td><LevelPill level={rule.level} /></td>
+            <td><span className="cell-primary">{rule.trigger}</span><span className="cell-sub">{rule.name}{rule.priority && rule.priority !== 'All' ? ` · ${rule.priority} priority` : ' · All priorities'}</span></td>
+            <td className="cell-nowrap"><span className="cell-num">{rule.slaThreshold}%</span> of SLA elapsed{rule.action && <span className="cell-sub" style={{ whiteSpace: 'normal', maxWidth: 260 }}>{rule.action}</span>}</td>
+            <td>{contact ? <div className="contact-cell"><strong style={{ fontWeight: 500 }}>{contact.name}</strong><span>{contact.contactName}{contact.email ? ` · ${contact.email}` : ''}</span></div> : levelNames[rule.level]}</td>
+            <td><span className="row" style={{ flexWrap: 'nowrap' }}><button type="button" role="switch" className="toggle" aria-checked={rule.isActive} aria-label={`${rule.isActive ? 'Disable' : 'Enable'} ${rule.name}`} disabled={toggling === rule._id} onClick={() => rule.isActive ? setConfirmDisable(rule) : toggle(rule)} /><span className="text-small">{rule.isActive ? 'Active' : 'Off'}</span></span></td>
+            <td className="cell-right"><Button size="sm" variant="ghost" icon={Edit3} onClick={() => setEditing(rule)} aria-label={`Edit ${rule.name}`}>Edit</Button></td>
+          </tr>; })}</tbody>
+        </table></div> : <EmptyState icon={Siren} title="No escalation rules configured" description="Add a rule to escalate tickets automatically as they approach their SLA." action={<Button variant="primary" size="sm" icon={Plus} onClick={() => setEditing({})}>Add rule</Button>} />}
+      </div>
+    </section>
 
-    <Card flush title="Escalation rules" description="Evaluated against every active ticket's SLA" actions={<Badge tone="neutral">{`${rules.filter(rule => rule.isActive).length} of ${rules.length} active`}</Badge>}>
-      {sortedRules.length ? <div className="table-scroll"><table className="table">
-        <thead><tr><th>Rule</th><th>Level</th><th>Trigger</th><th>Priority</th><th className="cell-right">SLA threshold</th><th>Action</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead>
-        <tbody>{sortedRules.map(rule => <tr key={rule._id}>
-          <td className="cell-primary">{rule.name}</td>
-          <td><LevelPill level={rule.level} /><span className="cell-sub">{levelNames[rule.level]}</span></td>
-          <td>{rule.trigger}</td>
-          <td>{rule.priority === 'All' ? 'All priorities' : <Badge>{rule.priority}</Badge>}</td>
-          <td className="cell-right cell-num">{rule.slaThreshold}%</td>
-          <td style={{ maxWidth: 260 }}>{rule.action}</td>
-          <td><span className="row" style={{ flexWrap: 'nowrap' }}><button type="button" role="switch" className="toggle" aria-checked={rule.isActive} aria-label={`${rule.isActive ? 'Disable' : 'Enable'} ${rule.name}`} disabled={toggling === rule._id} onClick={() => rule.isActive ? setConfirmDisable(rule) : toggle(rule)} /><span className="text-small">{rule.isActive ? 'Active' : 'Disabled'}</span></span></td>
-          <td className="cell-right"><IconButton label={`Edit ${rule.name}`} icon={Edit3} onClick={() => setEditing(rule)} /></td>
-        </tr>)}</tbody>
-      </table></div> : <EmptyState icon={Siren} title="No escalation rules configured" description="Add a rule to escalate tickets automatically as they approach their SLA." action={<Button variant="primary" size="sm" icon={Plus} onClick={() => setEditing({})}>Add rule</Button>} />}
-    </Card>
+    <section className="page-section" aria-labelledby="escalation-contacts">
+      <SectionHeader id="escalation-contacts" title="Escalation contacts" description="Notified when a ticket reaches each level" />
+      <div className="card card-flush">
+        {levels.length ? <ul className="attention-list">{levels.map(level => <li key={level.level} className="attention-item">
+          <LevelPill level={level.level} />
+          <span className="attention-text"><strong>{level.name}</strong><span>{level.contactName}{level.email ? ` · ${level.email}` : ''}</span></span>
+          <span className="text-small text-muted">{level.trigger}</span>
+        </li>)}</ul> : <EmptyState compact icon={Siren} title="No escalation contacts configured" />}
+      </div>
+    </section>
 
     {editing && <RuleForm rule={editing._id ? editing : null} onClose={() => setEditing(null)} onSaved={saved} />}
-    {confirmDisable && <Modal size="sm" title={`Disable "${confirmDisable.name}"?`} description="Tickets will no longer be escalated by this rule until it is enabled again." onClose={() => setConfirmDisable(null)}
-      footer={<><Button onClick={() => setConfirmDisable(null)}>Cancel</Button><Button variant="danger" disabled={toggling === confirmDisable._id} onClick={() => toggle(confirmDisable)}>Disable rule</Button></>}>
-      <p className="text-muted text-small">Level {confirmDisable.level} · {confirmDisable.trigger} · {confirmDisable.slaThreshold}% threshold</p>
-    </Modal>}
+    {confirmDisable && <ConfirmDialog title={`Turn off "${confirmDisable.name}"?`} description="Tickets won't be escalated by this rule until it's turned on again." confirmLabel="Turn off" tone="danger" busy={toggling === confirmDisable._id} onConfirm={() => toggle(confirmDisable)} onClose={() => setConfirmDisable(null)}>
+      <p className="text-muted text-small">Level {confirmDisable.level} · {confirmDisable.trigger} · {confirmDisable.slaThreshold}% of SLA</p>
+    </ConfirmDialog>}
   </ServiceShell>;
 }

@@ -11,16 +11,17 @@ export const corporatePortal = {
   accountRoute: '/corporate/profile',
   accountLabel: 'Profile',
   fetchUnread: getNotificationUnreadCount,
-  search: { route: '/corporate/devices', placeholder: 'Search devices, serials, employees' },
   groups: [
     { label: 'Overview', items: [{ to: '/corporate/dashboard', icon: LayoutDashboard, label: 'Dashboard' }] },
-    { label: 'Operations', items: [
+    { label: 'Devices', items: [
       { to: '/corporate/devices', icon: Laptop, label: 'Devices' },
       { to: '/corporate/unassigned-devices', icon: UserRoundPlus, label: 'Unassigned Devices' },
-      { to: '/corporate/service-requests', icon: Ticket, label: 'Service Requests' },
     ] },
     { label: 'Service', items: [
+      { to: '/corporate/service-requests', icon: Ticket, label: 'Service Requests' },
       { to: '/corporate/raise-request', icon: FilePlus2, label: 'Raise Request' },
+    ] },
+    { label: 'Coverage', items: [
       { to: '/corporate/warranty', icon: ShieldCheck, label: 'Warranty & Coverage' },
     ] },
     { label: 'Communication', items: [

@@ -66,10 +66,13 @@ export function dayGroup(value) {
 // Maps a backend status string to a restrained visual tone. Text is always
 // rendered alongside the tone so status never relies on colour alone.
 const tones = {
-  success: ['active', 'completed', 'closed', 'resolved', 'healthy', 'covered', 'assigned', 'available', 'in use', 'connected', 'published'],
-  info: ['open', 'engineer assigned', 'engineer accepted', 'in progress', 'internal', 'medium', 'service request', 'service'],
-  warning: ['at risk', 'waiting for parts', 'expiring soon', 'high', 'unassigned', 'pending', 'busy', 'under service', 'sla approaching', 'sla at risk'],
-  critical: ['sla breached', 'escalated', 'critical', 'expired', 'not covered', 'breached', 'critical sla breach', 'high priority sla breach', 'sla breached'],
+  // Semantic only: green = done/healthy, blue = in motion, orange = attention,
+  // red = breached/critical, gray = neutral or finished.
+  success: ['active', 'completed', 'resolved', 'healthy', 'covered', 'assigned', 'available', 'in use', 'connected', 'published'],
+  info: ['open', 'engineer assigned', 'engineer accepted', 'in progress', 'internal'],
+  warning: ['at risk', 'waiting for parts', 'expiring soon', 'high', 'unassigned', 'pending', 'busy', 'under service', 'sla approaching', 'sla at risk', 'escalated'],
+  critical: ['sla breached', 'critical', 'breached', 'critical sla breach', 'high priority sla breach'],
+  neutral: ['closed', 'expired', 'not covered', 'low', 'medium', 'inactive', 'disabled'],
 };
 
 export function statusTone(value) {
@@ -111,4 +114,10 @@ export function friendlyError(error, fallback = 'Something went wrong. Please tr
   // Hide low-level network/stack messages and raw payloads; keep short backend validation messages.
   if (!message || message.length > 180 || /[{}[\]]/.test(message) || /failed to fetch|networkerror|unexpected token|stack|at \w+ \(/i.test(message)) return fallback;
   return message;
+}
+
+// "SLA Breached" already names the SLA; other states read "SLA Healthy", "SLA At Risk".
+export function slaBadgeText(ticket) {
+  const label = slaLabel(ticket);
+  return /^sla\b/i.test(label) ? label : `SLA ${label}`;
 }

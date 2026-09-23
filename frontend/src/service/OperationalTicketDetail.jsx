@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, CheckCircle2, PauseCircle, Phone, Play, UserCheck, XCircle } from 'lucide-react';
+import { ChevronLeft, CheckCircle2, PauseCircle, Phone, Play, UserCheck, XCircle } from 'lucide-react';
 import { ServiceShell } from './components';
 import { assignEngineer, getEngineers, getServiceTicket, mediaUrl, serviceAction } from './api';
 import { CallCustomerPanel } from './CallCustomerPanel';
-import { Badge, Button, Card, CoverageTiles, DeviceIcon, ErrorState, Evidence, Field, InfoList, InlineAlert, Lightbox, Modal, PageSkeleton, SLAPanel, Timeline, Workflow, formatDate, formatDateTime, friendlyError, slaLabel, useAsync } from '../ui';
+import { Badge, Button, Card, ConfirmDialog, CoverageTiles, DeviceIcon, ErrorState, Evidence, Field, InfoList, InlineAlert, Lightbox, PageSkeleton, SLAPanel, Section, Surface, Timeline, Workflow, formatDate, formatDateTime, friendlyError, slaBadgeText, slaLabel, statusTone, useAsync } from '../ui';
 
 // Valid next actions per status, mirroring the backend transition table.
 const actionsByStatus = {
@@ -64,12 +64,12 @@ export function OperationalTicketDetail() {
 
   return <ServiceShell title={ticket.ticketId} crumbs={crumbs}>
     <div className="page-header">
-      <Link className="back-link" to="/service/tickets"><ArrowLeft size={15} aria-hidden="true" />Tickets</Link>
+      <Link className="back-link" to="/service/tickets"><ChevronLeft size={16} aria-hidden="true" />Tickets</Link>
       <div className="page-header-row">
         <div className="page-header-text">
           <p className="eyebrow">{ticket.companyId?.name || ticket.customerId?.company || 'Corporate'} · {ticket.category || 'Service'}</p>
-          <h1 className="page-title mono" style={{ fontSize: 26 }}>{ticket.ticketId}</h1>
-          <div className="page-meta"><Badge dot>{ticket.status}</Badge><Badge>{`${ticket.priority || 'Medium'} priority`}</Badge><Badge>{`SLA: ${slaLabel(ticket)}`}</Badge><span>{ticket.issueType}{ticket.location ? ` · ${ticket.location}` : ''}</span></div>
+          <h1 className="page-title">Ticket <span className="mono" style={{ fontSize: '0.86em' }}>#{ticket.ticketId}</span></h1>
+          <div className="page-meta"><Badge dot>{ticket.status}</Badge><Badge>{`${ticket.priority || 'Medium'} priority`}</Badge><Badge tone={statusTone(slaLabel(ticket))}>{slaBadgeText(ticket)}</Badge><span>{ticket.issueType}{ticket.location ? ` · ${ticket.location}` : ''}</span></div>
         </div>
         <div className="page-actions">
           <Button icon={Phone} onClick={() => setCallOpen(true)}>Call customer</Button>
@@ -88,18 +88,22 @@ export function OperationalTicketDetail() {
 
     <div className="detail-layout">
       <div className="detail-main">
-        <Card title="Request summary">
-          <InfoList columns={2} items={[['Corporate', ticket.companyId?.name || ticket.customerId?.company], ['Contact person', ticket.customerId?.name], ['Contact phone', ticket.customerId?.phone || ticket.companyId?.phone], ['Service centre', ticket.serviceCentreId?.name], ['Issue type', ticket.issueType], ['Service location', ticket.location], ['Preferred date', formatDate(ticket.preferredServiceDate, '')], ['Expected TAT', ticket.expectedTAT]]} />
-        </Card>
-        <Card title="Device information">
-          <div className="stack-12">
-            <div className="person-cell"><span className="asset-icon" style={{ width: 40, height: 40 }}><DeviceIcon type={device.deviceType} model={device.model} /></span><div><strong>{device.model || 'Device'}</strong><span className="cell-sub mono">{device.serialNumber}</span></div></div>
-            <InfoList columns={2} items={[['Asset ID', device.assetId], ['Device type', device.deviceType], ['Employee', device.employeeName], ['Department', device.department]]} />
-          </div>
-        </Card>
-        <Card title="Issue details"><p className="description-text">{ticket.description || 'No description provided.'}</p></Card>
-        <Card title="Issue evidence" description="Original photos and customer damage annotations"><Evidence ticket={ticket} resolve={mediaUrl} onOpen={setSelectedImage} /></Card>
-        <Card title="Timeline"><Timeline events={timeline} /></Card>
+        <Surface label="Service case">
+          <Section stacked title="Issue" description={ticket.issueType}>
+            <div className="stack-16">
+              <p className="description-text">{ticket.description || 'No description provided.'}</p>
+              <InfoList columns={2} items={[['Corporate', ticket.companyId?.name || ticket.customerId?.company], ['Contact person', ticket.customerId?.name], ['Contact phone', ticket.customerId?.phone || ticket.companyId?.phone], ['Service centre', ticket.serviceCentreId?.name], ['Service location', ticket.location], ['Preferred date', formatDate(ticket.preferredServiceDate, '')], ['Request type', ticket.category || 'Service'], ['Expected TAT', ticket.expectedTAT]]} />
+            </div>
+          </Section>
+          <Section stacked title="Device">
+            <div className="stack-16">
+              <div className="person-cell"><span className="thumb thumb-lg"><DeviceIcon type={device.deviceType} model={device.model} /></span><div><strong>{device.model || 'Device'}</strong><span className="cell-sub mono">{device.serialNumber}</span></div></div>
+              <InfoList columns={2} items={[['Asset ID', device.assetId], ['Device type', device.deviceType], ['Employee', device.employeeName], ['Department', device.department]]} />
+            </div>
+          </Section>
+          <Section stacked title="Evidence" description="Original photos and customer damage markings"><Evidence ticket={ticket} resolve={mediaUrl} onOpen={setSelectedImage} /></Section>
+          <Section stacked title="Timeline"><Timeline events={timeline} /></Section>
+        </Surface>
       </div>
 
       <aside className="detail-side">
@@ -117,7 +121,7 @@ export function OperationalTicketDetail() {
             <Workflow ticket={ticket} timeline={timeline} />
           </div>
         </Card>
-        <Card title="SLA & escalation"><SLAPanel ticket={ticket} contact={escalationContact} showElapsed /></Card>
+        <Card title="SLA"><SLAPanel ticket={ticket} contact={escalationContact} showElapsed /></Card>
         <Card title="Warranty & coverage"><CoverageTiles device={{ warrantyStatus: coverage?.warrantyStatus || device.warrantyStatus, warrantyExpiry: coverage?.warrantyExpiry || device.warrantyExpiry, amcStatus: coverage?.amcStatus || device.amcStatus, amcExpiry: coverage?.amcExpiry || device.amcExpiry }} entitlements={coverage?.entitlements || []} /></Card>
         <Card title="Call history" actions={<Button size="sm" variant="ghost" icon={Phone} onClick={() => setCallOpen(true)}>Log call</Button>}>
           {callHistory?.length ? <ul className="stack-12">{callHistory.slice(0, 4).map(call => <li key={call._id} className="stack-8" style={{ gap: 2 }}>
@@ -130,10 +134,9 @@ export function OperationalTicketDetail() {
     </div>
 
     {selectedImage && <Lightbox src={selectedImage} alt="Ticket attachment preview" onClose={() => setSelectedImage(null)} />}
-    {confirmClose && <Modal size="sm" title={`Close ${ticket.ticketId}?`} description="Closing ends the service workflow and asks the customer to review the service. This cannot be undone." onClose={() => setConfirmClose(false)}
-      footer={<><Button onClick={() => setConfirmClose(false)}>Cancel</Button><Button variant="primary" icon={XCircle} disabled={busy} onClick={() => act('close')}>{busy ? 'Closing…' : 'Close ticket'}</Button></>}>
+    {confirmClose && <ConfirmDialog title={`Close ${ticket.ticketId}?`} description="Closing ends the service workflow and asks the customer to review the service. This cannot be undone." confirmLabel="Close ticket" busy={busy} onConfirm={() => act('close')} onClose={() => setConfirmClose(false)}>
       {note ? <InfoList items={[['Closing note', note]]} /> : <p className="text-muted text-small">No note added. The default closure message will be recorded.</p>}
-    </Modal>}
+    </ConfirmDialog>}
     <CallCustomerPanel ticket={ticket} open={callOpen} onClose={() => setCallOpen(false)} onSaved={refresh} />
   </ServiceShell>;
 }

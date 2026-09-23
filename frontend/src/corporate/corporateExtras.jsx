@@ -65,7 +65,7 @@ export function UnassignedDevices() {
       <table className="table">
         <thead><tr><th>Device</th><th>Serial</th><th>Asset ID</th><th>Warranty</th><th>AMC</th><th>Status</th><th><span className="sr-only">Action</span></th></tr></thead>
         <tbody>{devices.map(device => <tr key={device._id}>
-          <td><div className="person-cell"><span className="asset-icon" style={{ width: 32, height: 32, borderRadius: 8 }}><DeviceIcon type={device.deviceType} model={device.model} size={16} /></span><div><Link className="cell-link" to={`/corporate/devices/${device._id}`}>{device.model}</Link><span className="cell-sub">{device.deviceType}</span></div></div></td>
+          <td><div className="person-cell"><span className="thumb"><DeviceIcon type={device.deviceType} model={device.model} size={16} /></span><div><Link className="cell-link" to={`/corporate/devices/${device._id}`}>{device.model}</Link><span className="cell-sub">{device.deviceType}</span></div></div></td>
           <td className="mono cell-nowrap">{device.serialNumber}</td>
           <td>{device.assetId || '—'}</td>
           <td className="cell-nowrap"><Badge>{device.warrantyStatus}</Badge><span className="cell-sub">{device.warrantyExpiry ? `Ends ${formatDate(device.warrantyExpiry)}` : ''}</span></td>

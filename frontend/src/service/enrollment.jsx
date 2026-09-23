@@ -169,7 +169,7 @@ export function DeviceEnrollment() {
         </div></div>
       </div>
       <aside className="wizard-aside">
-        {device && <Card title="Device"><div className="person-cell"><span className="asset-icon" style={{ width: 40, height: 40 }}><DeviceIcon type={device.deviceType} model={device.model} /></span><div><strong>{device.model}</strong><span className="cell-sub mono">{device.serialNumber}</span></div></div></Card>}
+        {device && <Card title="Device"><div className="person-cell"><span className="thumb thumb-lg"><DeviceIcon type={device.deviceType} model={device.model} /></span><div><strong>{device.model}</strong><span className="cell-sub mono">{device.serialNumber}</span></div></div></Card>}
         {selected && <Card title="Assigning to"><div className="stack-8"><strong>{selected.label}</strong><Badge tone={selected.entityType === 'corporate' ? 'info' : 'neutral'}>{typeLabel(selected.entityType)}</Badge></div></Card>}
         <Card title="One lookup path"><p className="text-muted text-small">Scanning and manual entry use the same device-master lookup. Enrolled devices start as unassigned so the corporate admin can allocate them to an employee.</p></Card>
       </aside>

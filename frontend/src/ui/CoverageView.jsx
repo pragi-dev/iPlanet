@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CalendarClock, ShieldCheck, ShieldOff, ShieldPlus, Wrench } from 'lucide-react';
-import { Badge, EmptyState, ErrorState, FilterBar, FilterSelect, KPI, KPIGrid, PageHeader, PageSkeleton, SearchInput, TableCard } from './primitives';
+import { ShieldCheck } from 'lucide-react';
+import { Badge, EmptyState, ErrorState, FilterBar, FilterSelect, KPI, KPIGrid, PageHeader, PageSkeleton, SearchInput, SectionHeader, TableCard } from './primitives';
 import { formatDate, friendlyError } from './format';
 import { DeviceIcon } from './ticket';
 
@@ -26,13 +26,18 @@ export function CoverageView({ state, description, filterOptions, matchesFilter,
   const summary = data.summary || {};
   return <>
     <PageHeader title="Warranty & Coverage" description={description} />
+    <section className="page-section" aria-labelledby="coverage-overview">
+    <SectionHeader id="coverage-overview" title="Coverage overview" />
     <KPIGrid columns={5}>
-      <KPI label="Total devices" value={summary.total} icon={ShieldPlus} />
-      <KPI label="Warranty active" value={summary.warrantyActive} icon={ShieldCheck} tone="success" />
-      <KPI label="AMC active" value={summary.amcActive} icon={Wrench} tone="info" />
-      <KPI label="Expiring soon" value={summary.expiringSoon} icon={CalendarClock} tone="warning" />
-      <KPI label="Expired" value={summary.expired} icon={ShieldOff} tone={summary.expired ? 'critical' : 'neutral'} />
+      <KPI label="Total devices" value={summary.total} hint={`${data.devices.filter(device => device.coverageStatus === 'Covered').length} covered`} />
+      <KPI label="Warranty active" value={summary.warrantyActive} />
+      <KPI label="AMC active" value={summary.amcActive} />
+      <KPI label="Expiring soon" value={summary.expiringSoon} tone={summary.expiringSoon ? 'warning' : 'neutral'} hint="Within the renewal window" />
+      <KPI label="Expired" value={summary.expired} hint="Warranty or AMC ended" />
     </KPIGrid>
+    </section>
+    <section className="page-section" aria-labelledby="coverage-details">
+    <SectionHeader id="coverage-details" title="Coverage details" />
     <TableCard
       columns={7}
       toolbar={<FilterBar summary={`${devices.length} of ${data.devices.length} devices`}>
@@ -43,19 +48,20 @@ export function CoverageView({ state, description, filterOptions, matchesFilter,
       empty={<EmptyState icon={ShieldCheck} title={data.devices.length ? 'No devices match these filters' : 'No devices registered yet'} description={data.devices.length ? 'Try a different search term or coverage filter.' : 'Coverage appears here once devices are enrolled.'} />}
     >
       <table className="table">
-        <thead><tr><th>Device</th><th>Serial</th>{showCorporate && <th>Corporate</th>}<th>Location</th><th>Coverage type</th><th>Status</th><th>Warranty</th><th>AMC</th><th>Entitlements</th></tr></thead>
+        <thead><tr><th>Device</th><th>Serial</th>{showCorporate && <th>Corporate</th>}<th>Location</th><th>Coverage</th><th>Status</th><th>Purchased</th><th>Warranty ends</th><th>AMC ends</th></tr></thead>
         <tbody>{devices.map(device => <tr key={device._id}>
-          <td><div className="person-cell"><span className="asset-icon" style={{ width: 32, height: 32, borderRadius: 8 }}><DeviceIcon type={device.deviceType} model={device.model} size={16} /></span><div>{deviceLink ? <Link className="cell-link" to={deviceLink(device)}>{device.model}</Link> : <span className="cell-primary">{device.model}</span>}<span className="cell-sub">{device.assetId}</span></div></div></td>
+          <td><div className="person-cell"><span className="thumb"><DeviceIcon type={device.deviceType} model={device.model} size={16} /></span><div>{deviceLink ? <Link className="cell-link" to={deviceLink(device)}>{device.model}</Link> : <span className="cell-primary">{device.model}</span>}<span className="cell-sub">{device.assetId}</span></div></div></td>
           <td className="mono cell-nowrap">{device.serialNumber}</td>
           {showCorporate && <td>{device.companyId?.name || <span className="text-muted">Not assigned</span>}</td>}
           <td>{device.location || '—'}</td>
-          <td className="cell-nowrap">{coverageType(device)}</td>
+          <td><span className="cell-primary">{coverageType(device)}</span>{device.entitlements?.length ? <span className="cell-sub">{device.entitlements.join(' · ')}</span> : null}</td>
           <td><Badge dot>{device.coverageStatus || 'Not available'}</Badge></td>
-          <td className="cell-nowrap"><Badge>{device.warrantyStatus || 'Not available'}</Badge><span className="cell-sub">Ends {formatDate(device.warrantyExpiry)}</span></td>
-          <td className="cell-nowrap"><Badge>{device.amcStatus || 'Not available'}</Badge><span className="cell-sub">Ends {formatDate(device.amcExpiry)}</span></td>
-          <td>{device.entitlements?.length ? <div className="chip-list">{device.entitlements.map(item => <span className="chip" key={item}>{item}</span>)}</div> : <span className="text-muted">None</span>}</td>
+          <td className="cell-nowrap">{formatDate(device.purchaseDate)}</td>
+          <td className="cell-nowrap">{formatDate(device.warrantyExpiry)}<span className="cell-sub">{device.warrantyStatus || '—'}</span></td>
+          <td className="cell-nowrap">{formatDate(device.amcExpiry)}<span className="cell-sub">{device.amcStatus || '—'}</span></td>
         </tr>)}</tbody>
       </table>
     </TableCard>
+    </section>
   </>;
 }

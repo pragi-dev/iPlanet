@@ -2,7 +2,7 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { EmptyState } from './primitives';
 import { BarChart3 } from 'lucide-react';
 
-const axis = { tickLine: false, axisLine: false, tick: { fill: '#667085', fontSize: 12 } };
+const axis = { tickLine: false, axisLine: false, tick: { fill: '#86868b', fontSize: 12 } };
 
 export function ChartTooltip({ active, payload, label, unit = '' }) {
   if (!active || !payload?.length) return null;
@@ -17,18 +17,18 @@ export function ColumnChart({ data, dataKey = 'value', nameKey = 'name', seriesN
   return <div role="img" aria-label={`${seriesName} chart: ${data.map(item => `${item[nameKey]} ${item[dataKey]}`).join(', ')}`}>
     <ResponsiveContainer width="100%" height={height}>
       <BarChart data={data} margin={{ top: 8, right: 4, left: -16, bottom: 0 }}>
-        <CartesianGrid vertical={false} stroke="#eef0f3" />
+        <CartesianGrid vertical={false} stroke="#f0f0f2" />
         <XAxis dataKey={nameKey} {...axis} interval={0} tickFormatter={value => String(value).length > 12 ? `${String(value).slice(0, 11)}…` : value} />
         <YAxis {...axis} allowDecimals={false} />
-        <Tooltip cursor={{ fill: '#f2f4f7' }} content={<ChartTooltip />} />
-        <Bar dataKey={dataKey} name={seriesName} fill="#1d4ed8" radius={[4, 4, 0, 0]} maxBarSize={36} />
+        <Tooltip cursor={{ fill: 'rgba(0,0,0,0.03)' }} content={<ChartTooltip />} />
+        <Bar dataKey={dataKey} name={seriesName} fill="#0071e3" radius={[6, 6, 0, 0]} maxBarSize={28} />
       </BarChart>
     </ResponsiveContainer>
   </div>;
 }
 
 // Horizontal bars for categorical distributions; easier to read than pies.
-export function BarList({ data, emptyText = 'No data yet.', tone = '#1d4ed8', limit }) {
+export function BarList({ data, emptyText = 'No data yet.', tone = '#0071e3', limit }) {
   const rows = [...(data || [])].filter(item => Number(item.value) > 0).sort((a, b) => b.value - a.value).slice(0, limit || undefined);
   if (!rows.length) return <EmptyState compact icon={BarChart3} title={emptyText} />;
   const max = Math.max(...rows.map(item => Number(item.value)));

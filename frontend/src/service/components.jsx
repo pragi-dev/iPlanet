@@ -4,14 +4,13 @@ import { getServiceNotificationUnreadCount } from './api';
 
 export const servicePortal = {
   key: 'service',
-  portalName: 'iPlanet Service Operations',
+  portalName: 'iPlanet Service',
   roleLabel: 'iPlanet Service',
   home: '/service/dashboard',
   notificationsRoute: '/service/notifications',
   accountRoute: '/service/settings',
   accountLabel: 'Settings',
   fetchUnread: getServiceNotificationUnreadCount,
-  search: { route: '/service/tickets', placeholder: 'Search tickets, serials, companies' },
   groups: [
     { label: 'Overview', items: [{ to: '/service/dashboard', icon: LayoutDashboard, label: 'Dashboard' }] },
     { label: 'Operations', items: [

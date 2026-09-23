@@ -53,18 +53,18 @@ export function ServiceDashboard() {
   return <ServiceShell title="Dashboard">
     <div className="dashboard-intro">
       <div className="page-header-text">
-        <p className="eyebrow">{todayLabel()}</p>
-        <h1 className="page-title">{greeting()}{user.name ? `, ${user.name.split(' ')[0]}` : ''}</h1>
-        <p className="page-description">Service operations across every corporate customer and service centre.</p>
+        <p className="eyebrow">{greeting()}{user.name ? `, ${user.name.split(' ')[0]}` : ''} · {todayLabel()}</p>
+        <h1 className="page-title">Service Operations</h1>
+        <p className="page-description">Monitor service activity, SLA performance, engineers and device operations.</p>
       </div>
       <div className="page-actions"><Button icon={ScanLine} to="/service/device-enrollment">Enroll device</Button><Button variant="primary" icon={ClipboardList} to="/service/tickets">Open ticket queue</Button></div>
     </div>
 
     <KPIGrid columns={6}>
-      <KPI label="Open tickets" value={s.newRequests} icon={Ticket} tone="info" to="/service/tickets?status=Open" />
-      <KPI label="In progress" value={s.inProgress} icon={Wrench} tone="info" to="/service/tickets?status=In%20Progress" />
-      <KPI label="SLA at risk" value={s.atRisk} icon={Clock3} tone={s.atRisk ? 'warning' : 'neutral'} to="/service/tickets?slaStatus=At%20Risk" />
-      <KPI label="SLA breached" value={s.breached} icon={ShieldAlert} tone={s.breached ? 'critical' : 'neutral'} to="/service/tickets?slaStatus=SLA%20Breached" />
+      <KPI label="Open tickets" value={s.newRequests} hint={unassignedOpen ? `${unassignedOpen} awaiting an engineer` : 'All assigned'} to="/service/tickets?status=Open" />
+      <KPI label="In progress" value={s.inProgress} hint={waitingParts ? `${waitingParts} waiting for parts` : undefined} to="/service/tickets?status=In%20Progress" />
+      <KPI label="SLA at risk" value={atRisk} tone={atRisk ? 'warning' : 'neutral'} hint="Active tickets" to="/service/tickets?slaStatus=At%20Risk" />
+      <KPI label="SLA breached" value={breached} tone={breached ? 'critical' : 'neutral'} hint={escalated ? `${escalated} escalated` : "Active tickets"} to="/service/tickets?slaStatus=SLA%20Breached" />
       <KPI label="Unassigned" value={s.unassigned} icon={UserRoundX} tone={s.unassigned ? 'warning' : 'neutral'} to="/service/tickets?assignment=Unassigned" />
       <KPI label="Completed" value={s.completed} icon={CircleCheck} tone="success" hint={`${s.closed} closed`} to="/service/tickets?status=Completed" />
     </KPIGrid>
@@ -218,7 +218,7 @@ export function ServiceReports() {
     </div>
     <div className="grid-main-side">
       <Card title="Issue types" description="Most frequently reported issues"><ColumnChart data={[...(base.issueTypes || [])].sort((a, b) => b.value - a.value)} seriesName="Tickets" emptyText="No tickets in this period." /></Card>
-      <Card title="AMC device counts" description="All enrolled devices by AMC status"><BarList data={groupBy(coverage.devices || [], device => device.amcStatus)} tone="#16a34a" emptyText="No devices enrolled." /></Card>
+      <Card title="AMC device counts" description="All enrolled devices by AMC status"><BarList data={groupBy(coverage.devices || [], device => device.amcStatus)} tone="#34c759" emptyText="No devices enrolled." /></Card>
     </div>
     <Card title="Health camp requests" description={`Health Camp requests per month, ${new Date().getFullYear()}`}><ColumnChart data={healthCamp} dataKey="tickets" nameKey="month" seriesName="Health camp requests" height={200} emptyText="No health camp requests this year." /></Card>
   </ServiceShell>;
@@ -249,7 +249,7 @@ export function ServiceSettings() {
         <div id="role" className="settings-section"><Card title="Role" description="Your access level in iPlanetCare"><InfoList items={[['Role', <Badge tone="info">iPlanet Service</Badge>], ['Access', 'Tickets, enrollment, engineers, reports, coverage, escalation matrix, notifications and reviews']]} /></Card></div>
         <div id="organization" className="settings-section"><Card title="Organization"><InfoList columns={2} items={[['Organization', 'iPlanet Service'], ['Service centre', user.serviceCentreId ? (centres.loading ? 'Loading…' : centre?.name || 'Not found') : 'All service centres'], ['Centre location', centre?.location], ['Centre contact', centre?.contactNumber]]} /></Card></div>
         <div id="integrations" className="settings-section"><Card title="Integrations" description="External services connected to iPlanetCare">
-          <div className="row-between"><div className="person-cell"><span className="asset-icon" style={{ width: 40, height: 40 }}><Building2 size={18} aria-hidden="true" /></span><div><strong>Google Business Profile</strong><span className="cell-sub">Connect locations and sync public Google reviews</span></div></div><Button to="/service/reviews/google">Manage</Button></div>
+          <div className="row-between"><div className="person-cell"><span className="thumb thumb-lg"><Building2 size={18} aria-hidden="true" /></span><div><strong>Google Business Profile</strong><span className="cell-sub">Connect locations and sync public Google reviews</span></div></div><Button to="/service/reviews/google">Manage</Button></div>
         </Card></div>
         <div id="security" className="settings-section"><Card title="Security" actions={<Button icon={LogOut} onClick={() => { localStorage.clear(); navigate('/login', { replace: true }); }}>Sign out</Button>}>
           <InfoList items={[['Sign-in method', <span className="row"><KeyRound size={14} aria-hidden="true" />Email and password</span>], ['Current session expires', expires ? formatDateTime(expires) : null]]} />

@@ -53,8 +53,8 @@ export function MyTickets() {
         <thead><tr><th>Ticket ID</th><th>Corporate</th><th>Device</th><th>Issue</th><th>Priority</th><th>Engineer</th><th>Status</th><th>SLA</th><th>Created</th><th><span className="sr-only">Action</span></th></tr></thead>
         <tbody>{tickets.map(ticket => <tr key={ticket._id} className="row-clickable" onClick={event => { if (!event.target.closest('a')) navigate(`/service/tickets/${ticket._id}`); }}>
           <td className="cell-nowrap"><Link className="cell-link mono" to={`/service/tickets/${ticket._id}`}>{ticket.ticketId}</Link><span className="cell-sub">{ticket.location}</span></td>
-          <td>{ticket.companyId?.name || ticket.customerId?.company || '—'}</td>
-          <td><span className="cell-primary">{ticket.deviceId?.model || '—'}</span><span className="cell-sub mono">{ticket.deviceId?.serialNumber}</span></td>
+          <td className="cell-nowrap">{ticket.companyId?.name || ticket.customerId?.company || '—'}</td>
+          <td className="cell-nowrap"><span className="cell-primary">{ticket.deviceId?.model || '—'}</span><span className="cell-sub mono">{ticket.deviceId?.serialNumber}</span></td>
           <td>{ticket.issueType || '—'}<span className="cell-sub">{ticket.category}</span></td>
           <td><Badge>{ticket.priority}</Badge></td>
           <td>{ticket.assignedEngineer || <span className="text-muted">Unassigned</span>}</td>

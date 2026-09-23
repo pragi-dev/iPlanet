@@ -146,7 +146,7 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
 
   return <Drawer
     className="ai-drawer"
-    width={460}
+    width={400}
     title="AI Support"
     eyebrow="Device assistance"
     icon={<Sparkles size={18} />}

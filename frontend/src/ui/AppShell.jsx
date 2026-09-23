@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { Bell, ChevronDown, ChevronRight, LogOut, Menu, Search, Sparkles, UserRound, X } from 'lucide-react';
+import { Bell, ChevronDown, ChevronRight, LogOut, Menu, Sparkles, UserRound, X } from 'lucide-react';
 import { Avatar, IconButton } from './primitives';
 import { readSessionUser } from './format';
 
@@ -60,7 +60,7 @@ function Sidebar({ config, unread, onNavigate, aiOpen }) {
       </div>)}
     </nav>
     <div className="sidebar-footer">
-      <p className="sidebar-product">Service &amp; Self-Care Platform</p>
+      <p className="sidebar-product">iPlanetCare · Self-Care &amp; Service Operations</p>
     </div>
   </div>;
 }
@@ -96,17 +96,6 @@ function UserMenu({ user, config }) {
       <button type="button" role="menuitem" className="menu-item" onClick={() => signOut(navigate)}><LogOut size={16} aria-hidden="true" />Sign out</button>
     </div>}
   </div>;
-}
-
-function HeaderSearch({ config }) {
-  const navigate = useNavigate();
-  const [value, setValue] = useState('');
-  if (!config.search) return null;
-  return <form className="header-search" role="search" onSubmit={event => { event.preventDefault(); const query = value.trim(); navigate(query ? `${config.search.route}?search=${encodeURIComponent(query)}` : config.search.route); setValue(''); }}>
-    <Search size={16} aria-hidden="true" />
-    <label className="sr-only" htmlFor="global-search">{config.search.placeholder}</label>
-    <input id="global-search" type="search" value={value} onChange={event => setValue(event.target.value)} placeholder={config.search.placeholder} />
-  </form>;
 }
 
 export function AppShell({ config, title, crumbs, children }) {
@@ -150,7 +139,6 @@ export function AppShell({ config, title, crumbs, children }) {
           </nav>
         </div>
         <div className="topbar-right">
-          <HeaderSearch config={config} />
           {ai.available && <button type="button" className="btn btn-ghost ai-trigger" onClick={ai.open}><Sparkles size={16} aria-hidden="true" /><span>AI Support</span></button>}
           <IconButton label="Notifications" icon={Bell} badge={unread} onClick={() => navigate(config.notificationsRoute)} />
           <span className="topbar-divider" aria-hidden="true" />

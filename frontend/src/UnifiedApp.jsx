@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowRight, BellRing, LockKeyhole, Mail, ShieldCheck, Sparkles, Ticket } from 'lucide-react';
+import { ArrowRight, LockKeyhole, Mail, Sparkles } from 'lucide-react';
 import { Dashboard, Devices, DeviceDetail, Tickets, Profile } from './corporate/pages';
 import { UnassignedDevices, Notifications as CorporateNotifications } from './corporate/corporateExtras';
 import { RequestEnhanced } from './corporate/RequestEnhanced';
@@ -66,37 +66,29 @@ function Login() {
   };
   const selectProfile = nextProfile => { setProfile(nextProfile); setEmail(profiles[nextProfile].email); setError(''); };
   return <main className="login">
-    <section className="login-brand" aria-label="iPlanetCare">
-      <div className="brand"><span className="brand-mark" aria-hidden="true">i</span><span className="brand-text"><strong>iPlanetCare</strong><small>Service &amp; Self-Care Platform</small></span></div>
-      <div className="login-copy">
-        <h1>Device care and service operations, in one place.</h1>
-        <p>Corporate teams manage their devices and requests. iPlanet Service runs the operations behind them.</p>
-        <ul className="login-points">
-          <li><Ticket size={16} aria-hidden="true" />Raise and track service requests end to end</li>
-          <li><ShieldCheck size={16} aria-hidden="true" />Warranty and AMC coverage for every device</li>
-          <li><BellRing size={16} aria-hidden="true" />SLA monitoring with escalation alerts</li>
-          <li><Sparkles size={16} aria-hidden="true" />AI-assisted first-line device support</li>
-        </ul>
-      </div>
-      <p className="login-foot">Corporate Self-Care · iPlanet Service Operations</p>
-    </section>
-    <section className="login-panel">
-      <form className="login-form" onSubmit={submit} noValidate>
-        <div>
-          <h2>Sign in</h2>
-          <p>Choose your workspace and sign in with your account.</p>
+    <header className="login-top">
+      <div className="brand"><span className="brand-mark" aria-hidden="true">i</span><span className="brand-text"><strong>iPlanetCare</strong><small>Self-Care &amp; Service Operations</small></span></div>
+    </header>
+    <div className="login-main">
+      <div>
+        <div className="login-hero">
+          <h1>Device care, handled.</h1>
+          <p>Raise and track service, manage coverage, and run service operations from one place.</p>
         </div>
+      <form className="login-form" onSubmit={submit} noValidate style={{ margin: '0 auto' }}>
         <div className="segmented" role="group" aria-label="Workspace">
-          <button type="button" aria-pressed={profile === 'corporate'} onClick={() => selectProfile('corporate')}>Corporate Admin</button>
+          <button type="button" aria-pressed={profile === 'corporate'} onClick={() => selectProfile('corporate')}>Corporate Self-Care</button>
           <button type="button" aria-pressed={profile === 'service'} onClick={() => selectProfile('service')}>iPlanet Service</button>
         </div>
         <Field label="Email address">{props => <div className="input-with-icon"><Mail size={17} aria-hidden="true" /><input {...props} type="email" autoComplete="username" value={email} onChange={event => setEmail(event.target.value)} required /></div>}</Field>
         <Field label="Password">{props => <div className="input-with-icon"><LockKeyhole size={17} aria-hidden="true" /><input {...props} type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} required /></div>}</Field>
         {error && <InlineAlert title="Sign-in failed">{error}</InlineAlert>}
-        <button className="btn btn-primary btn-lg btn-block" type="submit" disabled={busy || !email || !password}>{busy ? 'Signing in…' : <>Sign in as {profiles[profile].label}<ArrowRight size={16} aria-hidden="true" /></>}</button>
+        <button className="btn btn-primary btn-lg btn-block" type="submit" disabled={busy || !email || !password}>{busy ? 'Signing in…' : <>Sign in<ArrowRight size={16} aria-hidden="true" /></>}</button>
         <div className="login-note"><span>Demo password</span><strong className="mono">Demo@123</strong></div>
       </form>
-    </section>
+      </div>
+    </div>
+    <footer className="login-foot">iPlanetCare · Corporate Self-Care and iPlanet Service</footer>
   </main>;
 }
 

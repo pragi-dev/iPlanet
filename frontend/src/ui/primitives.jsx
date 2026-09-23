@@ -1,6 +1,6 @@
 import { useId } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft, Check, ChevronRight, Inbox, RefreshCcw, Search, Star } from 'lucide-react';
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, Inbox, RefreshCcw, Search, Star } from 'lucide-react';
 import { formatDateTime, initials, statusTone } from './format';
 
 export function Button({ variant = 'secondary', size, icon: Icon, children, className = '', to, type = 'button', ...props }) {
@@ -29,7 +29,7 @@ export function StatusBadge({ status, fallback = 'Not available' }) {
 
 export function PageHeader({ title, description, actions, back, meta, eyebrow }) {
   return <div className="page-header">
-    {back && <Link className="back-link" to={back.to}><ArrowLeft size={15} aria-hidden="true" />{back.label}</Link>}
+    {back && <Link className="back-link" to={back.to}><ChevronLeft size={16} aria-hidden="true" />{back.label}</Link>}
     <div className="page-header-row">
       <div className="page-header-text">
         {eyebrow && <p className="eyebrow">{eyebrow}</p>}
@@ -67,17 +67,34 @@ export function Card({ title, description, actions, children, className = '', fl
   </Element>;
 }
 
-export function KPI({ label, value, hint, tone = 'neutral', icon: Icon, to }) {
+// A metric reads as information: label, number, context. Colour is applied to
+// the number only for warning or critical values. `icon` is accepted for
+// compatibility but intentionally not rendered.
+export function KPI({ label, value, hint, tone = 'neutral', to }) {
   const content = <>
-    <div className="kpi-top">
-      <span className="kpi-label">{label}</span>
-      {Icon && <span className={`kpi-icon kpi-icon-${tone}`} aria-hidden="true"><Icon size={16} /></span>}
-    </div>
+    <span className="kpi-label">{label}</span>
     <strong className="kpi-value">{value ?? '—'}</strong>
     {hint && <span className="kpi-hint">{hint}</span>}
   </>;
   if (to) return <Link className={`kpi kpi-link kpi-${tone}`} to={to}>{content}</Link>;
   return <div className={`kpi kpi-${tone}`}>{content}</div>;
+}
+
+// Product-page style container: one large surface split into titled sections.
+export function Surface({ children, className = '', label }) {
+  return <section className={`surface ${className}`} aria-label={label}>{children}</section>;
+}
+
+export function Section({ title, description, actions, children, stacked = false }) {
+  const headingId = useId();
+  return <div className={`surface-section ${stacked ? 'surface-section-stacked' : ''}`} role="group" aria-labelledby={title ? headingId : undefined}>
+    {(title || description || actions) && <div className="surface-section-head">
+      {title && <h2 className="surface-section-title" id={headingId}>{title}</h2>}
+      {description && <p className="surface-section-description">{description}</p>}
+      {actions && <div className="surface-section-actions">{actions}</div>}
+    </div>}
+    <div style={{ minWidth: 0 }}>{children}</div>
+  </div>;
 }
 
 export function KPIGrid({ children, columns }) {
@@ -125,7 +142,7 @@ export function TableSkeleton({ rows = 6, columns = 6 }) {
 export function PageSkeleton({ kpis = 4, variant = 'dashboard' }) {
   return <div className="page-skeleton" aria-busy="true" aria-label="Loading">
     <div className="page-header"><Skeleton width={220} height={28} /><Skeleton width={340} height={14} /></div>
-    {variant === 'dashboard' && <div className="kpi-grid">{Array.from({ length: kpis }, (_, index) => <div className="kpi" key={index}><Skeleton width="50%" /><Skeleton width="35%" height={28} /></div>)}</div>}
+    {variant === 'dashboard' && <div className="kpi-grid" style={{ '--kpi-columns': Math.min(kpis, 6) }}>{Array.from({ length: kpis }, (_, index) => <div className="kpi" key={index}><Skeleton width="50%" /><Skeleton width="35%" height={28} /></div>)}</div>}
     {variant === 'detail' && <div className="detail-layout"><div className="card"><div className="card-body stack-16">{Array.from({ length: 6 }, (_, index) => <Skeleton key={index} width={`${60 + (index % 3) * 12}%`} />)}</div></div><div className="card"><div className="card-body stack-16">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} />)}</div></div></div>}
     <div className="card"><TableSkeleton /></div>
   </div>;
