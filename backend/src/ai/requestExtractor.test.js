@@ -30,3 +30,9 @@ test('does not let a model infer an immediate service exception from a normal is
 test('classifies an explicit failed troubleshooting result without a provider call', () => {
   assert.equal(understandDeterministicResult('The issue is not resolved.').workflowSignal, 'failed');
 });
+
+test('a bare "okay" is not treated as a confirmed resolution', () => {
+  assert.equal(understandDeterministicResult('Okay.').workflowSignal, 'unknown');
+  assert.equal(understandDeterministicResult('ok').workflowSignal, 'unknown');
+  assert.equal(understandDeterministicResult("Yes, it's working now.").workflowSignal, 'resolved');
+});

@@ -535,8 +535,9 @@ app.post('/api/ai/support/chat', auth, async (req, res) => {
       await activeSession.save();
       return res.json({ success: true, message: reply, conversationId: activeSession.sessionId, session: activeSession });
     }
+    const currentFlow = activeSession.issueContext?.flowState || 'initial';
+    let pendingDraft = null;
     try {
-      const currentFlow = activeSession.issueContext?.flowState || 'initial';
       const deterministicResult = understandDeterministicResult(trimmedMessage);
       // Do not consume a cloud request merely to classify an unmistakable
       // answer to the preceding troubleshooting question. Gemini remains the
@@ -558,6 +559,7 @@ app.post('/api/ai/support/chat', auth, async (req, res) => {
         symptoms: [...new Set([...(previous.symptoms || []), ...(understanding.symptoms || [])])]
       };
       if (device) state.deviceId = String(device._id);
+      pendingDraft = state;
       const dateResolution = resolveServiceDateIntent(understanding.preferredServiceDateIntent || trimmedMessage);
       // A report may naturally include words such as "still" on its first turn.
       // That must never bypass the required L1 troubleshooting cycle. A failed
@@ -626,6 +628,14 @@ app.post('/api/ai/support/chat', auth, async (req, res) => {
       activeSession.providerStatus = 'Unavailable';
       activeSession.status = 'In Progress';
       const reply = buildKnowledgeFallbackReply(trimmedMessage);
+      // The fallback still gives safe Level-1 steps for a recognised issue. Record
+      // that like the normal path does, so the customer's next answer (resolved or
+      // still failing) is handled by the troubleshooting flow instead of being
+      // treated as a brand-new issue.
+      const fallbackStepsGiven = Boolean(buildSupportContext({ message: trimmedMessage }).retrievedKnowledge[0]);
+      if (fallbackStepsGiven && ['initial', 'completed'].includes(currentFlow)) {
+        activeSession.issueContext = { ...activeSession.issueContext, flowState: 'awaiting_troubleshooting_result', ...(pendingDraft ? { requestDraft: pendingDraft } : {}), troubleshooting: { stepsProvided: true, resolved: null } };
+      }
       activeSession.messages.push({ role: 'assistant', content: reply, timestamp: new Date() });
       await activeSession.save();
       return res.json({ success: true, message: reply, conversationId: activeSession.sessionId, session: activeSession });

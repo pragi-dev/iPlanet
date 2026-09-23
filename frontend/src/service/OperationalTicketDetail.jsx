@@ -4,6 +4,7 @@ import { ChevronLeft, CheckCircle2, PauseCircle, Phone, Play, UserCheck, XCircle
 import { ServiceShell } from './components';
 import { assignEngineer, getEngineers, getServiceTicket, mediaUrl, serviceAction } from './api';
 import { CallCustomerPanel } from './CallCustomerPanel';
+import { EngineerPicker } from './EngineerPicker';
 import { Badge, Button, Card, ConfirmDialog, CoverageTiles, DeviceIcon, ErrorState, Evidence, Field, InfoList, InlineAlert, Lightbox, PageSkeleton, SLAPanel, Section, Surface, Timeline, Workflow, formatDate, formatDateTime, friendlyError, slaBadgeText, slaLabel, statusTone, useAsync } from '../ui';
 
 // Valid next actions per status, mirroring the backend transition table.
@@ -109,9 +110,9 @@ export function OperationalTicketDetail() {
       <aside className="detail-side">
         <Card title="Workflow" description={`Current status: ${ticket.status}`}>
           <div className="stack-16">
-            {canAssign && <div className="assign-row">
-              <Field label={ticket.assignedEngineer ? 'Reassign engineer' : 'Assign engineer'}>{props => <select {...props} value={engineerChoice} onChange={event => setSelectedEngineer(event.target.value)}><option value="">Select an engineer</option>{engineers.map(engineer => <option key={engineer._id} value={engineer._id}>{engineer.name} · {engineer.location} · {engineer.assignedTicketCount} active · {engineer.status}</option>)}</select>}</Field>
-              <Button variant="primary" icon={UserCheck} className="btn-lg" disabled={!engineerChoice || busy || engineerChoice === currentEngineer} onClick={assign}>Assign</Button>
+            {canAssign && <div className="stack-12">
+              <EngineerPicker engineers={engineers} value={engineerChoice} onChange={setSelectedEngineer} label={ticket.assignedEngineer ? 'Reassign engineer' : 'Assign an engineer'} />
+              <div><Button variant="primary" icon={UserCheck} disabled={!engineerChoice || busy || engineerChoice === currentEngineer} onClick={assign}>Assign</Button></div>
             </div>}
             {actions.length > 0 && <Field label="Update note" hint="Added to the customer-visible timeline with the next action.">{props => <textarea {...props} value={note} onChange={event => setNote(event.target.value)} placeholder="e.g. Diagnosed faulty display cable; replacement ordered." style={{ minHeight: 88 }} />}</Field>}
             {actions.length > 0 && <div className="action-buttons">{actions.map(action => { const meta = actionMeta[action]; return <Button key={action} variant={meta.variant} icon={meta.icon} disabled={busy} onClick={() => action === 'close' ? setConfirmClose(true) : act(action)}>{labelFor(action)}</Button>; })}</div>}

@@ -1045,3 +1045,21 @@ button.chip:hover { background: var(--color-fill-strong); }
 .ai-rating-done { display: flex; align-items: flex-start; gap: var(--space-2); font-size: 14px; color: var(--color-text-secondary); }
 .ai-rating-done svg { color: var(--color-success); flex: none; margin-top: 1px; }
 .ai-rating-done strong { color: var(--color-text-primary); font-weight: 600; }
+
+/* Engineer assignment picker (Ticket Details) */
+.picker-trigger {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); width: 100%; height: 46px; padding: 0 14px;
+  border-radius: var(--radius-md); border: 1px solid var(--color-border); background: var(--color-surface); font-size: 16px; text-align: left;
+  transition: border-color 180ms var(--ease), box-shadow 180ms var(--ease);
+}
+.picker-trigger > span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.picker-trigger svg { flex: none; color: var(--color-text-secondary); }
+.picker-trigger[aria-expanded='true'], .picker-trigger:focus-visible { outline: none; border-color: var(--color-accent); box-shadow: var(--focus); }
+.picker-panel { display: grid; gap: var(--space-3); padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-surface-elevated); border: 1px solid var(--color-divider); }
+.picker-panel .search-input { min-width: 0; }
+.picker-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+.picker-filters .filter-select select { width: 100%; min-width: 0; max-width: none; }
+.picker-panel .entity-option-list { max-height: 260px; }
+/* The picker lives inside .field; keep its search box styled like other search inputs. */
+.field .picker-panel .search-input input[type='search'] { height: 38px; padding: 0 12px 0 36px; border: 0; border-radius: var(--radius-control); background: var(--color-fill); box-shadow: none; font-size: 15px; }
+.field .picker-panel .search-input input[type='search']:focus { background: var(--color-surface); box-shadow: 0 0 0 1px var(--color-accent), var(--focus); }

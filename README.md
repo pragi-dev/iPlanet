@@ -121,7 +121,7 @@ The backend includes an isolated iPlanetCare AI Support Engine for safe, Level-1
 
 Successful responses are `{ "success": true, "reply": "..." }`. An optional `conversation` array of `{ "role": "user" | "assistant", "content": "..." }` supplies short-term context; no AI conversation is persisted yet.
 
-Configure these backend environment variables in `backend/.env`: `AI_PROVIDER=gemini`, `GEMINI_API_KEY`, `GEMINI_MODEL` (defaults to `gemini-2.5-flash`), optional `GEMINI_FALLBACK_MODEL`, `GEMINI_TIMEOUT_MS`, and optional local-only `AI_KNOWLEDGE_DEBUG=true`. API credentials and retrieval details stay in Express and are never sent to the React app.
+Configure these backend environment variables in `backend/.env`: `AI_PROVIDER=gemini`, `GEMINI_API_KEY`, `GEMINI_MODEL` (defaults to `gemini-3.6-flash`), optional `GEMINI_FALLBACK_MODEL`, `GEMINI_TIMEOUT_MS`, and optional local-only `AI_KNOWLEDGE_DEBUG=true`. API credentials and retrieval details stay in Express and are never sent to the React app.
 
 Start the backend with `npm run backend`. After logging in to the Corporate portal, use its token to verify the endpoint:
 
@@ -193,8 +193,8 @@ JWT_SECRET=<long-random-secret>
 FRONTEND_URLS=https://<your-vercel-app>.vercel.app
 AI_PROVIDER=gemini
 GEMINI_API_KEY=<server-only-gemini-key>
-GEMINI_MODEL=gemini-2.5-flash
-GEMINI_FALLBACK_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.6-flash
+GEMINI_FALLBACK_MODEL=gemini-3.6-flash
 GEMINI_TIMEOUT_MS=60000
 ```
 

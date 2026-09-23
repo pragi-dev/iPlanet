@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Building2, CheckCircle2, ChevronRight, CircleCheck, ClipboardList, Clock3, KeyRound, LogOut, Mail, MapPin, Package, ScanLine, ShieldAlert, Ticket, TriangleAlert, UserCheck, UserRoundX, UsersRound, Wrench } from 'lucide-react';
 import { ServiceShell } from './components';
+import { engineerFilterOptions, filterEngineers } from './engineerFilters';
 import { getCoverage, getEngineers, getServiceCentres, getServiceDashboard, getServiceReports, getServiceTickets } from './api';
 import {
   Avatar, Badge, BarList, Button, Card, ColumnChart, Drawer, EmptyState, ErrorState, FilterBar, FilterSelect, InfoList, KPI, KPIGrid, PageHeader, PageSkeleton,
@@ -135,13 +136,8 @@ export function Engineers() {
     return { ...engineer, completedCount: mine.filter(ticket => ['Completed', 'Closed'].includes(ticket.status)).length, riskCount: mine.filter(ticket => isActive(ticket) && (riskStates.includes(slaLabel(ticket)) || riskStates.includes(ticket.escalationStatus))).length };
   }), [engineers, tickets]);
   const maxLoad = Math.max(1, ...rows.map(row => row.assignedTicketCount || 0));
-  // Search, location and availability combine; search matches the engineer's own fields only.
-  const term = search.trim().toLowerCase();
-  const visible = rows.filter(row => (status === 'All' || row.status === status)
-    && (location === 'All' || row.location === location)
-    && (!term || [row.name, row.email, row.phone, row.employeeId, row.location].some(value => String(value || '').toLowerCase().includes(term))));
-  const statuses = [...new Set(engineers.map(engineer => engineer.status).filter(Boolean))];
-  const locations = [...new Set(engineers.map(engineer => engineer.location).filter(Boolean))].sort();
+  const visible = filterEngineers(rows, { search, location, status });
+  const { locations, statuses } = engineerFilterOptions(engineers);
   return <ServiceShell title="Engineers">
     <PageHeader title="Engineers" description="Availability, workload and SLA exposure across the service team." />
     <KPIGrid columns={4}>
