@@ -74,9 +74,13 @@
   --z-overlay: 1000;
   --z-menu: 1100;
 
-  --font-text: 'SF Pro Text', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif;
-  --font-display: 'SF Pro Display', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif;
-  --font-mono: 'SF Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  /* Single typography token: San Francisco via the system font stack. Apple
+     devices render SF Pro natively; other platforms fall back. No font files
+     are bundled. Text and display roles both resolve to this one stack. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+  --font-text: var(--font-sans);
+  --font-display: var(--font-sans);
+  --font-mono: var(--font-sans);
 
   font-family: var(--font-text);
   font-size: 15px;
@@ -95,7 +99,7 @@ html, body { margin: 0; background: var(--color-background); }
 body { min-width: 320px; }
 h1, h2, h3, h4, p, dl, dd, ol, ul, figure { margin: 0; }
 ol, ul { padding: 0; list-style: none; }
-button, input, select, textarea { font: inherit; color: inherit; letter-spacing: inherit; }
+button, input, select, textarea { font: inherit; font-family: inherit; color: inherit; letter-spacing: inherit; }
 button { cursor: pointer; }
 a { color: inherit; text-decoration: none; }
 img { max-width: 100%; display: block; }
