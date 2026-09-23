@@ -126,6 +126,7 @@ export function Engineers() {
   const state = useAsync(() => Promise.all([getEngineers(), getServiceTickets()]).then(([engineers, tickets]) => ({ engineers, tickets })), []);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('All');
+  const [location, setLocation] = useState('All');
   const [selected, setSelected] = useState(null);
   const engineers = state.data?.engineers || [];
   const tickets = state.data?.tickets || [];
@@ -134,8 +135,13 @@ export function Engineers() {
     return { ...engineer, completedCount: mine.filter(ticket => ['Completed', 'Closed'].includes(ticket.status)).length, riskCount: mine.filter(ticket => isActive(ticket) && (riskStates.includes(slaLabel(ticket)) || riskStates.includes(ticket.escalationStatus))).length };
   }), [engineers, tickets]);
   const maxLoad = Math.max(1, ...rows.map(row => row.assignedTicketCount || 0));
-  const visible = rows.filter(row => (status === 'All' || row.status === status) && JSON.stringify(row).toLowerCase().includes(search.toLowerCase()));
+  // Search, location and availability combine; search matches the engineer's own fields only.
+  const term = search.trim().toLowerCase();
+  const visible = rows.filter(row => (status === 'All' || row.status === status)
+    && (location === 'All' || row.location === location)
+    && (!term || [row.name, row.email, row.phone, row.employeeId, row.location].some(value => String(value || '').toLowerCase().includes(term))));
   const statuses = [...new Set(engineers.map(engineer => engineer.status).filter(Boolean))];
+  const locations = [...new Set(engineers.map(engineer => engineer.location).filter(Boolean))].sort();
   return <ServiceShell title="Engineers">
     <PageHeader title="Engineers" description="Availability, workload and SLA exposure across the service team." />
     <KPIGrid columns={4}>
@@ -145,7 +151,7 @@ export function Engineers() {
       <KPI label="Assignments at SLA risk" value={state.data ? rows.reduce((sum, row) => sum + row.riskCount, 0) : '—'} icon={ShieldAlert} tone={rows.some(row => row.riskCount) ? 'warning' : 'neutral'} />
     </KPIGrid>
     <TableCard columns={7} loading={state.loading && !state.data} error={state.error && friendlyError(state.error)} errorTitle="Unable to load engineers" onRetry={state.reload}
-      toolbar={<FilterBar summary={state.data ? `${visible.length} engineers` : null}><SearchInput value={search} onChange={setSearch} placeholder="Search name, ID or location" label="Search engineers" /><FilterSelect label="Availability" value={status} onChange={setStatus} options={statuses} allLabel="All availability" /></FilterBar>}
+      toolbar={<FilterBar summary={state.data ? `${visible.length} engineers` : null}><SearchInput value={search} onChange={setSearch} placeholder="Search engineers…" label="Search engineers by name, email, phone, ID or location" /><FilterSelect label="Location" value={location} onChange={setLocation} options={locations} allLabel="All locations" /><FilterSelect label="Availability" value={status} onChange={setStatus} options={statuses} allLabel="All availability" /></FilterBar>}
       isEmpty={!visible.length} empty={<EmptyState icon={UsersRound} title={engineers.length ? 'No engineers match these filters' : 'No engineers on record'} description={engineers.length ? 'Try a different search term.' : 'Engineers added to the service team will appear here.'} />}>
       <table className="table">
         <thead><tr><th>Engineer</th><th>Location</th><th>Availability</th><th>Active tickets</th><th className="cell-right">Completed</th><th className="cell-right">SLA risk</th><th><span className="sr-only">Action</span></th></tr></thead>
@@ -246,9 +252,9 @@ export function ServiceSettings() {
         <div className="card"><div className="card-body profile-banner"><Avatar name={user.name} size={56} tone="accent" /><div><h2>{user.name || 'iPlanet Service'}</h2><p>iPlanet Service Operations</p></div></div></div>
         <div id="personal" className="settings-section"><Card title="Personal information"><InfoList columns={2} items={[['Full name', user.name], ['User ID', user.id]]} /></Card></div>
         <div id="contact" className="settings-section"><Card title="Contact"><InfoList items={[['Email', user.email && <span className="row"><Mail size={14} aria-hidden="true" />{user.email}</span>]]} /></Card></div>
-        <div id="role" className="settings-section"><Card title="Role" description="Your access level in iPlanetCare"><InfoList items={[['Role', <Badge tone="info">iPlanet Service</Badge>], ['Access', 'Tickets, enrollment, engineers, reports, coverage, escalation matrix, notifications and reviews']]} /></Card></div>
+        <div id="role" className="settings-section"><Card title="Role" description="Your access level in iPlanet Self-care Portal"><InfoList items={[['Role', <Badge tone="info">iPlanet Service</Badge>], ['Access', 'Tickets, enrollment, engineers, reports, coverage, escalation matrix, notifications and reviews']]} /></Card></div>
         <div id="organization" className="settings-section"><Card title="Organization"><InfoList columns={2} items={[['Organization', 'iPlanet Service'], ['Service centre', user.serviceCentreId ? (centres.loading ? 'Loading…' : centre?.name || 'Not found') : 'All service centres'], ['Centre location', centre?.location], ['Centre contact', centre?.contactNumber]]} /></Card></div>
-        <div id="integrations" className="settings-section"><Card title="Integrations" description="External services connected to iPlanetCare">
+        <div id="integrations" className="settings-section"><Card title="Integrations" description="External services connected to iPlanet Self-care Portal">
           <div className="row-between"><div className="person-cell"><span className="thumb thumb-lg"><Building2 size={18} aria-hidden="true" /></span><div><strong>Google Business Profile</strong><span className="cell-sub">Connect locations and sync public Google reviews</span></div></div><Button to="/service/reviews/google">Manage</Button></div>
         </Card></div>
         <div id="security" className="settings-section"><Card title="Security" actions={<Button icon={LogOut} onClick={() => { localStorage.clear(); navigate('/login', { replace: true }); }}>Sign out</Button>}>

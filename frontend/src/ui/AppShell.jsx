@@ -36,7 +36,7 @@ function Sidebar({ config, unread, onNavigate, aiOpen }) {
     <Link to={config.home} className="brand" onClick={onNavigate}>
       <span className="brand-mark" aria-hidden="true">i</span>
       <span className="brand-text">
-        <strong>iPlanetCare</strong>
+        <strong>iPlanet Self-care Portal</strong>
         <small>{config.portalName}</small>
       </span>
     </Link>
@@ -60,7 +60,7 @@ function Sidebar({ config, unread, onNavigate, aiOpen }) {
       </div>)}
     </nav>
     <div className="sidebar-footer">
-      <p className="sidebar-product">iPlanetCare · Self-Care &amp; Service Operations</p>
+      <p className="sidebar-product">iPlanet Self-care Portal</p>
     </div>
   </div>;
 }
@@ -107,7 +107,7 @@ export function AppShell({ config, title, crumbs, children }) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   useEffect(() => { setMobileOpen(false); }, [location.pathname]);
-  useEffect(() => { document.title = title ? `${title} · iPlanetCare` : 'iPlanetCare'; }, [title]);
+  useEffect(() => { document.title = title ? `${title} · iPlanet Self-care Portal` : 'iPlanet Self-care Portal'; }, [title]);
   useEffect(() => {
     if (!mobileOpen) return undefined;
     const onKey = event => { if (event.key === 'Escape') setMobileOpen(false); };

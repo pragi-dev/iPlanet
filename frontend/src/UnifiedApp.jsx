@@ -48,7 +48,7 @@ function Login() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
-  useEffect(() => { document.title = 'Sign in · iPlanetCare'; }, []);
+  useEffect(() => { document.title = 'Sign in · iPlanet Self-care Portal'; }, []);
   const submit = async event => {
     event.preventDefault();
     setError('');
@@ -67,7 +67,7 @@ function Login() {
   const selectProfile = nextProfile => { setProfile(nextProfile); setEmail(profiles[nextProfile].email); setError(''); };
   return <main className="login">
     <header className="login-top">
-      <div className="brand"><span className="brand-mark" aria-hidden="true">i</span><span className="brand-text"><strong>iPlanetCare</strong><small>Self-Care &amp; Service Operations</small></span></div>
+      <div className="brand"><span className="brand-mark" aria-hidden="true">i</span><span className="brand-text"><strong>iPlanet Self-care Portal</strong><small>Self-Care &amp; Service Operations</small></span></div>
     </header>
     <div className="login-main">
       <div>
@@ -88,7 +88,7 @@ function Login() {
       </form>
       </div>
     </div>
-    <footer className="login-foot">iPlanetCare · Corporate Self-Care and iPlanet Service</footer>
+    <footer className="login-foot">iPlanet Self-care Portal · Corporate Self-Care and iPlanet Service</footer>
   </main>;
 }
 

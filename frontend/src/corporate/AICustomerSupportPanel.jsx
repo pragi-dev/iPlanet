@@ -1,10 +1,41 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bot, FilePlus2, Info, Laptop, Mic, RefreshCcw, SendHorizonal, ShieldCheck, Sparkles, Stethoscope, Ticket, Volume2, Wrench } from 'lucide-react';
-import { Button, Drawer, IconButton, InlineAlert } from '../ui';
-import { getTicketAITroubleshooting, sendAiSupportMessage } from './api';
+import { Bot, CheckCircle2, FilePlus2, Info, Laptop, Mic, RefreshCcw, SendHorizonal, ShieldCheck, Sparkles, Stethoscope, Ticket, Volume2, Wrench } from 'lucide-react';
+import { Button, Drawer, Field, IconButton, InlineAlert, RatingPicker, friendlyError } from '../ui';
+import { getTicketAITroubleshooting, sendAiSupportMessage, submitAiSupportFeedback } from './api';
 
 const unavailablePattern = /AI (Support|troubleshooting) is (temporarily |currently )?unavailable/i;
+
+// Rate Us, shown inside the conversation once the customer confirms the
+// troubleshooting steps resolved their issue. Uses the shared rating picker.
+function AiRatingCard({ conversationId, submitted, onSubmitted }) {
+  const [rating, setRating] = useState(0);
+  const [comment, setComment] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  if (submitted) return <div className="ai-rating ai-rating-done" role="status"><CheckCircle2 size={18} aria-hidden="true" /><span><strong>Thanks for your feedback.</strong> It helps us improve AI Support.</span></div>;
+  const submit = async event => {
+    event.preventDefault();
+    if (!rating) { setError('Choose a rating to continue.'); return; }
+    setBusy(true);
+    setError('');
+    try {
+      await submitAiSupportFeedback(conversationId, { rating, comment });
+      onSubmitted();
+    } catch (submitError) {
+      if (submitError.status === 409) onSubmitted();
+      else setError(friendlyError(submitError, 'Unable to submit your feedback. Please try again.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <form className="ai-rating" onSubmit={submit} noValidate>
+    <RatingPicker label="Rate us" value={rating} onChange={setRating} size={20} />
+    <Field label="Tell us more (optional)">{props => <textarea {...props} rows={2} maxLength={2000} value={comment} onChange={event => setComment(event.target.value)} placeholder="What worked well?" style={{ minHeight: 72 }} />}</Field>
+    {error && <InlineAlert title={error} />}
+    <div><Button variant="primary" size="sm" type="submit" disabled={busy || !rating}>{busy ? 'Submitting…' : 'Submit rating'}</Button></div>
+  </form>;
+}
 
 function contextDevice(ticket, device) {
   return ticket?.deviceId && typeof ticket.deviceId === 'object' ? ticket.deviceId : device;
@@ -36,11 +67,12 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [voiceActive, setVoiceActive] = useState(false);
   const [speakingIndex, setSpeakingIndex] = useState(null);
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
   const listRef = useRef(null);
   const recognitionRef = useRef(null);
   const inputRef = useRef(null);
 
-  const reset = () => { setMessages([]); setConversationId(null); setRequestData(null); setError(''); setFailedMessage(''); };
+  const reset = () => { setMessages([]); setConversationId(null); setRequestData(null); setError(''); setFailedMessage(''); setFeedbackSubmitted(false); };
 
   useEffect(() => {
     if (!open) return undefined;
@@ -85,7 +117,10 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
       });
       const response = result?.reply || result?.message;
       if (!response || unavailablePattern.test(response)) throw new Error('unavailable');
-      setMessages(current => [...current, { role: 'assistant', content: response }]);
+      // ratingRequested is set by the backend only when the customer confirmed
+      // the issue is resolved, and only once per session.
+      setMessages(current => [...current, { role: 'assistant', content: response, rating: Boolean(result?.ratingRequested) }]);
+      if (result?.session?.feedback?.submittedAt) setFeedbackSubmitted(true);
       setConversationId(result?.conversationId || conversationId);
       setRequestData(result?.requestData || null);
     } catch {
@@ -171,6 +206,7 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
           {message.role === 'assistant' && speechAvailable && <div className="ai-msg-tools">
             <button type="button" className={speakingIndex === index ? 'active' : ''} aria-label={speakingIndex === index ? 'Stop reading response' : 'Read response aloud'} onClick={() => speakMessage(message.content, index)}><Volume2 size={12} aria-hidden="true" />{speakingIndex === index ? 'Stop' : 'Listen'}</button>
           </div>}
+          {message.rating && conversationId && <AiRatingCard conversationId={conversationId} submitted={feedbackSubmitted} onSubmitted={() => setFeedbackSubmitted(true)} />}
         </div>
       </div>)}
 

@@ -33,3 +33,4 @@ export async function startTicketAITroubleshooting(ticketId, payload) { return r
 export async function sendAiSupportMessage(ticketId, payload) { return request('/ai/support/chat', { method: 'POST', body: JSON.stringify({ ...payload, ticketId }) }); }
 export async function getAiPreparedRequest(conversationId) { return request(`/ai/support/request-data/${encodeURIComponent(conversationId)}`); }
 export async function getCoverage() { return request('/coverage'); }
+export async function submitAiSupportFeedback(conversationId, payload) { return request(`/ai/support/feedback/${encodeURIComponent(conversationId)}`, { method: 'POST', body: JSON.stringify(payload) }); }

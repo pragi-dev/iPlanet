@@ -572,10 +572,17 @@ app.post('/api/ai/support/chat', auth, async (req, res) => {
       let flowState = currentFlow;
       let reply;
       let draft = null;
+      let ratingRequested = false;
 
       if (currentFlow === 'awaiting_troubleshooting_result' && understanding.workflowSignal === 'resolved') {
         flowState = 'completed';
-        reply = "Great! I'm glad that fixed the issue. If you need anything else, I'm here to help.";
+        // The customer confirmed the supplied steps fixed the issue. Ask for a
+        // rating once per session; later resolutions keep the plain reply.
+        ratingRequested = !activeSession.feedback?.promptedAt;
+        if (ratingRequested) activeSession.set('feedback.promptedAt', new Date());
+        reply = ratingRequested
+          ? 'Glad that helped. How was your experience?'
+          : "Great! I'm glad that fixed the issue. If you need anything else, I'm here to help.";
       } else if (shouldPrepareRequest) {
         flowState = device ? 'collecting_request_details' : 'device_identification';
         draft = !dateResolution.ambiguous && device ? await validatedRequestDraft(state, device) : null;
@@ -612,7 +619,7 @@ app.post('/api/ai/support/chat', auth, async (req, res) => {
       }
       activeSession.messages.push({ role: 'assistant', content: reply, timestamp: new Date() });
       await activeSession.save();
-      return res.json({ success: true, message: reply, conversationId: activeSession.sessionId, session: activeSession, requestData: draft ? { ...draft, conversationId: activeSession.sessionId } : null });
+      return res.json({ success: true, message: reply, conversationId: activeSession.sessionId, session: activeSession, requestData: draft ? { ...draft, conversationId: activeSession.sessionId } : null, ratingRequested });
     } catch (error) {
       console.error(`[AI ERROR] Stage: Request Understanding Code: ${error.code || 'AI_UNEXPECTED_ERROR'}`);
       activeSession.providerAvailable = false;
@@ -658,6 +665,25 @@ app.post('/api/ai/support/chat', auth, async (req, res) => {
       session: activeSession
     });
   }
+});
+// Rating for an AI Support session the customer confirmed as resolved. No
+// ticket exists in that flow, so the feedback is stored on the session itself
+// and the service team is notified through the existing notification system.
+app.post('/api/ai/support/feedback/:conversationId', auth, allowRoles('corporate_admin'), async (req, res) => {
+  const { rating, comment } = req.body || {};
+  const cleanComment = String(comment || '').trim();
+  if (!Number.isInteger(Number(rating)) || Number(rating) < 1 || Number(rating) > 5) return res.status(400).json({ message: 'Rating must be an integer from 1 to 5.' });
+  if (cleanComment.length > 2000) return res.status(400).json({ message: 'Feedback must be 2000 characters or fewer.' });
+  const session = await AITroubleshootingSession.findOne({ sessionId: req.params.conversationId, customerId: req.user.id }).populate('deviceId');
+  if (!session) return res.status(404).json({ message: 'AI Support conversation not found.' });
+  // promptedAt is only ever set when the customer confirmed resolution.
+  if (!session.feedback?.promptedAt) return res.status(400).json({ message: 'Feedback can be shared once the issue is resolved.' });
+  if (session.feedback?.submittedAt) return res.status(409).json({ message: 'Feedback has already been submitted for this conversation.' });
+  session.set({ 'feedback.rating': Number(rating), 'feedback.comment': cleanComment || undefined, 'feedback.submittedAt': new Date() });
+  await session.save();
+  const device = session.deviceId && typeof session.deviceId === 'object' ? session.deviceId : null;
+  await notifyUsers({ users: await serviceUsers(), company: req.user.companyId, device, type: 'AI_SUPPORT_FEEDBACK', title: 'AI Support feedback', message: `A customer rated AI Support ${Number(rating)}/5 after resolving${device?.model ? ` a ${device.model}` : ' an'} issue.${cleanComment ? ` "${cleanComment.slice(0, 160)}"` : ''}` });
+  return res.status(201).json({ feedback: session.feedback });
 });
 app.get('/api/ai/support/request-data/:conversationId', auth, async (req, res) => {
   const session = await AITroubleshootingSession.findOne({ sessionId: req.params.conversationId, customerId: req.user.id });

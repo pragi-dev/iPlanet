@@ -1035,3 +1035,13 @@ button.chip:hover { background: var(--color-fill-strong); }
 /* Small device / entity thumbnails used in tables and lists */
 .thumb { width: 32px; height: 32px; flex: none; border-radius: var(--radius-sm); display: grid; place-items: center; background: var(--color-fill); color: var(--color-text-primary); }
 .thumb-lg { width: 44px; height: 44px; border-radius: var(--radius-md); }
+
+/* Rate Us inside the AI Support conversation */
+.ai-msg.assistant > div { flex: 1; min-width: 0; }
+.ai-msg-bubble { width: fit-content; max-width: 100%; }
+.ai-rating { display: grid; gap: var(--space-3); margin-top: var(--space-2); padding: var(--space-4); border-radius: var(--radius-md); background: var(--color-fill); }
+.ai-rating .rating-picker button:not(.on) { background: var(--color-surface); }
+.ai-rating .rating-caption { min-height: 0; margin-top: 2px; }
+.ai-rating-done { display: flex; align-items: flex-start; gap: var(--space-2); font-size: 14px; color: var(--color-text-secondary); }
+.ai-rating-done svg { color: var(--color-success); flex: none; margin-top: 1px; }
+.ai-rating-done strong { color: var(--color-text-primary); font-weight: 600; }

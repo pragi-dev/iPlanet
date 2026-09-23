@@ -3,9 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { CheckCircle2, MessageSquareText, Star } from 'lucide-react';
 import { Shell } from './components';
 import { getMyReviews, getTicket, getTickets, submitReview } from './api';
-import { Badge, Button, Card, EmptyState, ErrorState, Field, InfoList, InlineAlert, PageHeader, PageSkeleton, RowAction, Stars, TableCard, Tabs, formatDate, friendlyError, useAsync } from '../ui';
-
-const ratingLabels = ['', 'Very poor', 'Poor', 'Average', 'Good', 'Excellent'];
+import { Badge, Button, Card, EmptyState, ErrorState, Field, InfoList, InlineAlert, PageHeader, PageSkeleton, RatingPicker, RowAction, Stars, TableCard, Tabs, formatDate, friendlyError, useAsync } from '../ui';
 
 export function ReviewPage() {
   const { ticketId } = useParams();
@@ -50,15 +48,7 @@ export function ReviewPage() {
           <div className="row" style={{ justifyContent: 'center' }}><Button to="/corporate/reviews">All reviews</Button><Button variant="primary" to={`/corporate/service-requests/${ticketId}`}>Back to request</Button></div>
         </div> : !reviewEligible ? <EmptyState icon={Star} title="Not ready for review yet" description="You can rate the service once this request is closed." action={<Button to={`/corporate/service-requests/${ticketId}`}>Back to request</Button>} />
         : <form className="stack-24" onSubmit={submit} noValidate>
-          <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
-            <legend className="field-label" style={{ marginBottom: 8 }}>How was your service experience? <span className="field-required" aria-hidden="true">*</span></legend>
-            <div className="rating-picker" role="radiogroup" aria-label="Rating">
-              {[1, 2, 3, 4, 5].map(value => <button key={value} type="button" role="radio" aria-checked={rating === value} aria-label={`${value} star${value === 1 ? '' : 's'}: ${ratingLabels[value]}`} className={value <= rating ? 'on' : ''} tabIndex={rating === value || (!rating && value === 1) ? 0 : -1} onClick={() => setRating(value)} onKeyDown={event => { if (event.key === 'ArrowRight' || event.key === 'ArrowUp') { event.preventDefault(); setRating(Math.min(5, value + 1)); event.currentTarget.nextElementSibling?.focus(); } if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') { event.preventDefault(); setRating(Math.max(1, value - 1)); event.currentTarget.previousElementSibling?.focus(); } }}>
-                <Star size={22} fill={value <= rating ? 'currentColor' : 'none'} aria-hidden="true" />
-              </button>)}
-            </div>
-            <p className="rating-caption" aria-live="polite">{ratingLabels[rating]}</p>
-          </fieldset>
+          <RatingPicker label="How was your service experience?" required value={rating} onChange={setRating} />
           <Field label="Tell us about your experience" required hint={`${comment.length}/2000 characters`}>
             {props => <textarea {...props} required maxLength={2000} value={comment} onChange={event => setComment(event.target.value)} placeholder="What went well, and what could be better?" />}
           </Field>

@@ -263,3 +263,18 @@ export function TableCard({ loading, error, onRetry, errorTitle, isEmpty, empty,
     {footer}
   </div>;
 }
+
+const ratingLabels = ['', 'Very poor', 'Poor', 'Average', 'Good', 'Excellent'];
+
+// The Rate Us star picker, shared by the service review page and AI Support.
+export function RatingPicker({ label, value, onChange, required = false, size = 22 }) {
+  return <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+    <legend className="field-label" style={{ marginBottom: 8 }}>{label}{required && <span className="field-required" aria-hidden="true"> *</span>}</legend>
+    <div className="rating-picker" role="radiogroup" aria-label="Rating">
+      {[1, 2, 3, 4, 5].map(star => <button key={star} type="button" role="radio" aria-checked={value === star} aria-label={`${star} star${star === 1 ? '' : 's'}: ${ratingLabels[star]}`} className={star <= value ? 'on' : ''} tabIndex={value === star || (!value && star === 1) ? 0 : -1} onClick={() => onChange(star)} onKeyDown={event => { if (event.key === 'ArrowRight' || event.key === 'ArrowUp') { event.preventDefault(); onChange(Math.min(5, star + 1)); event.currentTarget.nextElementSibling?.focus(); } if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') { event.preventDefault(); onChange(Math.max(1, star - 1)); event.currentTarget.previousElementSibling?.focus(); } }}>
+        <Star size={size} fill={star <= value ? 'currentColor' : 'none'} aria-hidden="true" />
+      </button>)}
+    </div>
+    <p className="rating-caption" aria-live="polite">{ratingLabels[value]}</p>
+  </fieldset>;
+}
