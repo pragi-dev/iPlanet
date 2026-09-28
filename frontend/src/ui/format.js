@@ -116,6 +116,12 @@ export function friendlyError(error, fallback = 'Something went wrong. Please tr
   return message;
 }
 
+// Turnaround strings can carry raw fractions ("0.3333333333 business days").
+export function formatTat(value) {
+  if (!value) return value;
+  return String(value).replace(/\d+\.\d{2,}/g, number => String(Math.round(Number(number) * 10) / 10));
+}
+
 // "SLA Breached" already names the SLA; other states read "SLA Healthy", "SLA At Risk".
 export function slaBadgeText(ticket) {
   const label = slaLabel(ticket);

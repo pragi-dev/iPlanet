@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Camera, CheckCircle2, FilePlus2, HeartPulse, ImagePlus, Pencil, Recycle, RefreshCcw, Search, Trash2, Wrench, BadgeIndianRupee } from 'lucide-react';
 import { Shell } from './components';
-import { createTicket, getAiPreparedRequest, getDevices, uploadAnnotatedImages, uploadImages } from './api';
+import { createTicket, getAiPreparedRequest, getDevices, getTickets, uploadAnnotatedImages, uploadImages } from './api';
 import { ImageAnnotator } from './ImageAnnotator';
-import { Badge, Button, Card, DeviceIcon, EmptyState, ErrorState, Field, InfoList, InlineAlert, PageHeader, Scanner, Skeleton, Stepper, formatDate, friendlyError, useAIAssistant } from '../ui';
+import { Badge, Button, Card, CoverageTiles, DeviceIcon, EmptyState, ErrorState, Field, InfoList, InlineAlert, PageHeader, Scanner, Skeleton, Stepper, formatDate, friendlyError, idOf, isActiveTicket, useAIAssistant } from '../ui';
 
 const locations = ['Chennai', 'Coimbatore', 'Bengaluru', 'Madurai'];
 const issueTypes = ['Screen / Display', 'Battery', 'Charging', 'Keyboard', 'Trackpad', 'Camera', 'Speaker', 'Software', 'Performance', 'Physical Damage', 'Other'];
@@ -15,7 +15,9 @@ const categories = [
   { value: 'Buyback', icon: BadgeIndianRupee, hint: 'Trade in a device' },
   { value: 'E-Waste', icon: Recycle, hint: 'Responsible disposal' },
 ];
-const steps = ['Identify', 'Details', 'Evidence', 'Review'];
+// The fifth stage, Submit, is reached when the request is created.
+const steps = ['Identify device', 'Request details', 'Evidence', 'Review', 'Submit'];
+const lastEditableStep = 3;
 
 function todayInIndia() {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
@@ -60,7 +62,13 @@ export function RequestEnhanced() {
   const [done, setDone] = useState(null);
   const [error, setError] = useState('');
 
-  const loadDevices = () => { setLoadError(null); getDevices().then(setDevices).catch(setLoadError); };
+  const [openTickets, setOpenTickets] = useState([]);
+  const loadDevices = () => {
+    setLoadError(null);
+    getDevices().then(setDevices).catch(setLoadError);
+    // Only used to warn about an existing open request for the chosen device.
+    getTickets().then(tickets => setOpenTickets(tickets.filter(isActiveTicket))).catch(() => setOpenTickets([]));
+  };
   useEffect(() => { loadDevices(); }, []);
   useEffect(() => { const id = new URLSearchParams(route.search).get('conversationId'); if (!aiRequest && id) getAiPreparedRequest(id).then(result => setAiRequest(result.requestData)).catch(() => setError('The AI-prepared request is unavailable. You can continue manually.')); }, [aiRequest, route.search]);
   useEffect(() => {
@@ -105,7 +113,8 @@ export function RequestEnhanced() {
   const saveAnnotation = file => { setAnnotated(current => [...current.filter(item => item.name !== file.name), file]); setEditing(null); };
 
   const canContinue = [Boolean(form.deviceId), Boolean(form.description.trim()), true, Boolean(form.deviceId && form.description.trim())];
-  const next = () => { if (!canContinue[step]) { setTouched(true); return; } setTouched(false); setStep(current => Math.min(steps.length - 1, current + 1)); };
+  const next = () => { if (!canContinue[step]) { setTouched(true); return; } setTouched(false); setStep(current => Math.min(lastEditableStep, current + 1)); };
+  const existingRequest = device ? openTickets.find(ticket => idOf(ticket.deviceId) === String(device._id)) : null;
   const back = () => setStep(current => Math.max(0, current - 1));
 
   const submit = async () => {
@@ -136,7 +145,8 @@ export function RequestEnhanced() {
   const reset = () => { setDone(null); setDevice(null); setSerial(''); setFiles([]); setAnnotated([]); setForm(current => ({ ...current, description: '', deviceId: '', preferredServiceDate: todayInIndia() })); setStep(0); setAiRequest(null); };
 
   if (done) return <Shell title="Raise Request" crumbs={[{ label: 'Raise Request' }]}>
-    <div className="card"><div className="success-panel">
+    <Stepper steps={steps} current={steps.length} />
+    <div className="card" role="status"><div className="success-panel">
       <span className="success-mark"><CheckCircle2 size={26} aria-hidden="true" /></span>
       <h2>Service request submitted</h2>
       <p>iPlanet Service has received your request and will review it shortly. You'll be notified as it progresses.</p>
@@ -168,7 +178,7 @@ export function RequestEnhanced() {
           'Enter or scan the serial number. Device details fill in automatically.',
           'Choose the request type and describe what’s happening.',
           'Add photos and mark the damaged area. This step is optional.',
-          'Check the details before submitting.',
+          'Check the details, then submit. You can edit any section.',
         ][step]}>
           {step === 0 && (loadError ? <ErrorState compact title="Unable to load your devices" message={friendlyError(loadError)} onRetry={loadDevices} />
             : !devices ? <div className="stack-12"><Skeleton height={46} /><Skeleton height={80} /></div>
@@ -185,7 +195,11 @@ export function RequestEnhanced() {
                   <div className="device-card-body"><strong>{device.model}</strong><span className="mono">{device.serialNumber}</span></div>
                   <Button size="sm" variant="ghost" icon={RefreshCcw} onClick={() => lookup('')}>Change</Button>
                 </div>
-                <InfoList columns={2} items={[['Device type', device.deviceType], ['Asset ID', device.assetId], ['Employee', device.employeeName || 'Unassigned'], ['Location', device.location], ['Warranty', <Badge>{device.warrantyStatus}</Badge>], ['AMC', <Badge>{device.amcStatus}</Badge>]]} />
+                {existingRequest && <InlineAlert tone="warning" title={`This device already has an open request: ${existingRequest.ticketId}`} action={<Link className="btn btn-secondary btn-sm" to={`/corporate/service-requests/${existingRequest._id}`}>View request</Link>}>
+                  {existingRequest.issueType} · {existingRequest.status}. You can still raise a separate request if this is a different issue.
+                </InlineAlert>}
+                <InfoList columns={2} items={[['Device type', device.deviceType], ['Asset ID', device.assetId], ['Employee', device.employeeName || 'Unassigned'], ['Location', device.location]]} />
+                <CoverageTiles device={device} />
               </div> : suggestions.length > 0 ? <div className="stack-8">
                 <p className="subheading" style={{ margin: 0 }}>Matching devices</p>
                 <div className="device-options" role="listbox" aria-label="Matching devices">{suggestions.map(item => <button type="button" role="option" aria-selected="false" key={item._id} className="device-option" onClick={() => { setSerial(item.serialNumber); selectDevice(item); }}>

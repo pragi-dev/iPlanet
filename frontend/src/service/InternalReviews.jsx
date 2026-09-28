@@ -3,7 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ChevronLeft, MessageSquareText, RefreshCcw } from 'lucide-react';
 import { ServiceShell } from './components';
 import { getGoogleReviewsSync, getServiceReview, getServiceReviews } from './api';
-import { GoogleReviewCard, InternalReviewCard, ReviewTabs, flattenGoogleReviews, getCachedGoogleSync, setCachedGoogleSync } from './reviewShared';
+import { GoogleBadge, GoogleReviewCard, InternalReviewCard, ReviewTabs, flattenGoogleReviews, getCachedGoogleSync, setCachedGoogleSync } from './reviewShared';
 import { Badge, Button, EmptyState, ErrorState, FilterBar, FilterSelect, InfoList, InlineAlert, KPI, KPIGrid, PageHeader, PageSkeleton, RowAction, SearchInput, Section, Stars, Surface, TableCard, formatDate, formatDateTime, friendlyError, useAsync } from '../ui';
 
 export { ReviewTabs };
@@ -39,6 +39,7 @@ export function InternalReviews() {
   return <ServiceShell title="Reviews">
     <PageHeader title="Reviews" description="Customer feedback from closed service requests and your Google Business Profile." />
     <ReviewTabs current={view === 'internal' ? '/service/reviews?source=internal' : '/service/reviews'} />
+    <p className="source-legend"><span><Badge tone="info">Internal review</Badge>Rated by a corporate customer after a closed service request</span><span><GoogleBadge />Public review from your Google Business Profile</span></p>
     <KPIGrid columns={3}>
       <KPI label="Internal reviews" value={state.data ? reviews.length : '—'} hint={filters.rating !== 'All' || filters.search ? 'Matching current filters' : 'After closed service requests'} />
       <KPI label="Average internal rating" value={average === null ? '—' : average.toFixed(1)} hint={average === null ? 'No reviews yet' : 'Out of 5'} />
@@ -89,7 +90,7 @@ export function InternalReviewDetail() {
       <div className="page-header-text">
         <p className="eyebrow">{review.corporateId?.name || 'Customer review'}</p>
         <h1 className="page-title">{review.ticketId?.ticketId ? <>Review for <span className="mono" style={{ fontSize: '0.86em' }}>{review.ticketId.ticketId}</span></> : 'Customer review'}</h1>
-        <div className="page-meta"><Badge tone="info">Internal</Badge><Stars rating={review.rating} size={16} /><span>{formatDateTime(review.createdAt)}</span></div>
+        <div className="page-meta"><Badge tone="info">Internal review</Badge><Stars rating={review.rating} size={16} /><span>{formatDateTime(review.createdAt)}</span></div>
       </div>
     </div>
     <Surface label="Review">

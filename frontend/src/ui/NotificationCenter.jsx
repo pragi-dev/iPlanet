@@ -67,7 +67,7 @@ export function NotificationCenter({ load, markRead, markAllRead, resolveRoute, 
     <Tabs label="Notification filter" value={filter} onChange={setFilter} tabs={[{ value: 'all', label: 'All', count: items?.length ?? undefined }, { value: 'unread', label: 'Unread', count: items ? unreadCount : undefined }]} />
     {error && !items ? <div className="card"><ErrorState title="Unable to load notifications" message={error} onRetry={refresh} /></div>
       : !items ? <div className="card"><TableSkeleton rows={5} columns={3} /></div>
-      : !groups.length ? <div className="card"><EmptyState icon={Bell} title={filter === 'unread' ? 'You are all caught up' : 'No notifications yet'} description={filter === 'unread' ? 'There are no unread notifications.' : 'Ticket, SLA, device and review updates will appear here.'} /></div>
+      : !groups.length ? <div className="card"><EmptyState icon={Bell} title={filter === 'unread' ? 'You are all caught up' : 'No notifications yet'} description={filter === 'unread' ? 'Every notification has been read. New ticket, SLA and device updates will appear here.' : 'Ticket, SLA, device and review updates will appear here as they happen.'} action={filter === 'unread' && items.length ? <Button size="sm" onClick={() => setFilter('all')}>Show all notifications</Button> : null} /></div>
       : <div className="stack-24">
         {error && <ErrorState compact title="Something went wrong" message={error} />}
         {groups.map(group => <section className="notification-group" key={group.label} aria-label={group.label}>
@@ -77,25 +77,31 @@ export function NotificationCenter({ load, markRead, markAllRead, resolveRoute, 
               const meta = metaFor(item);
               const Icon = meta.icon;
               const route = resolveRoute(item);
-              return <li key={item._id} className={`notification-item ${item.read ? '' : 'unread'}`}>
+              // Lead with the record the update is about, so the list scans by ticket or device.
+              const entity = item.ticket?.ticketId || (item.device?.model ? `${item.device.model}${item.device.serialNumber ? ` · ${item.device.serialNumber}` : ''}` : null);
+              const content = <>
                 <span className={`notification-icon tone-${meta.tone}`} aria-hidden="true"><Icon size={17} /></span>
-                <div className="notification-body">
-                  <div className="notification-head">
+                <span className="notification-body">
+                  {entity && <span className={`notification-entity ${item.ticket?.ticketId ? 'mono' : ''}`}>{entity}</span>}
+                  <span className="notification-head">
                     <span className="notification-title">{item.title}</span>
                     <Badge tone={meta.tone === 'neutral' ? 'neutral' : meta.tone}>{meta.label}</Badge>
                     {!item.read && <span className="sr-only">Unread</span>}
-                  </div>
-                  {item.message && <p className="notification-message">{item.message}</p>}
-                  <p className="notification-meta">
+                  </span>
+                  {item.message && <span className="notification-message">{item.message}</span>}
+                  <span className="notification-meta">
                     <time dateTime={item.createdAt} title={formatDateTime(item.createdAt)}>{formatRelative(item.createdAt) || 'Recently'}</time>
-                    {item.ticket?.ticketId && <><span aria-hidden="true">·</span><span className="mono">{item.ticket.ticketId}</span></>}
-                    {item.device?.model && <><span aria-hidden="true">·</span><span>{item.device.model}{item.device.serialNumber ? ` · ${item.device.serialNumber}` : ''}</span></>}
-                  </p>
-                  {route && <button type="button" className="notification-link btn-link" onClick={() => void open(item)}>{item.ticket?.ticketId ? `Open ${item.ticket.ticketId}` : 'View details'}<ChevronRight size={14} aria-hidden="true" /></button>}
-                </div>
+                    {item.ticket?.ticketId && item.device?.model && <><span aria-hidden="true">·</span><span>{item.device.model}</span></>}
+                  </span>
+                </span>
+              </>;
+              return <li key={item._id} className={`notification-item has-open ${item.read ? '' : 'unread'}`}>
+                {route ? <button type="button" className="notification-open" onClick={() => void open(item)} aria-label={`${item.title}${entity ? `, ${entity}` : ''}. Open details`}>{content}</button>
+                  : <div className="notification-open">{content}</div>}
                 <div className="notification-side">
                   {!item.read && <IconButton label="Mark as read" icon={Check} onClick={() => void read(item)} />}
-                  {!item.read && <span className="unread-dot" aria-hidden="true" style={{ marginTop: 14 }} />}
+                  {!item.read && <span className="unread-dot" aria-hidden="true" />}
+                  {route && <ChevronRight size={16} aria-hidden="true" className="text-muted" />}
                 </div>
               </li>;
             })}

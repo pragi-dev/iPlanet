@@ -20,6 +20,8 @@ export async function createTicket(payload) { return request('/tickets', { metho
 export async function uploadImages(ticketId, files) { if (!files.length || String(ticketId).startsWith('ticket-')) return; const body = new FormData(); files.forEach(file => body.append('images', file)); const response = await fetch(`${API}/tickets/${ticketId}/images`, { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body }); if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.message || `Image upload failed (${response.status})`); } }
 export async function uploadAnnotatedImages(ticketId, files) { if (!files.length || String(ticketId).startsWith('ticket-')) return; const body = new FormData(); files.forEach(file => body.append('images', file)); const response = await fetch(`${API}/tickets/${ticketId}/annotated-images`, { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body }); if (!response.ok) throw new Error('Annotated image upload failed'); return response.json(); }
 export async function getDashboard() { const [stats, volume, locations] = await Promise.all([request('/dashboard/stats'), request('/dashboard/ticket-volume'), request('/dashboard/location-distribution')]); return { stats, volume, locations }; }
+// Stats also re-evaluates SLA escalation server-side before tickets are read.
+export async function getDashboardStats() { return request('/dashboard/stats'); }
 export async function getProfile() { return request('/profile'); }
 export async function getNotifications() { return request('/corporate/notifications'); }
 export async function getNotificationUnreadCount() { return request('/corporate/notifications/unread-count'); }

@@ -68,14 +68,20 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
   const [voiceActive, setVoiceActive] = useState(false);
   const [speakingIndex, setSpeakingIndex] = useState(null);
   const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
+  const [flowState, setFlowState] = useState(null);
   const listRef = useRef(null);
   const recognitionRef = useRef(null);
   const inputRef = useRef(null);
+  const loadedContext = useRef(null);
 
-  const reset = () => { setMessages([]); setConversationId(null); setRequestData(null); setError(''); setFailedMessage(''); setFeedbackSubmitted(false); };
+  const reset = () => { setMessages([]); setConversationId(null); setRequestData(null); setError(''); setFailedMessage(''); setFeedbackSubmitted(false); setFlowState(null); };
 
+  // The conversation is kept while the drawer is closed and reopened on the
+  // same page context; it starts fresh only when the device/ticket changes.
+  const contextKey = ticket?._id ? `ticket:${ticket._id}` : device?._id ? `device:${device._id}` : 'general';
   useEffect(() => {
-    if (!open) return undefined;
+    if (!open || loadedContext.current === contextKey) return undefined;
+    loadedContext.current = contextKey;
     let ignore = false;
     reset();
     if (ticket?._id) {
@@ -88,7 +94,7 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
       }).catch(() => { /* A new conversation starts when no session exists. */ });
     }
     return () => { ignore = true; };
-  }, [open, ticket?._id]);
+  }, [open, contextKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
@@ -121,6 +127,7 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
       // the issue is resolved, and only once per session.
       setMessages(current => [...current, { role: 'assistant', content: response, rating: Boolean(result?.ratingRequested) }]);
       if (result?.session?.feedback?.submittedAt) setFeedbackSubmitted(true);
+      setFlowState(result?.session?.issueContext?.flowState || null);
       setConversationId(result?.conversationId || conversationId);
       setRequestData(result?.requestData || null);
     } catch {
@@ -178,6 +185,10 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
   const known = contextDevice(ticket, device);
   const hasConversation = messages.some(item => item.role === 'user');
   const speechAvailable = voiceSupported && 'speechSynthesis' in window;
+  // Offered only while the backend is waiting to hear whether the suggested
+  // troubleshooting worked; the phrases map to its resolved / failed signals.
+  const lastIndex = messages.length - 1;
+  const awaitingResult = flowState === 'awaiting_troubleshooting_result' && messages[lastIndex]?.role === 'assistant' && !loading && !requestData;
 
   return <Drawer
     className="ai-drawer"
@@ -195,8 +206,8 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
 
     <div className="ai-thread" ref={listRef} aria-live="polite">
       {!hasConversation && <div className="ai-welcome">
-        <h3>How can I help with your device?</h3>
-        <p>Ask in any language and I'll reply in the same language.</p>
+        <h3>{ticket?.ticketId ? `Questions about ${ticket.ticketId}?` : known?.model ? `How can I help with this ${known.model}?` : 'How can I help today?'}</h3>
+        <p>{known ? 'I already have this device’s details, so you can describe the problem directly.' : 'Describe the problem, or share a serial number and I’ll look the device up.'} Ask in any language and I’ll reply in the same language.</p>
       </div>}
 
       {messages.map((message, index) => <div key={`${message.role}-${index}`} className={`ai-msg ${message.role}`}>
@@ -207,6 +218,10 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
             <button type="button" className={speakingIndex === index ? 'active' : ''} aria-label={speakingIndex === index ? 'Stop reading response' : 'Read response aloud'} onClick={() => speakMessage(message.content, index)}><Volume2 size={12} aria-hidden="true" />{speakingIndex === index ? 'Stop' : 'Listen'}</button>
           </div>}
           {message.rating && conversationId && <AiRatingCard conversationId={conversationId} submitted={feedbackSubmitted} onSubmitted={() => setFeedbackSubmitted(true)} />}
+          {index === lastIndex && awaitingResult && <div className="ai-quick-replies" role="group" aria-label="Did these steps fix the issue?">
+            <button type="button" className="ai-quick-reply" onClick={() => void sendMessage("Yes, it's working now")}>Yes, it's working now</button>
+            <button type="button" className="ai-quick-reply" onClick={() => void sendMessage("No, it's still not working")}>No, still not working</button>
+          </div>}
         </div>
       </div>)}
 

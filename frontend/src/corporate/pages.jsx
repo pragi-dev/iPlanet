@@ -1,25 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { CheckCircle2, ChevronLeft, ChevronRight, Clock3, FilePlus2, KeyRound, Laptop, LogOut, Search, ShieldCheck, Star, Ticket, UserRoundPlus } from 'lucide-react';
+import { ChevronLeft, FilePlus2, KeyRound, Laptop, LogOut, Search, ShieldCheck, Sparkles, Ticket, UserRoundPlus } from 'lucide-react';
 import { Shell } from './components';
-import { getCoverage, getDashboard, getDevice, getDevices, getMyReviews, getProfile, getTickets } from './api';
+import { getCoverage, getDashboardStats, getDevice, getDevices, getMyReviews, getProfile, getTickets } from './api';
 import {
-  Avatar, Badge, Button, CoverageTiles, DeviceIcon, EmptyState, ErrorState, FilterBar, FilterSelect, InfoList, KPI, KPIGrid,
-  PageHeader, PageSkeleton, RowAction, SearchInput, Section, SectionHeader, Surface, TableCard, formatDate, formatDateTime, formatRelative, friendlyError, greeting,
-  readSessionUser, slaLabel, statusTone, todayLabel, useAsync,
+  AllClear, AttentionList, Avatar, Badge, Button, DeviceIcon, DisclosureRow, EmptyState, ErrorState, FilterBar, FilterSelect, InfoList, Insight, JourneyTrack, NextAction,
+  PageHeader, PageSkeleton, RowAction, SearchInput, Section, SectionHeader, Skeleton, Surface, TableCard, coverageExpiring, daysUntil, formatDate, formatDateTime, formatRelative, friendlyError, greeting,
+  idOf, isActiveTicket, pluralize, readSessionUser, recurringIssues, riskLabel, riskTone, slaLabel, slaRisk, todayLabel, useAIAssistant, useAsync,
 } from '../ui';
 
 const ticketStatuses = ['Open', 'Engineer Assigned', 'Engineer Accepted', 'In Progress', 'Waiting for Parts', 'Completed', 'Closed'];
-const activeStatuses = ['Open', 'Engineer Assigned', 'Engineer Accepted', 'In Progress', 'Waiting for Parts'];
-
-function AttentionRow({ to, tone, icon: Icon, title, detail, count }) {
-  return <Link to={to} className={`attention-item attention-${tone}`}>
-    <span className="attention-icon" aria-hidden="true"><Icon size={16} /></span>
-    <span className="attention-text"><strong>{title}</strong><span>{detail}</span></span>
-    <span className="attention-count">{count}</span>
-    <ChevronRight size={16} className="chev" aria-hidden="true" />
-  </Link>;
-}
+const toneRank = { critical: 0, warning: 1, info: 2, neutral: 3 };
 
 function ActivityList({ tickets, base }) {
   return <ul className="activity-list">
@@ -33,91 +24,133 @@ function ActivityList({ tickets, base }) {
   </ul>;
 }
 
+// Builds the "needs your attention" feed from live records. Each item names
+// the record it refers to and carries the single action that resolves it.
+function corporateAttention({ tickets, devices, reviewedIds }) {
+  const items = [];
+  tickets.filter(slaRisk).forEach(ticket => {
+    const risk = slaRisk(ticket);
+    items.push({ key: `sla-${ticket._id}`, tone: riskTone(risk), kicker: riskLabel(risk), title: `${ticket.ticketId} · ${ticket.issueType || 'Service request'}`,
+      detail: [ticket.deviceId?.model, ticket.slaTargetAt ? `Target ${formatDateTime(ticket.slaTargetAt)}` : null, ticket.assignedEngineerId ? `Engineer ${ticket.assignedEngineer}` : 'Awaiting engineer'].filter(Boolean).join(' · '),
+      action: { label: 'Track request', to: `/corporate/service-requests/${ticket._id}` } });
+  });
+  recurringIssues(tickets).forEach(group => {
+    items.push({ key: `rec-${group.deviceId}-${group.issueType}`, tone: 'warning', kicker: 'Recurring issue', title: group.device?.model || 'Device',
+      detail: `${pluralize(group.count, `${group.issueType} request`)} in the last 90 days${group.device?.serialNumber ? ` · ${group.device.serialNumber}` : ''}`,
+      action: { label: 'View device', to: `/corporate/devices/${group.deviceId}` } });
+  });
+  const expiring = devices.flatMap(device => coverageExpiring(device).map(item => ({ device, ...item }))).sort((a, b) => new Date(a.date) - new Date(b.date));
+  expiring.slice(0, 3).forEach(({ device, kind, date }) => {
+    const days = daysUntil(date);
+    items.push({ key: `cov-${device._id}-${kind}`, tone: 'warning', kicker: `${kind} expiring`, title: device.model,
+      detail: [device.serialNumber, date ? `Ends ${formatDate(date)}${days !== null && days >= 0 && days <= 365 ? ` · in ${pluralize(days, 'day')}` : ''}` : 'Expiry date not on record', device.employeeName].filter(Boolean).join(' · '),
+      action: { label: 'View device', to: `/corporate/devices/${device._id}` } });
+  });
+  if (expiring.length > 3) items.push({ key: 'cov-more', tone: 'warning', kicker: 'Coverage expiring', title: `${pluralize(expiring.length - 3, 'more device')} with coverage expiring soon`, action: { label: 'View coverage', to: '/corporate/warranty?filter=Expiring%20Soon' } });
+  const unassigned = devices.filter(device => device.deviceAllocationStatus === 'Unassigned');
+  if (unassigned.length) items.push({ key: 'unassigned', tone: 'info', kicker: 'Unassigned devices', title: unassigned.length === 1 ? `${unassigned[0].model} is ready to assign` : `${unassigned.length} devices are ready to assign`, detail: 'Assign them to employees so service requests can be traced to a user.', action: { label: unassigned.length === 1 ? 'Assign device' : 'Assign devices', to: '/corporate/unassigned-devices' } });
+  if (reviewedIds) {
+    const awaiting = tickets.filter(ticket => ticket.status === 'Closed' && !reviewedIds.has(String(ticket._id)));
+    if (awaiting.length === 1) items.push({ key: 'review', tone: 'info', kicker: 'Your feedback', title: `Rate the service for ${awaiting[0].ticketId}`, detail: [awaiting[0].issueType, awaiting[0].deviceId?.model].filter(Boolean).join(' · '), action: { label: 'Rate service', to: `/corporate/reviews/${awaiting[0]._id}` } });
+    if (awaiting.length > 1) items.push({ key: 'review', tone: 'info', kicker: 'Your feedback', title: `${awaiting.length} closed requests are awaiting your review`, action: { label: 'Rate service', to: '/corporate/reviews' } });
+  }
+  return items.sort((a, b) => toneRank[a.tone] - toneRank[b.tone]);
+}
+
 export function Dashboard() {
   const user = readSessionUser();
-  const main = useAsync(() => Promise.all([getDashboard(), getTickets()]).then(([dashboard, tickets]) => ({ ...dashboard, tickets })), []);
+  const ai = useAIAssistant();
+  // Stats run first: that request re-evaluates SLA state server-side, so the
+  // ticket list read afterwards reflects current escalation status.
+  const main = useAsync(() => getDashboardStats().then(stats => getTickets().then(tickets => ({ stats, tickets }))), []);
   const coverage = useAsync(getCoverage, []);
   const reviews = useAsync(getMyReviews, []);
 
-  if (main.loading && !main.data) return <Shell title="Dashboard"><PageSkeleton kpis={4} /></Shell>;
-  if (main.error) return <Shell title="Dashboard"><PageHeader title="Dashboard" /><div className="card"><ErrorState title="Unable to load your dashboard" message={friendlyError(main.error)} onRetry={main.reload} /></div></Shell>;
+  if (main.loading && !main.data) return <Shell title="Overview"><PageSkeleton kpis={3} /></Shell>;
+  if (main.error) return <Shell title="Overview"><PageHeader title="Overview" /><div className="card"><ErrorState title="Unable to load your service overview" message={friendlyError(main.error)} onRetry={main.reload} /></div></Shell>;
 
-  const { stats: s, tickets } = main.data;
+  const { stats, tickets } = main.data;
   const firstName = (user.name || '').split(' ')[0];
-  const activeTickets = tickets.filter(ticket => activeStatuses.includes(ticket.status));
-  const needsAttention = activeTickets.filter(ticket => ['At Risk', 'SLA Breached', 'Escalated'].includes(slaLabel(ticket)) || ['At Risk', 'SLA Breached', 'Escalated'].includes(ticket.escalationStatus));
   const devices = coverage.data?.devices || [];
   const summary = coverage.data?.summary || {};
-  const unassigned = devices.filter(device => device.deviceAllocationStatus === 'Unassigned').length;
-  const reviewedIds = new Set((reviews.data || []).map(review => String(review.ticketId?._id || review.ticketId)));
-  const awaitingReview = reviews.data ? tickets.filter(ticket => ticket.status === 'Closed' && !reviewedIds.has(String(ticket._id))).length : 0;
-  const attention = [
-    needsAttention.length > 0 && { to: '/corporate/service-requests', tone: needsAttention.some(ticket => slaLabel(ticket) === 'SLA Breached' || ticket.escalationStatus === 'SLA Breached') ? 'critical' : 'warning', icon: Clock3, title: 'Requests outside SLA targets', detail: 'At risk, escalated or breached', count: needsAttention.length },
-    unassigned > 0 && { to: '/corporate/unassigned-devices', tone: 'info', icon: UserRoundPlus, title: 'Devices awaiting assignment', detail: 'Ready to be assigned to an employee', count: unassigned },
-    awaitingReview > 0 && { to: '/corporate/reviews', tone: 'info', icon: Star, title: 'Awaiting your review', detail: 'Closed requests you can rate', count: awaitingReview },
-  ].filter(Boolean);
-  const pct = (part, total) => (total ? Math.round((part / total) * 100) : 0);
+  const active = tickets.filter(isActiveTicket);
+  const atRisk = active.filter(slaRisk);
+  const inServiceIds = new Set(active.map(ticket => idOf(ticket.deviceId)));
+  const inService = devices.filter(device => inServiceIds.has(String(device._id))).length;
+  const unassigned = devices.filter(device => device.deviceAllocationStatus === 'Unassigned' && !inServiceIds.has(String(device._id))).length;
+  const operating = Math.max(0, devices.length - inService - unassigned);
+  const reviewedIds = reviews.data ? new Set(reviews.data.map(review => idOf(review.ticketId))) : null;
+  const awaitingReview = reviewedIds ? tickets.filter(ticket => ticket.status === 'Closed' && !reviewedIds.has(String(ticket._id))).length : null;
+  const attention = corporateAttention({ tickets, devices, reviewedIds });
   const recent = [...tickets].sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt)).slice(0, 5);
+  const share = count => `${devices.length ? (count / devices.length) * 100 : 0}%`;
 
-  return <Shell title="Dashboard">
+  return <Shell title="Overview">
     <div className="dashboard-intro">
       <div className="page-header-text">
         <p className="eyebrow">{todayLabel()}</p>
         <h1 className="page-title">{greeting()}{firstName ? `, ${firstName}` : ''}.</h1>
-        <p className="page-description">Here's what's happening with your organization's devices and services.</p>
+        <p className="page-description">Your service overview{user.company ? ` for ${user.company}` : ''}.</p>
       </div>
       <Button variant="primary" icon={FilePlus2} to="/corporate/raise-request">Raise request</Button>
     </div>
 
-    <KPIGrid columns={4}>
-      <KPI label="Open requests" value={s.openTickets} to="/corporate/service-requests?status=Open" tone={needsAttention.length ? 'warning' : 'neutral'} hint={needsAttention.length ? `${needsAttention.length} outside SLA targets` : 'All within SLA'} />
-      <KPI label="In progress" value={s.inProgress} to="/corporate/service-requests?status=In%20Progress" hint="With iPlanet engineers" />
-      <KPI label="Completed" value={s.completedTickets + s.closedTickets} to="/corporate/service-requests?status=Closed" hint={`${s.closedTickets} closed`} />
-      <KPI label="Devices" value={s.totalDevices} to="/corporate/devices" hint={coverage.data ? `${unassigned} unassigned` : undefined} />
-    </KPIGrid>
+    <section className="overview-hero" aria-label="Fleet status">
+      <div>
+        <p className="overview-label">Fleet status</p>
+        {coverage.loading && !coverage.data ? <div className="stack-12" style={{ marginTop: 12 }}><Skeleton width={180} height={52} /><Skeleton width="80%" /><Skeleton height={8} /></div>
+          : coverage.error ? <ErrorState compact title="Device status unavailable" message={friendlyError(coverage.error)} onRetry={coverage.reload} />
+          : !devices.length ? <EmptyState compact icon={Laptop} title="No devices registered yet" description="Devices enrolled by iPlanet Service for your organization will appear here." />
+          : <>
+            <div className="overview-figure"><strong>{operating}</strong><span>of {pluralize(devices.length, 'device')} operating normally</span></div>
+            <p className="overview-caption">{inService ? `${pluralize(inService, 'device')} with iPlanet Service right now.` : 'No devices are currently in service.'}</p>
+            <div className="split-bar" role="img" aria-label={`${operating} operating normally, ${inService} in service, ${unassigned} unassigned`}>
+              <i className="tone-fill-success" style={{ width: share(operating) }} />
+              <i className="tone-fill-info" style={{ width: share(inService) }} />
+              <i className="tone-fill-neutral" style={{ width: share(unassigned) }} />
+            </div>
+            <div className="split-legend" aria-hidden="true">
+              <span><i className="tone-fill-success" />Operating {operating}</span>
+              <span><i className="tone-fill-info" />In service {inService}</span>
+              <span><i className="tone-fill-neutral" />Unassigned {unassigned}</span>
+            </div>
+          </>}
+      </div>
+      <div>
+        <div className="stat-list">
+          <Link className={`stat-row ${atRisk.length ? 'stat-row-warning' : ''}`} to="/corporate/service-requests"><span>Active requests{atRisk.length ? <span className="stat-hint">{atRisk.length} need attention</span> : null}</span><strong>{active.length}</strong></Link>
+          <Link className="stat-row" to="/corporate/service-requests?status=Closed"><span>Resolved<span className="stat-hint">Completed or closed</span></span><strong>{(stats.completedTickets || 0) + (stats.closedTickets || 0)}</strong></Link>
+          <Link className={`stat-row ${summary.expiringSoon ? 'stat-row-warning' : ''}`} to="/corporate/warranty?filter=Expiring%20Soon"><span>Coverage expiring soon</span><strong>{coverage.data ? summary.expiringSoon : '—'}</strong></Link>
+          <Link className="stat-row" to="/corporate/warranty?filter=Expired"><span>Coverage expired</span><strong>{coverage.data ? summary.expired : '—'}</strong></Link>
+          {awaitingReview !== null && <Link className="stat-row" to="/corporate/reviews"><span>Awaiting your review</span><strong>{awaitingReview}</strong></Link>}
+        </div>
+      </div>
+    </section>
+
+    <section className="page-section" aria-labelledby="attention">
+      <SectionHeader id="attention" title="Needs your attention" description={attention.length ? `${pluralize(attention.length, 'item')} to review` : undefined} />
+      <div className="card card-flush">
+        {coverage.loading && !coverage.data ? <div className="card-body stack-12"><Skeleton width="60%" /><Skeleton width="40%" /></div>
+          : <AttentionList items={attention} empty={<AllClear>Nothing needs your attention. Every active request is within its service targets.</AllClear>} />}
+      </div>
+    </section>
 
     <section className="page-section" aria-labelledby="quick-actions">
       <SectionHeader id="quick-actions" title="Quick actions" />
-      <div className="quick-actions">
-        {[
-          ['/corporate/raise-request', FilePlus2, 'Raise request', 'Service, health camp, buyback or e-waste'],
-          ['/corporate/devices', Search, 'Find device', 'Search by serial or employee'],
-          ['/corporate/service-requests', Ticket, 'Track service', 'Follow every request'],
-          ['/corporate/warranty', ShieldCheck, 'Check coverage', 'Warranty and AMC status'],
-        ].map(([to, Icon, label, hint]) => <Link key={to} to={to} className="quick-action"><span className="quick-action-icon" aria-hidden="true"><Icon size={17} /></span><span>{label}<small>{hint}</small></span></Link>)}
-      </div>
-    </section>
-
-    <section className="page-section" aria-labelledby="active-service">
-      <SectionHeader id="active-service" title="Active service" description={activeTickets.length ? `${activeTickets.length} request${activeTickets.length === 1 ? '' : 's'} in progress with iPlanet Service` : undefined} actions={<Button variant="ghost" size="sm" to="/corporate/service-requests">View all</Button>} />
-      <div className="card card-flush">
-        {attention.length > 0 && <div className="attention-list" style={{ borderBottom: '1px solid var(--color-divider)' }}>{attention.map(item => <AttentionRow key={item.title} {...item} />)}</div>}
-        {activeTickets.length ? <ul className="activity-list">{activeTickets.slice(0, 6).map(ticket => <li key={ticket._id}><Link to={`/corporate/service-requests/${ticket._id}`} className="activity-item">
-          <span className="activity-title"><span>{ticket.deviceId?.model || 'Device'}</span><span className="mono">{ticket.ticketId}</span></span>
-          <span className="activity-sub">{[ticket.issueType, ticket.assignedEngineer ? `Engineer ${ticket.assignedEngineer}` : 'Awaiting engineer'].filter(Boolean).join(' · ')}</span>
-          <span className="activity-side"><Badge dot>{ticket.status}</Badge>{slaLabel(ticket) !== 'Healthy' && <Badge>{slaLabel(ticket)}</Badge>}</span>
-        </Link></li>)}</ul>
-          : <EmptyState compact icon={CheckCircle2} title="No active service requests" description="Requests you raise will be tracked here until they're closed." action={<Button size="sm" to="/corporate/raise-request">Raise request</Button>} />}
-      </div>
-    </section>
-
-    <section className="page-section" aria-labelledby="coverage-overview">
-      <SectionHeader id="coverage-overview" title="Coverage" description={coverage.data ? `${summary.total} registered device${summary.total === 1 ? '' : 's'}` : undefined} actions={<Button variant="ghost" size="sm" to="/corporate/warranty">View coverage</Button>} />
-      <div className="card">
-        {coverage.loading && !coverage.data ? <div className="card-body"><div className="skeleton" style={{ height: 88 }} /></div>
-          : coverage.error ? <ErrorState compact title="Coverage unavailable" message={friendlyError(coverage.error)} onRetry={coverage.reload} />
-          : <div className="coverage-summary">
-            <div><span>Warranty active</span><strong>{summary.warrantyActive}</strong><span>{pct(summary.warrantyActive, summary.total)}% of devices</span><div className="meter" aria-hidden="true"><i style={{ width: `${pct(summary.warrantyActive, summary.total)}%` }} /></div></div>
-            <div><span>AMC active</span><strong>{summary.amcActive}</strong><span>{pct(summary.amcActive, summary.total)}% of devices</span><div className="meter" aria-hidden="true"><i style={{ width: `${pct(summary.amcActive, summary.total)}%` }} /></div></div>
-            <div><span>Expiring soon</span><strong style={summary.expiringSoon ? { color: 'var(--color-warning-text)' } : undefined}>{summary.expiringSoon}</strong><span>{summary.expired ? `${summary.expired} already expired` : 'None expired'}</span></div>
-          </div>}
+      <div className="quick-links">
+        <Link className="quick-link" to="/corporate/raise-request"><FilePlus2 size={16} aria-hidden="true" />Raise request</Link>
+        <Link className="quick-link" to="/corporate/devices"><Search size={16} aria-hidden="true" />Find device</Link>
+        <Link className="quick-link" to="/corporate/warranty"><ShieldCheck size={16} aria-hidden="true" />Check coverage</Link>
+        <Link className="quick-link" to="/corporate/service-requests"><Ticket size={16} aria-hidden="true" />Track request</Link>
+        {ai.available && <button type="button" className="quick-link" onClick={ai.open}><Sparkles size={16} aria-hidden="true" />Ask AI</button>}
       </div>
     </section>
 
     <section className="page-section" aria-labelledby="recent-activity">
-      <SectionHeader id="recent-activity" title="Recent activity" />
+      <SectionHeader id="recent-activity" title="Recent service" actions={tickets.length ? <Button variant="ghost" size="sm" to="/corporate/service-requests">View all</Button> : null} />
       <div className="card card-flush">
-        {recent.length ? <ActivityList tickets={recent} base="/corporate/service-requests" /> : <EmptyState compact icon={Ticket} title="No service activity yet" description="When a request is raised, its progress appears here." />}
+        {recent.length ? <ActivityList tickets={recent} base="/corporate/service-requests" />
+          : <EmptyState compact icon={Ticket} title="No service requests yet" description="When your organization raises a request, its progress will appear here." action={<Button size="sm" variant="primary" icon={FilePlus2} to="/corporate/raise-request">Raise service request</Button>} />}
       </div>
     </section>
   </Shell>;
@@ -165,7 +198,7 @@ export function Devices() {
       errorTitle="Unable to load devices"
       onRetry={state.reload}
       toolbar={<FilterBar summary={state.data ? `${devices.length} device${devices.length === 1 ? '' : 's'}` : null}>
-        <SearchInput value={search} onChange={setSearch} placeholder="Search asset, serial, model or employee" label="Search devices" />
+        <SearchInput value={search} onChange={setSearch} placeholder="Search serial, model, employee or asset ID" label="Search devices" />
         <FilterSelect label="Assignment" value={allocation} onChange={setAllocation} options={['Assigned', 'Unassigned']} allLabel="All assignments" />
         <FilterSelect label="Warranty" value={warranty} onChange={setWarranty} options={warrantyOptions} allLabel="All warranty" />
       </FilterBar>}
@@ -190,18 +223,58 @@ export function Devices() {
 }
 
 
+function coverageLine(status, expiry) {
+  if (!status) return <span className="text-muted">Not on record</span>;
+  return <><Badge dot>{status}</Badge>{expiry && <small>{status === 'Expired' ? 'ended' : 'until'} {formatDate(expiry)}</small>}</>;
+}
+
+// Lifecycle stages come from the device record and its service requests only:
+// enrolment (record exists), assignment, open service, and the last resolved
+// request. Stages that haven't happened are shown as not reached, never dated.
+function deviceLifecycle(device, tickets, activeTicket) {
+  const assigned = device.deviceAllocationStatus === 'Assigned';
+  const resolved = tickets.filter(ticket => ['Completed', 'Closed'].includes(ticket.status));
+  const lastResolved = resolved.reduce((latest, ticket) => (!latest || new Date(ticket.updatedAt) > new Date(latest.updatedAt) ? ticket : latest), null);
+  return [
+    { key: 'enrolled', label: 'Enrolled', state: !assigned && !activeTicket ? 'current' : 'done', meta: !assigned && !activeTicket ? 'Awaiting assignment' : device.purchaseDate ? `Purchased ${formatDate(device.purchaseDate)}` : undefined },
+    { key: 'assigned', label: 'Assigned', state: assigned ? 'done' : 'upcoming', meta: assigned ? device.employeeName : 'Not assigned yet' },
+    { key: 'service', label: 'In service', state: activeTicket ? (activeTicket.status === 'Waiting for Parts' ? 'hold' : 'current') : tickets.length ? 'done' : 'skip', meta: activeTicket ? `${activeTicket.ticketId} · ${activeTicket.status}` : tickets.length ? pluralize(tickets.length, 'request') : 'No service so far' },
+    { key: 'repaired', label: 'Repaired', state: lastResolved && !activeTicket ? 'done' : activeTicket ? 'upcoming' : 'skip', meta: lastResolved ? `Last ${formatDate(lastResolved.updatedAt)}` : undefined },
+    { key: 'active', label: 'Active', state: assigned && !activeTicket ? 'current' : 'upcoming', meta: assigned && !activeTicket ? 'In use' : undefined },
+  ];
+}
+
+function deviceNextAction(device, activeTicket) {
+  if (activeTicket) {
+    const risk = slaRisk(activeTicket);
+    return { tone: risk ? riskTone(risk) : 'info', eyebrow: risk ? riskLabel(risk) : 'In service', title: `${activeTicket.issueType || 'Service request'} · ${activeTicket.status}`,
+      description: [activeTicket.assignedEngineer ? `Engineer ${activeTicket.assignedEngineer}` : 'iPlanet Service will assign an engineer', activeTicket.slaTargetAt ? `target ${formatDateTime(activeTicket.slaTargetAt)}` : null].filter(Boolean).join(' · '),
+      actions: [{ label: 'Track request', icon: Ticket, to: `/corporate/service-requests/${activeTicket._id}` }] };
+  }
+  if (device.deviceAllocationStatus === 'Unassigned') return { tone: 'info', title: 'Assign this device to an employee', description: 'Assigned devices can be traced to the person using them when service is needed.', actions: [{ label: 'Assign device', icon: UserRoundPlus, to: '/corporate/unassigned-devices' }] };
+  const covered = ['Active', 'Expiring Soon'].includes(device.warrantyStatus) || ['Active', 'Expiring Soon'].includes(device.amcStatus);
+  if (!covered && (device.warrantyStatus || device.amcStatus)) return { tone: 'warning', eyebrow: 'Coverage', title: 'No active warranty or AMC', description: `Warranty ${String(device.warrantyStatus || 'not on record').toLowerCase()} · AMC ${String(device.amcStatus || 'not on record').toLowerCase()}.`, actions: [{ label: 'View coverage', icon: ShieldCheck, to: '/corporate/warranty' }] };
+  const expiring = coverageExpiring(device);
+  if (expiring.length) return { tone: 'warning', eyebrow: 'Coverage', title: `${expiring.map(item => item.kind).join(' and ')} expiring soon`, description: expiring.map(item => `${item.kind} ends ${formatDate(item.date)}`).join(' · '), actions: [{ label: 'View coverage', icon: ShieldCheck, to: '/corporate/warranty?filter=Expiring%20Soon' }] };
+  return { tone: 'success', eyebrow: 'Status', title: 'Operating normally', description: `No open service requests. Assigned to ${device.employeeName || 'an employee'}.` };
+}
+
 export function DeviceDetail() {
   const { id } = useParams();
   const user = readSessionUser();
-  const state = useAsync(() => Promise.all([getDevice(id), getTickets()]).then(([device, all]) => ({ device, tickets: all.filter(ticket => String(ticket.deviceId?._id || ticket.deviceId) === id) })), [id]);
+  const ai = useAIAssistant();
+  const state = useAsync(() => Promise.all([getDevice(id), getTickets()]).then(([device, all]) => ({ device, tickets: all.filter(ticket => idOf(ticket.deviceId) === id) })), [id]);
   const crumbs = [{ label: 'Devices', to: '/corporate/devices' }, { label: state.data?.device?.model || 'Device details' }];
   if (state.loading && !state.data) return <Shell title="Device details" crumbs={crumbs}><PageSkeleton variant="detail" kpis={0} /></Shell>;
-  if (state.error) return <Shell title="Device details" crumbs={crumbs}><PageHeader title="Device details" back={{ to: '/corporate/devices', label: 'Devices' }} /><div className="card"><ErrorState title="Unable to load this device" message={friendlyError(state.error)} onRetry={state.reload} /></div></Shell>;
+  if (state.error) return <Shell title="Device details" crumbs={crumbs}><PageHeader title="Device details" back={{ to: '/corporate/devices', label: 'Devices' }} /><div className="card"><ErrorState title={state.error.status === 404 ? 'Device not found' : 'Unable to load this device'} message={friendlyError(state.error)} onRetry={state.reload} /></div></Shell>;
 
   const { device, tickets } = state.data;
-  const activeTicket = tickets.find(ticket => activeStatuses.includes(ticket.status));
+  const activeTicket = tickets.find(isActiveTicket);
   const unassigned = device.deviceAllocationStatus === 'Unassigned';
   const allocation = activeTicket ? 'Under Service' : unassigned ? 'Unassigned' : 'Assigned';
+  const recurring = recurringIssues(tickets, { windowDays: 0 });
+  const next = deviceNextAction(device, activeTicket);
+
   return <Shell title={device.model} crumbs={crumbs}>
     <div className="page-header asset-hero">
       <Link className="back-link" to="/corporate/devices"><ChevronLeft size={16} aria-hidden="true" />Devices</Link>
@@ -209,38 +282,56 @@ export function DeviceDetail() {
         <div className="asset-identity">
           <span className="asset-icon"><DeviceIcon type={device.deviceType} model={device.model} size={30} /></span>
           <div className="page-header-text">
-            <p className="eyebrow">Corporate device{device.deviceType ? ` · ${device.deviceType}` : ''}</p>
+            <p className="eyebrow">Device passport{device.deviceType ? ` · ${device.deviceType}` : ''}</p>
             <h1 className="page-title">{device.model}</h1>
             <div className="page-meta"><span>Serial <span className="mono">{device.serialNumber}</span></span><span className="meta-sep" /><Badge dot tone={allocation === 'Under Service' ? 'warning' : allocation === 'Unassigned' ? 'neutral' : 'success'}>{allocation}</Badge></div>
           </div>
         </div>
         <div className="page-actions">
-          {unassigned && <Button icon={UserRoundPlus} to="/corporate/unassigned-devices">Assign device</Button>}
-          {activeTicket && <Button icon={Ticket} to={`/corporate/service-requests/${activeTicket._id}`}>View ticket</Button>}
+          {ai.available && <Button icon={Sparkles} onClick={ai.open}>Ask AI about this device</Button>}
           <Button variant="primary" icon={FilePlus2} to={`/corporate/raise-request?device=${device._id}`}>Raise request</Button>
         </div>
       </div>
     </div>
 
-    <Surface label="Device profile">
-      <Section title="Device" description="Hardware and purchase record">
-        <InfoList columns={2} items={[['Model', device.model], ['Serial number', <span className="mono">{device.serialNumber}</span>], ['Device type', device.deviceType], ['Asset ID', device.assetId], ['Purchase date', formatDate(device.purchaseDate, '')], ['Location', device.location], ['Device status', device.deviceStatus], ['Corporate', user.company]]} />
+    <NextAction {...next} />
+
+    <section className="passport" aria-label="Device facts">
+      {[
+        ['Serial number', <span className="mono">{device.serialNumber}</span>],
+        ['Asset ID', device.assetId || <span className="text-muted">Not on record</span>],
+        ['Corporate', user.company || <span className="text-muted">Not on record</span>],
+        ['Employee', device.employeeName ? <>{device.employeeName}{device.employeeId && <small>{device.employeeId}</small>}</> : <span className="text-muted">Not assigned</span>],
+        ['Location', device.location || <span className="text-muted">Not on record</span>],
+        ['Warranty', coverageLine(device.warrantyStatus, device.warrantyExpiry)],
+        ['AMC', coverageLine(device.amcStatus, device.amcExpiry)],
+        ['Current status', <><Badge dot tone={allocation === 'Under Service' ? 'warning' : allocation === 'Unassigned' ? 'neutral' : 'success'}>{allocation}</Badge>{device.deviceStatus && <small>{device.deviceStatus}</small>}</>],
+      ].map(([label, value]) => <div className="passport-cell" key={label}><span className="passport-label">{label}</span><span className="passport-value">{value}</span></div>)}
+    </section>
+
+    <Surface label="Device lifecycle and service">
+      <Section title="Lifecycle" description="Where this device is today">
+        <JourneyTrack orientation="horizontal" label="Device lifecycle" steps={deviceLifecycle(device, tickets, activeTicket)} />
       </Section>
-      <Section title="Current assignment" description={unassigned ? 'This device is not assigned to an employee.' : 'The employee using this device'} actions={unassigned ? <Button size="sm" icon={UserRoundPlus} to="/corporate/unassigned-devices">Assign device</Button> : null}>
-        <InfoList columns={2} items={[['Employee', device.employeeName], ['Employee ID', device.employeeId], ['Department', device.department], ['Location', device.location]]} />
+      <Section title="Service history" description={tickets.length ? `${pluralize(tickets.length, 'request')} raised for this device` : 'No requests raised yet'}>
+        <div className="stack-16" id="service-history">
+          {recurring.map(group => <Insight key={group.issueType} title={`${pluralize(group.count, `${group.issueType} request`)} for this device`}>
+            Raised on {group.tickets.map(ticket => formatDate(ticket.createdAt)).join(', ')}. A repeating issue may point to an underlying fault worth raising with iPlanet Service.
+          </Insight>)}
+          {tickets.length ? <ul className="disclosure-list">{tickets.map(ticket => <DisclosureRow key={ticket._id} summary={<span className="history-summary">
+            <span className="history-date">{formatDate(ticket.createdAt)}</span>
+            <span className="history-title"><strong>{ticket.issueType || 'Service request'}</strong><small><span className="mono">{ticket.ticketId}</span>{ticket.category ? ` · ${ticket.category}` : ''}</small></span>
+            <Badge dot>{ticket.status}</Badge>
+          </span>}>
+            {ticket.description && <p className="description-text" style={{ fontSize: 15 }}>{ticket.description}</p>}
+            <InfoList columns={2} items={[['Engineer', ticket.assignedEngineer || 'Not assigned'], ['Priority', ticket.priority], ['Service location', ticket.location], ['Last updated', formatDateTime(ticket.updatedAt, '')]]} />
+            <div><RowAction to={`/corporate/service-requests/${ticket._id}`} label="Open request" /></div>
+          </DisclosureRow>)}</ul>
+            : <EmptyState compact icon={Ticket} title="No service requests for this device" description="If something isn't working, raise a request and iPlanet Service will take it from there." action={<Button size="sm" icon={FilePlus2} to={`/corporate/raise-request?device=${device._id}`}>Raise request</Button>} />}
+        </div>
       </Section>
-      <Section title="Coverage" description="Warranty and AMC validity">
-        <CoverageTiles device={device} />
-      </Section>
-      <Section title="Service history" description={tickets.length ? `${tickets.length} request${tickets.length === 1 ? '' : 's'} raised for this device` : 'No requests raised yet'} actions={<Button size="sm" variant="ghost" to={`/corporate/raise-request?device=${device._id}`}>Raise request</Button>}>
-        {tickets.length ? <ol className="timeline">{tickets.map((ticket, index) => <li key={ticket._id} className={`timeline-item timeline-${statusTone(ticket.status)} ${index === 0 ? 'timeline-latest' : ''}`}>
-          <span className="timeline-marker" aria-hidden="true" />
-          <div className="timeline-content">
-            <Link className="timeline-title" to={`/corporate/service-requests/${ticket._id}`}>{ticket.issueType || 'Service request'}</Link>
-            <p className="timeline-text"><span className="mono">{ticket.ticketId}</span> · {ticket.status}{ticket.assignedEngineer ? ` · ${ticket.assignedEngineer}` : ''}</p>
-            <p className="timeline-meta"><time dateTime={ticket.createdAt}>{formatDateTime(ticket.createdAt)}</time></p>
-          </div>
-        </li>)}</ol> : <p className="text-muted">Service requests raised for this device will appear here.</p>}
+      <Section title="Device record" description="Hardware and purchase details">
+        <InfoList columns={2} items={[['Model', device.model], ['Device type', device.deviceType], ['Purchase date', formatDate(device.purchaseDate, '')], ['Department', device.department], ['Employee ID', device.employeeId], ['Last service', formatDate(device.lastServiceDate, '')]]} />
       </Section>
     </Surface>
   </Shell>;
@@ -267,7 +358,7 @@ export function Tickets() {
       errorTitle="Unable to load service requests"
       onRetry={state.reload}
       toolbar={<FilterBar summary={state.data ? `${visible.length} of ${tickets.length} requests` : null}>
-        <SearchInput value={search} onChange={setSearch} placeholder="Search request, serial or device" label="Search service requests" />
+        <SearchInput value={search} onChange={setSearch} placeholder="Search ticket ID, device or serial" label="Search service requests" />
         <FilterSelect label="Status" value={filter} onChange={setFilter} options={ticketStatuses} allLabel="All statuses" />
         <FilterSelect label="SLA" value={sla} onChange={setSla} options={['Healthy', 'At Risk', 'Escalated', 'SLA Breached', 'Resolved']} allLabel="All SLA states" />
       </FilterBar>}

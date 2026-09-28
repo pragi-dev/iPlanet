@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, Inbox, RefreshCcw, Search, Star } from 'lucide-react';
-import { formatDateTime, initials, statusTone } from './format';
+import { AlertTriangle, Check, CheckCircle2, ChevronLeft, Info, ChevronRight, Inbox, RefreshCcw, Search, Star } from 'lucide-react';
+import { initials, statusTone } from './format';
 
 export function Button({ variant = 'secondary', size, icon: Icon, children, className = '', to, type = 'button', ...props }) {
   const classes = `btn btn-${variant}${size ? ` btn-${size}` : ''} ${className}`.trim();
@@ -119,9 +119,12 @@ export function ErrorState({ title = 'Unable to load this page', message, onRetr
   </div>;
 }
 
+const alertIcons = { success: CheckCircle2, info: Info };
+
 export function InlineAlert({ tone = 'critical', title, children, action }) {
+  const Icon = alertIcons[tone] || AlertTriangle;
   return <div className={`inline-alert inline-alert-${tone}`} role={tone === 'critical' ? 'alert' : 'status'}>
-    <AlertTriangle size={16} aria-hidden="true" />
+    <Icon size={16} aria-hidden="true" />
     <div>{title && <strong>{title}</strong>}{children && <span>{children}</span>}</div>
     {action}
   </div>;
@@ -148,11 +151,11 @@ export function PageSkeleton({ kpis = 4, variant = 'dashboard' }) {
   </div>;
 }
 
-export function SearchInput({ value, onChange, placeholder = 'Search', label = 'Search', className = '' }) {
+export function SearchInput({ value, onChange, placeholder = 'Search', label = 'Search', className = '', ...inputProps }) {
   return <label className={`search-input ${className}`}>
     <Search size={16} aria-hidden="true" />
     <span className="sr-only">{label}</span>
-    <input type="search" value={value} onChange={event => onChange(event.target.value)} placeholder={placeholder} />
+    <input type="search" value={value} onChange={event => onChange(event.target.value)} placeholder={placeholder} {...inputProps} />
   </label>;
 }
 
@@ -225,24 +228,6 @@ export function InfoList({ items, columns = 1 }) {
 
 export function Avatar({ name, size = 32, tone = 'default' }) {
   return <span className={`avatar avatar-${tone}`} style={{ width: size, height: size, fontSize: Math.round(size * 0.38) }} aria-hidden="true">{initials(name)}</span>;
-}
-
-export function Timeline({ events, emptyText = 'No activity recorded yet.' }) {
-  if (!events?.length) return <EmptyState compact title={emptyText} />;
-  return <ol className="timeline">
-    {events.map((event, index) => {
-      const tone = statusTone(event.status);
-      const last = index === events.length - 1;
-      return <li className={`timeline-item timeline-${tone} ${last ? 'timeline-latest' : ''}`} key={`${event._id || event.status}-${index}`}>
-        <span className="timeline-marker" aria-hidden="true" />
-        <div className="timeline-content">
-          <p className="timeline-title">{event.status}</p>
-          {(event.message || event.note) && <p className="timeline-text">{event.message || event.note}</p>}
-          <p className="timeline-meta">{event.updatedBy && <span>{event.updatedBy}</span>}{event.timestamp && <time dateTime={event.timestamp}>{formatDateTime(event.timestamp)}</time>}</p>
-        </div>
-      </li>;
-    })}
-  </ol>;
 }
 
 export function Stars({ rating = 0, size = 14, label }) {

@@ -1,108 +1,136 @@
-import { useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { Building2, CheckCircle2, ChevronRight, CircleCheck, ClipboardList, Clock3, KeyRound, LogOut, Mail, MapPin, Package, ScanLine, ShieldAlert, Ticket, TriangleAlert, UserCheck, UserRoundX, UsersRound, Wrench } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Building2, ChevronRight, ClipboardList, KeyRound, LogOut, Mail, MapPin, ScanLine, ShieldAlert, Ticket, UserCheck, UsersRound, Wrench } from 'lucide-react';
 import { ServiceShell } from './components';
 import { engineerFilterOptions, filterEngineers } from './engineerFilters';
-import { getCoverage, getEngineers, getServiceCentres, getServiceDashboard, getServiceReports, getServiceTickets } from './api';
+import { getEngineers, getServiceCentres, getServiceDashboard, getServiceTickets } from './api';
 import {
-  Avatar, Badge, BarList, Button, Card, ColumnChart, Drawer, EmptyState, ErrorState, FilterBar, FilterSelect, InfoList, KPI, KPIGrid, PageHeader, PageSkeleton,
-  RowAction, SearchInput, TableCard, formatDateTime, formatRelative, friendlyError, greeting, monthlyVolume, readSessionUser, slaLabel, todayLabel, useAsync,
+  AllClear, AttentionList, Avatar, Badge, Button, Card, Drawer, EmptyState, ErrorState, FilterBar, FilterSelect, InfoList, KPI, KPIGrid, PageHeader, PageSkeleton,
+  SearchInput, SectionHeader, TableCard, formatDateTime, formatRelative, friendlyError, greeting, idOf, isActiveTicket, pluralize, readSessionUser, recurringIssues,
+  riskLabel, riskTone, slaLabel, slaRisk, todayLabel, useAsync,
 } from '../ui';
 
 export { ServiceShell };
 
-const activeStatuses = ['Open', 'Engineer Assigned', 'Engineer Accepted', 'In Progress', 'Waiting for Parts'];
 const riskStates = ['At Risk', 'SLA Breached', 'Escalated'];
-const isActive = ticket => activeStatuses.includes(ticket.status);
-const engineerOf = ticket => String(ticket.assignedEngineerId?._id || ticket.assignedEngineerId || '');
+const isActive = isActiveTicket;
+const engineerOf = ticket => idOf(ticket.assignedEngineerId);
+const toneRank = { critical: 0, warning: 1, info: 2, neutral: 3 };
+const companyOf = ticket => ticket.companyId?.name || ticket.customerId?.company || 'Corporate';
 
-function Attention({ to, tone, icon: Icon, title, detail, count }) {
-  return <Link to={to} className={`attention-item attention-${tone}`}>
-    <span className="attention-icon" aria-hidden="true"><Icon size={16} /></span>
-    <span className="attention-text"><strong>{title}</strong><span>{detail}</span></span>
-    <span className="attention-count">{count}</span>
-    <ChevronRight size={16} className="chev" aria-hidden="true" />
-  </Link>;
+// Highest-priority operational items, one row per ticket/device/engineer,
+// each with the action that moves it forward.
+function operationsAttention(tickets, engineers) {
+  const items = [];
+  const listed = new Set();
+  tickets.filter(slaRisk).sort((a, b) => new Date(a.slaTargetAt) - new Date(b.slaTargetAt)).forEach(ticket => {
+    const risk = slaRisk(ticket);
+    listed.add(ticket._id);
+    items.push({ key: `sla-${ticket._id}`, tone: riskTone(risk), kicker: riskLabel(risk), title: `${ticket.ticketId} · ${ticket.issueType || 'Service'}`,
+      detail: [companyOf(ticket), ticket.location, ticket.slaTargetAt ? `Target ${formatDateTime(ticket.slaTargetAt)}` : null, ticket.assignedEngineer || 'Unassigned'].filter(Boolean).join(' · '),
+      action: ticket.assignedEngineerId ? { label: 'Open ticket', to: `/service/tickets/${ticket._id}` } : { label: 'Assign engineer', to: `/service/tickets/${ticket._id}?assign=1` } });
+  });
+  tickets.filter(ticket => ticket.status === 'Open' && !ticket.assignedEngineerId && !listed.has(ticket._id)).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)).forEach(ticket => {
+    items.push({ key: `un-${ticket._id}`, tone: 'warning', kicker: 'Unassigned', title: `${ticket.ticketId} · ${ticket.issueType || 'Service'}`, detail: [companyOf(ticket), ticket.location, `raised ${formatRelative(ticket.createdAt)}`].filter(Boolean).join(' · '), action: { label: 'Assign engineer', to: `/service/tickets/${ticket._id}?assign=1` } });
+  });
+  tickets.filter(ticket => ticket.status === 'Waiting for Parts' && !listed.has(ticket._id)).forEach(ticket => {
+    items.push({ key: `wp-${ticket._id}`, tone: 'info', kicker: 'Waiting for parts', title: `${ticket.ticketId} · ${ticket.issueType || 'Service'}`, detail: [companyOf(ticket), ticket.assignedEngineer, `paused ${formatRelative(ticket.updatedAt)}`].filter(Boolean).join(' · '), action: { label: 'Open ticket', to: `/service/tickets/${ticket._id}` } });
+  });
+  tickets.filter(ticket => ticket.status === 'Completed').forEach(ticket => {
+    items.push({ key: `done-${ticket._id}`, tone: 'info', kicker: 'Ready to close', title: `${ticket.ticketId} · ${ticket.issueType || 'Service'}`, detail: [companyOf(ticket), ticket.assignedEngineer, `completed ${formatRelative(ticket.updatedAt)}`].filter(Boolean).join(' · '), action: { label: 'Review & close', to: `/service/tickets/${ticket._id}` } });
+  });
+  recurringIssues(tickets).slice(0, 3).forEach(group => {
+    const serial = group.device?.serialNumber;
+    items.push({ key: `rec-${group.deviceId}-${group.issueType}`, tone: 'warning', kicker: 'Recurring issue', title: [group.device?.model || 'Device', serial].filter(Boolean).join(' · '), detail: `${pluralize(group.count, `${group.issueType} request`)} in the last 90 days · ${companyOf(group.tickets[0])}`, action: { label: 'View tickets', to: `/service/tickets?search=${encodeURIComponent(serial || group.issueType)}` } });
+  });
+  // Workload imbalance: an engineer carrying at least twice the team average (and 3+ tickets).
+  const loads = engineers.map(engineer => engineer.assignedTicketCount || 0);
+  const average = loads.length ? loads.reduce((sum, value) => sum + value, 0) / loads.length : 0;
+  engineers.filter(engineer => (engineer.assignedTicketCount || 0) >= 3 && (engineer.assignedTicketCount || 0) >= average * 2).forEach(engineer => {
+    items.push({ key: `load-${engineer._id}`, tone: 'warning', kicker: 'Workload', title: `${engineer.name} has ${engineer.assignedTicketCount} open tickets`, detail: `Team average ${average.toFixed(1)}${engineer.location ? ` · ${engineer.location}` : ''}`, action: { label: 'View engineer', to: `/service/engineers?engineer=${engineer._id}` } });
+  });
+  return items.sort((a, b) => toneRank[a.tone] - toneRank[b.tone]);
 }
+
+// Engineers and open work grouped by service location.
+function capacityByLocation(engineers, tickets) {
+  const rows = new Map();
+  const row = name => { if (!rows.has(name)) rows.set(name, { name, engineers: [], openTickets: 0, unassigned: 0 }); return rows.get(name); };
+  engineers.forEach(engineer => row(engineer.location || 'No location').engineers.push(engineer));
+  tickets.filter(isActive).forEach(ticket => { const entry = row(ticket.location || 'No location'); entry.openTickets += 1; if (!ticket.assignedEngineerId) entry.unassigned += 1; });
+  return [...rows.values()].sort((a, b) => b.openTickets - a.openTickets || a.name.localeCompare(b.name));
+}
+
+const ATTENTION_LIMIT = 8;
 
 export function ServiceDashboard() {
   const user = readSessionUser();
+  const [showAll, setShowAll] = useState(false);
   const state = useAsync(() => Promise.all([getServiceDashboard(), getServiceTickets(), getEngineers()]).then(([dashboard, tickets, engineers]) => ({ ...dashboard, tickets, engineers })), []);
-  if (state.loading && !state.data) return <ServiceShell title="Dashboard"><PageSkeleton kpis={6} /></ServiceShell>;
-  if (state.error) return <ServiceShell title="Dashboard"><PageHeader title="Dashboard" /><div className="card"><ErrorState title="Unable to load service operations" message={friendlyError(state.error)} onRetry={state.reload} /></div></ServiceShell>;
+  if (state.loading && !state.data) return <ServiceShell title="Overview"><PageSkeleton kpis={4} /></ServiceShell>;
+  if (state.error) return <ServiceShell title="Overview"><PageHeader title="Service operations" /><div className="card"><ErrorState title="Unable to load service operations" message={friendlyError(state.error)} onRetry={state.reload} /></div></ServiceShell>;
 
-  const { stats: s, volume, locations, tickets, engineers } = state.data;
+  const { tickets, engineers } = state.data;
   const active = tickets.filter(isActive);
-  const count = predicate => active.filter(predicate).length;
-  const breached = count(ticket => slaLabel(ticket) === 'SLA Breached' || ticket.escalationStatus === 'SLA Breached');
-  const escalated = count(ticket => ticket.escalationStatus === 'Escalated');
-  const atRisk = count(ticket => slaLabel(ticket) === 'At Risk' || ticket.escalationStatus === 'At Risk');
-  const unassignedOpen = count(ticket => ticket.status === 'Open' && !ticket.assignedEngineerId);
-  const pendingAcceptance = count(ticket => ticket.status === 'Engineer Assigned');
-  const waitingParts = count(ticket => ticket.status === 'Waiting for Parts');
-  const attention = [
-    breached && { to: '/service/tickets?slaStatus=SLA%20Breached', tone: 'critical', icon: ShieldAlert, title: 'SLA breached', detail: 'Active tickets past their resolution target', count: breached },
-    escalated && { to: '/service/tickets?slaStatus=Escalated', tone: 'critical', icon: TriangleAlert, title: 'Escalated', detail: 'Raised to service management', count: escalated },
-    atRisk && { to: '/service/tickets?slaStatus=At%20Risk', tone: 'warning', icon: Clock3, title: 'SLA at risk', detail: 'Approaching their resolution target', count: atRisk },
-    unassignedOpen && { to: '/service/tickets?status=Open&assignment=Unassigned', tone: 'warning', icon: UserRoundX, title: 'Unassigned tickets', detail: 'Open tickets waiting for an engineer', count: unassignedOpen },
-    pendingAcceptance && { to: '/service/tickets?status=Engineer%20Assigned', tone: 'info', icon: UserCheck, title: 'Pending engineer acceptance', detail: 'Assigned but not yet accepted', count: pendingAcceptance },
-    waitingParts && { to: '/service/tickets?status=Waiting%20for%20Parts', tone: 'info', icon: Package, title: 'Waiting for parts', detail: 'Repairs paused until parts arrive', count: waitingParts },
-  ].filter(Boolean);
+  const risky = active.filter(slaRisk);
+  const breached = risky.filter(ticket => ['breached', 'escalated'].includes(slaRisk(ticket))).length;
+  const unassigned = active.filter(ticket => !ticket.assignedEngineerId).length;
+  const waitingParts = active.filter(ticket => ticket.status === 'Waiting for Parts').length;
+  const inProgress = active.filter(ticket => ticket.status === 'In Progress').length;
+  const attention = operationsAttention(tickets, engineers);
+  const capacity = capacityByLocation(engineers, tickets);
+  const available = engineers.filter(engineer => engineer.status === 'Available').length;
   const recentActivity = [...tickets].sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt)).slice(0, 7);
-  const workload = engineers.map(engineer => ({ name: engineer.name, value: engineer.assignedTicketCount || 0 }));
 
-  return <ServiceShell title="Dashboard">
+  return <ServiceShell title="Overview">
     <div className="dashboard-intro">
       <div className="page-header-text">
         <p className="eyebrow">{greeting()}{user.name ? `, ${user.name.split(' ')[0]}` : ''} · {todayLabel()}</p>
-        <h1 className="page-title">Service Operations</h1>
-        <p className="page-description">Monitor service activity, SLA performance, engineers and device operations.</p>
+        <h1 className="page-title">Service operations</h1>
+        <p className="page-description">{risky.length ? `${pluralize(risky.length, 'ticket')} at SLA risk${unassigned ? ` and ${unassigned} waiting for an engineer` : ''}.` : unassigned ? `${pluralize(unassigned, 'ticket')} waiting for an engineer. No SLA risks.` : 'All active tickets are assigned and within SLA.'}</p>
       </div>
       <div className="page-actions"><Button icon={ScanLine} to="/service/device-enrollment">Enroll device</Button><Button variant="primary" icon={ClipboardList} to="/service/tickets">Open ticket queue</Button></div>
     </div>
 
-    <KPIGrid columns={6}>
-      <KPI label="Open tickets" value={s.newRequests} hint={unassignedOpen ? `${unassignedOpen} awaiting an engineer` : 'All assigned'} to="/service/tickets?status=Open" />
-      <KPI label="In progress" value={s.inProgress} hint={waitingParts ? `${waitingParts} waiting for parts` : undefined} to="/service/tickets?status=In%20Progress" />
-      <KPI label="SLA at risk" value={atRisk} tone={atRisk ? 'warning' : 'neutral'} hint="Active tickets" to="/service/tickets?slaStatus=At%20Risk" />
-      <KPI label="SLA breached" value={breached} tone={breached ? 'critical' : 'neutral'} hint={escalated ? `${escalated} escalated` : "Active tickets"} to="/service/tickets?slaStatus=SLA%20Breached" />
-      <KPI label="Unassigned" value={s.unassigned} icon={UserRoundX} tone={s.unassigned ? 'warning' : 'neutral'} to="/service/tickets?assignment=Unassigned" />
-      <KPI label="Completed" value={s.completed} icon={CircleCheck} tone="success" hint={`${s.closed} closed`} to="/service/tickets?status=Completed" />
-    </KPIGrid>
+    <section className="ops-strip" aria-label="Operations summary">
+      <Link className="ops-stat" to="/service/tickets"><strong>{active.length}</strong><span>Active</span><small>{inProgress} in progress</small></Link>
+      <Link className={`ops-stat ${breached ? 'ops-stat-critical' : risky.length ? 'ops-stat-warning' : ''}`} to="/service/tickets?slaStatus=At%20Risk"><strong>{risky.length}</strong><span>SLA risk</span><small>{breached ? `${breached} breached or escalated` : 'None breached'}</small></Link>
+      <Link className={`ops-stat ${unassigned ? 'ops-stat-warning' : ''}`} to="/service/tickets?status=Open&assignment=Unassigned"><strong>{unassigned}</strong><span>Unassigned</span><small>{available} engineer{available === 1 ? '' : 's'} available</small></Link>
+      <Link className="ops-stat" to="/service/tickets?status=Waiting%20for%20Parts"><strong>{waitingParts}</strong><span>Waiting for parts</span><small>Repairs paused</small></Link>
+    </section>
+
+    <section className="page-section" aria-labelledby="ops-attention">
+      <SectionHeader id="ops-attention" title="Needs attention" description={attention.length ? `${pluralize(attention.length, 'item')}, most urgent first` : undefined} actions={attention.length > ATTENTION_LIMIT ? <Button size="sm" variant="ghost" onClick={() => setShowAll(value => !value)}>{showAll ? 'Show fewer' : `Show all ${attention.length}`}</Button> : null} />
+      <div className="card card-flush">
+        <AttentionList items={showAll ? attention : attention.slice(0, ATTENTION_LIMIT)} empty={<AllClear>No SLA risks, unassigned tickets or paused repairs right now.</AllClear>} />
+      </div>
+    </section>
 
     <div className="grid-2">
-      <Card flush title="Needs attention" description="Active tickets that need action now">
-        {attention.length ? <div className="attention-list">{attention.map(item => <Attention key={item.title} {...item} />)}</div> : <div className="all-clear"><CheckCircle2 size={18} aria-hidden="true" />No SLA risks or unassigned work right now.</div>}
-      </Card>
-      <Card flush title="Service activity" description="Most recently updated tickets" actions={<Button size="sm" variant="ghost" to="/service/tickets">View queue</Button>}>
-        {recentActivity.length ? <ul className="activity-list">{recentActivity.map(ticket => <li key={ticket._id}><Link className="activity-item" to={`/service/tickets/${ticket._id}`}>
-          <span className="activity-title"><span className="mono">{ticket.ticketId}</span><span>{ticket.companyId?.name || ticket.customerId?.company || 'Corporate'}</span></span>
-          <span className="activity-sub">{[ticket.issueType, ticket.deviceId?.model, ticket.assignedEngineer || 'Unassigned'].filter(Boolean).join(' · ')}</span>
-          <span className="activity-side"><Badge dot>{ticket.status}</Badge><time dateTime={ticket.updatedAt}>{formatRelative(ticket.updatedAt || ticket.createdAt)}</time></span>
-        </Link></li>)}</ul> : <EmptyState compact icon={Ticket} title="No tickets yet" description="Tickets raised by corporate customers will appear here." />}
-      </Card>
-    </div>
+      <section className="page-section" aria-labelledby="ops-capacity">
+        <SectionHeader id="ops-capacity" title="Engineer capacity" description={`${available} of ${pluralize(engineers.length, 'engineer')} available`} actions={<Button size="sm" variant="ghost" to="/service/engineers">Engineers</Button>} />
+        <div className="card card-flush">
+          {capacity.length ? <ul className="capacity-list">{capacity.map(row => {
+            const free = row.engineers.filter(engineer => engineer.status === 'Available').length;
+            return <li className="capacity-row" key={row.name}>
+              <span className="capacity-name"><strong>{row.name}</strong><small>{row.engineers.length ? `${free} of ${pluralize(row.engineers.length, 'engineer')} available` : 'No engineers based here'}</small></span>
+              <span className="capacity-meter" role="img" aria-label={`${free} available, ${row.engineers.length - free} not available`}>{row.engineers.map(engineer => <i key={engineer._id} className={engineer.status === 'Available' ? 'on' : 'busy'} title={`${engineer.name} · ${engineer.status} · ${engineer.assignedTicketCount || 0} open`} />)}</span>
+              <span className="capacity-figure"><strong>{row.openTickets}</strong> active{row.unassigned ? <> · <strong>{row.unassigned}</strong> unassigned</> : ''}</span>
+            </li>;
+          })}</ul> : <EmptyState compact icon={UsersRound} title="No engineers on record" description="Engineers added to the service team will appear here with their location and availability." />}
+        </div>
+      </section>
 
-    <div className="grid-main-side">
-      <Card title="Ticket volume" description="Tickets created per calendar month (all years)"><ColumnChart data={volume} dataKey="tickets" nameKey="month" seriesName="Tickets" emptyText="No tickets created yet." /></Card>
-      <Card title="Location distribution" description="Tickets by service location"><BarList data={locations} emptyText="No tickets yet." /></Card>
-    </div>
-
-    <div className="grid-main-side">
-      <Card flush title="Recent tickets" actions={<Button size="sm" variant="ghost" to="/service/tickets">View all</Button>}>
-        {tickets.length ? <div className="table-scroll"><table className="table table-compact">
-          <thead><tr><th>Ticket</th><th>Corporate</th><th>Priority</th><th>Status</th><th>SLA</th><th><span className="sr-only">Action</span></th></tr></thead>
-          <tbody>{tickets.slice(0, 6).map(ticket => <tr key={ticket._id}>
-            <td><Link className="cell-link mono" to={`/service/tickets/${ticket._id}`}>{ticket.ticketId}</Link><span className="cell-sub">{ticket.issueType}</span></td>
-            <td>{ticket.companyId?.name || ticket.customerId?.company || '—'}</td>
-            <td><Badge>{ticket.priority}</Badge></td>
-            <td><Badge dot>{ticket.status}</Badge></td>
-            <td><Badge>{slaLabel(ticket)}</Badge></td>
-            <td className="cell-right"><RowAction to={`/service/tickets/${ticket._id}`} label="Open" /></td>
-          </tr>)}</tbody>
-        </table></div> : <EmptyState compact icon={Ticket} title="No tickets yet" />}
-      </Card>
-      <Card title="Engineer workload" description="Active (not closed) tickets per engineer" actions={<Button size="sm" variant="ghost" to="/service/engineers">Engineers</Button>}><BarList data={workload} emptyText="No active assignments." /></Card>
+      <section className="page-section" aria-labelledby="ops-activity">
+        <SectionHeader id="ops-activity" title="Recent service activity" actions={<Button size="sm" variant="ghost" to="/service/tickets">View queue</Button>} />
+        <div className="card card-flush">
+          {recentActivity.length ? <ul className="activity-list">{recentActivity.map(ticket => <li key={ticket._id}><Link className="activity-item" to={`/service/tickets/${ticket._id}`}>
+            <span className="activity-title"><span className="mono">{ticket.ticketId}</span><span>{companyOf(ticket)}</span></span>
+            <span className="activity-sub">{[ticket.issueType, ticket.deviceId?.model, ticket.assignedEngineer || 'Unassigned'].filter(Boolean).join(' · ')}</span>
+            <span className="activity-side"><Badge dot>{ticket.status}</Badge><time dateTime={ticket.updatedAt}>{formatRelative(ticket.updatedAt || ticket.createdAt)}</time></span>
+          </Link></li>)}</ul> : <EmptyState compact icon={Ticket} title="No tickets yet" description="When a corporate customer raises a request, it will appear here." />}
+        </div>
+      </section>
     </div>
   </ServiceShell>;
 }
@@ -125,10 +153,18 @@ function EngineerDrawer({ engineer, tickets, onClose }) {
 
 export function Engineers() {
   const state = useAsync(() => Promise.all([getEngineers(), getServiceTickets()]).then(([engineers, tickets]) => ({ engineers, tickets })), []);
+  const [params, setParams] = useSearchParams();
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('All');
   const [location, setLocation] = useState('All');
   const [selected, setSelected] = useState(null);
+  const requestedEngineer = params.get('engineer');
+  useEffect(() => {
+    if (!requestedEngineer || !state.data) return;
+    const match = state.data.engineers.find(engineer => String(engineer._id) === requestedEngineer);
+    if (match) setSelected(match);
+  }, [requestedEngineer, state.data]);
+  const closeDrawer = () => { setSelected(null); if (requestedEngineer) setParams({}, { replace: true }); };
   const engineers = state.data?.engineers || [];
   const tickets = state.data?.tickets || [];
   const rows = useMemo(() => engineers.map(engineer => {
@@ -147,8 +183,8 @@ export function Engineers() {
       <KPI label="Assignments at SLA risk" value={state.data ? rows.reduce((sum, row) => sum + row.riskCount, 0) : '—'} icon={ShieldAlert} tone={rows.some(row => row.riskCount) ? 'warning' : 'neutral'} />
     </KPIGrid>
     <TableCard columns={7} loading={state.loading && !state.data} error={state.error && friendlyError(state.error)} errorTitle="Unable to load engineers" onRetry={state.reload}
-      toolbar={<FilterBar summary={state.data ? `${visible.length} engineers` : null}><SearchInput value={search} onChange={setSearch} placeholder="Search engineers…" label="Search engineers by name, email, phone, ID or location" /><FilterSelect label="Location" value={location} onChange={setLocation} options={locations} allLabel="All locations" /><FilterSelect label="Availability" value={status} onChange={setStatus} options={statuses} allLabel="All availability" /></FilterBar>}
-      isEmpty={!visible.length} empty={<EmptyState icon={UsersRound} title={engineers.length ? 'No engineers match these filters' : 'No engineers on record'} description={engineers.length ? 'Try a different search term.' : 'Engineers added to the service team will appear here.'} />}>
+      toolbar={<FilterBar summary={state.data ? `${visible.length} of ${pluralize(engineers.length, 'engineer')}` : null}><SearchInput value={search} onChange={setSearch} placeholder="Search engineer name, ID, phone or location" label="Search engineers by name, email, phone, ID or location" /><FilterSelect label="Location" value={location} onChange={setLocation} options={locations} allLabel="All locations" /><FilterSelect label="Availability" value={status} onChange={setStatus} options={statuses} allLabel="All availability" /></FilterBar>}
+      isEmpty={!visible.length} empty={<EmptyState icon={UsersRound} title={engineers.length ? 'No engineers match these filters' : 'No engineers on record'} description={engineers.length ? 'Try a different search term, or clear the location and availability filters.' : 'Engineers added to the service team will appear here.'} action={engineers.length ? <Button size="sm" onClick={() => { setSearch(''); setLocation('All'); setStatus('All'); }}>Clear filters</Button> : null} />}>
       <table className="table">
         <thead><tr><th>Engineer</th><th>Location</th><th>Availability</th><th>Active tickets</th><th className="cell-right">Completed</th><th className="cell-right">SLA risk</th><th><span className="sr-only">Action</span></th></tr></thead>
         <tbody>{visible.map(engineer => <tr key={engineer._id} className="row-clickable" onClick={() => setSelected(engineer)}>
@@ -162,67 +198,7 @@ export function Engineers() {
         </tr>)}</tbody>
       </table>
     </TableCard>
-    {selected && <EngineerDrawer engineer={selected} tickets={tickets} onClose={() => setSelected(null)} />}
-  </ServiceShell>;
-}
-
-const periods = [{ value: 'all', label: 'All time' }, { value: 'year', label: 'This year' }, { value: '90', label: 'Last 90 days' }, { value: '30', label: 'Last 30 days' }];
-function inPeriod(ticket, period) {
-  if (period === 'all') return true;
-  const created = new Date(ticket.createdAt);
-  if (period === 'year') return created.getFullYear() === new Date().getFullYear();
-  return Date.now() - created.getTime() <= Number(period) * 86400000;
-}
-function groupBy(items, pick) {
-  return Object.entries(items.reduce((result, item) => { const key = pick(item) || 'Other'; result[key] = (result[key] || 0) + 1; return result; }, {})).map(([name, value]) => ({ name, value }));
-}
-
-export function ServiceReports() {
-  const state = useAsync(() => Promise.all([getServiceReports(), getServiceTickets(), getCoverage()]).then(([reports, tickets, coverage]) => ({ reports, tickets, coverage })), []);
-  const [period, setPeriod] = useState('all');
-  if (state.loading && !state.data) return <ServiceShell title="Reports"><PageSkeleton kpis={5} /></ServiceShell>;
-  if (state.error) return <ServiceShell title="Reports"><PageHeader title="Reports" /><div className="card"><ErrorState title="Unable to load reports" message={friendlyError(state.error)} onRetry={state.reload} /></div></ServiceShell>;
-
-  const { reports, coverage } = state.data;
-  const tickets = state.data.tickets.filter(ticket => inPeriod(ticket, period));
-  // "All time" uses the backend aggregates; narrower periods aggregate the same ticket records client-side.
-  const base = period === 'all' ? reports : {
-    total: tickets.length,
-    open: tickets.filter(ticket => ticket.status === 'Open').length,
-    completed: tickets.filter(ticket => ticket.status === 'Completed').length,
-    closed: tickets.filter(ticket => ticket.status === 'Closed').length,
-    locations: groupBy(tickets, ticket => ticket.location),
-    deviceTypes: groupBy(tickets, ticket => ticket.deviceId?.deviceType),
-    issueTypes: groupBy(tickets, ticket => ticket.issueType),
-  };
-  const closed = tickets.filter(ticket => ticket.status === 'Closed' && ticket.createdAt && ticket.updatedAt);
-  const avgDays = closed.length ? closed.reduce((sum, ticket) => sum + (new Date(ticket.updatedAt) - new Date(ticket.createdAt)), 0) / closed.length / 86400000 : null;
-  const healthCamp = monthlyVolume(tickets.filter(ticket => ticket.category === 'Health Camp'));
-  const periodLabel = periods.find(item => item.value === period).label;
-
-  return <ServiceShell title="Reports">
-    <PageHeader title="Reports" description="Operational analytics across tickets, locations, categories and coverage." actions={<label className="filter-select"><span className="sr-only">Reporting period</span><select value={period} onChange={event => setPeriod(event.target.value)} aria-label="Reporting period">{periods.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>} />
-    <KPIGrid columns={5}>
-      <KPI label="Total tickets" value={base.total} icon={Ticket} hint={periodLabel} />
-      <KPI label="Open" value={base.open} icon={ClipboardList} tone="info" />
-      <KPI label="Completed" value={base.completed} icon={Wrench} tone="success" />
-      <KPI label="Closed" value={base.closed} icon={CircleCheck} tone="success" />
-      <KPI label="Avg. resolution time" value={avgDays === null ? '—' : `${avgDays.toFixed(1)} days`} icon={Clock3} hint={closed.length ? `Created → closed, ${closed.length} tickets` : 'No closed tickets in period'} />
-    </KPIGrid>
-    <div className="grid-main-side">
-      <Card title="Monthly ticket volume" description={`Tickets created per month, ${new Date().getFullYear()}`}><ColumnChart data={monthlyVolume(tickets)} dataKey="tickets" nameKey="month" seriesName="Tickets" emptyText="No tickets this year." /></Card>
-      <Card title="Ticket status" description={periodLabel}><BarList data={groupBy(tickets, ticket => ticket.status)} emptyText="No tickets in this period." /></Card>
-    </div>
-    <div className="grid-3">
-      <Card title="Location distribution" description="Tickets by service location"><BarList data={base.locations} emptyText="No tickets in this period." /></Card>
-      <Card title="Service category" description="Tickets by request category"><BarList data={groupBy(tickets, ticket => ticket.category || 'Service')} emptyText="No tickets in this period." /></Card>
-      <Card title="Device type" description="Tickets by device type"><BarList data={base.deviceTypes} emptyText="No tickets in this period." /></Card>
-    </div>
-    <div className="grid-main-side">
-      <Card title="Issue types" description="Most frequently reported issues"><ColumnChart data={[...(base.issueTypes || [])].sort((a, b) => b.value - a.value)} seriesName="Tickets" emptyText="No tickets in this period." /></Card>
-      <Card title="AMC device counts" description="All enrolled devices by AMC status"><BarList data={groupBy(coverage.devices || [], device => device.amcStatus)} tone="#34c759" emptyText="No devices enrolled." /></Card>
-    </div>
-    <Card title="Health camp requests" description={`Health Camp requests per month, ${new Date().getFullYear()}`}><ColumnChart data={healthCamp} dataKey="tickets" nameKey="month" seriesName="Health camp requests" height={200} emptyText="No health camp requests this year." /></Card>
+    {selected && <EngineerDrawer engineer={selected} tickets={tickets} onClose={closeDrawer} />}
   </ServiceShell>;
 }
 

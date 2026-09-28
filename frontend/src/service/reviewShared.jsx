@@ -11,7 +11,7 @@ export function ReviewTabs({ current }) {
 }
 
 export function GoogleBadge() {
-  return <Badge tone="google"><span className="google-g" aria-hidden="true">G</span>Google</Badge>;
+  return <Badge tone="google"><span className="google-g" aria-hidden="true">G</span>Google review</Badge>;
 }
 
 // Last Google review sync in this browser session. Syncing calls Google's
@@ -39,7 +39,7 @@ export function GoogleReviewCard({ review }) {
 
 export function InternalReviewCard({ review }) {
   return <article className="review-card">
-    <div className="review-card-head"><Badge tone="info">Internal</Badge><Stars rating={review.rating} /></div>
+    <div className="review-card-head"><Badge tone="info">Internal review</Badge><Stars rating={review.rating} /></div>
     <div className="review-author"><Avatar name={review.customerId?.name || review.corporateId?.name} size={32} /><div><strong>{review.corporateId?.name || 'Corporate customer'}</strong><span>{[review.ticketId?.ticketId, review.serviceCentreId?.name].filter(Boolean).join(' · ') || 'Service request'}</span></div></div>
     <p className="review-text">{review.comment}</p>
     <div className="review-card-foot">

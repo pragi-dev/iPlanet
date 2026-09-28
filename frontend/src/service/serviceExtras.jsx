@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Edit3, Plus, Siren } from 'lucide-react';
 import { ServiceShell } from './components';
-import { createEscalationRule, getEscalationMatrix, getEscalationRules, getServiceNotifications, markAllServiceNotificationsRead, markServiceNotificationRead, updateEscalationRule } from './api';
-import { Button, ConfirmDialog, EmptyState, ErrorState, Field, InlineAlert, Modal, NotificationCenter, PageHeader, PageSkeleton, SectionHeader, friendlyError, useAsync } from '../ui';
+import { createEscalationRule, getEscalationMatrix, getEscalationRules, getServiceNotifications, getServiceTickets, markAllServiceNotificationsRead, markServiceNotificationRead, updateEscalationRule } from './api';
+import { AllClear, AttentionList, Button, ConfirmDialog, EmptyState, ErrorState, Field, InlineAlert, Modal, NotificationCenter, PageHeader, PageSkeleton, SectionHeader, formatDateTime, friendlyError, pluralize, riskLabel, riskTone, slaRisk, useAsync } from '../ui';
 
 function serviceRoute(item) {
   if (item.action?.route) return item.action.route;
@@ -53,6 +53,8 @@ function RuleForm({ rule, onClose, onSaved }) {
 
 export function EscalationMatrix() {
   const state = useAsync(() => Promise.all([getEscalationMatrix(), getEscalationRules()]).then(([levels, rules]) => ({ levels, rules })), []);
+  // Loaded separately so the matrix stays usable if the ticket list fails.
+  const live = useAsync(() => getServiceTickets().then(tickets => tickets.filter(slaRisk)), []);
   const [editing, setEditing] = useState(null);
   const [confirmDisable, setConfirmDisable] = useState(null);
   const [toggling, setToggling] = useState('');
@@ -78,10 +80,27 @@ export function EscalationMatrix() {
   const { levels, rules } = state.data;
   const contactFor = level => levels.find(item => Number(item.level) === Number(level));
   const sortedRules = [...rules].sort((a, b) => a.level - b.level || a.slaThreshold - b.slaThreshold);
+  const liveItems = [...(live.data || [])].sort((a, b) => (Number(b.escalationLevel) || 0) - (Number(a.escalationLevel) || 0) || new Date(a.slaTargetAt) - new Date(b.slaTargetAt)).map(ticket => {
+    const risk = slaRisk(ticket);
+    const level = Number(ticket.escalationLevel) || 0;
+    const contact = level ? contactFor(level) : null;
+    return { key: ticket._id, tone: riskTone(risk), kicker: `${level ? `Level ${String(level).padStart(2, '0')} · ` : ''}${riskLabel(risk)}`, title: `${ticket.ticketId} · ${ticket.issueType || 'Service'}`,
+      detail: [ticket.companyId?.name || ticket.customerId?.company, contact ? `Notified ${contact.contactName || contact.name}` : 'Not escalated to a contact yet', ticket.slaTargetAt ? `Target ${formatDateTime(ticket.slaTargetAt)}` : null].filter(Boolean).join(' · '),
+      action: { label: 'Open ticket', to: `/service/tickets/${ticket._id}` } };
+  });
 
   return <ServiceShell title="Escalation Matrix">
     <PageHeader title="Escalation Matrix" description="When active tickets escalate, and who is notified at each level." actions={<Button variant="primary" icon={Plus} onClick={() => setEditing({})}>Add rule</Button>} />
     {error && <InlineAlert title={error} action={<Button size="sm" variant="ghost" onClick={() => setError('')}>Dismiss</Button>} />}
+
+    <section className="page-section" aria-labelledby="live-escalations">
+      <SectionHeader id="live-escalations" title="Live escalations" description={live.data ? (liveItems.length ? `${pluralize(liveItems.length, 'active ticket')} at risk, breached or escalated` : undefined) : undefined} />
+      <div className="card card-flush">
+        {live.loading && !live.data ? <div className="card-body"><p className="text-muted text-small">Loading active tickets…</p></div>
+          : live.error ? <ErrorState compact title="Unable to load active tickets" message={friendlyError(live.error)} onRetry={live.reload} />
+          : <AttentionList items={liveItems} empty={<AllClear>No active tickets are at risk or escalated right now.</AllClear>} />}
+      </div>
+    </section>
 
     <section className="page-section" aria-labelledby="escalation-rules">
       <SectionHeader id="escalation-rules" title="Escalation rules" description={`${rules.filter(rule => rule.isActive).length} of ${rules.length} active · evaluated against every active ticket's SLA`} />

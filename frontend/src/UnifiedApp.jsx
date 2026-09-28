@@ -1,23 +1,48 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowRight, LockKeyhole, Mail, Sparkles } from 'lucide-react';
-import { Dashboard, Devices, DeviceDetail, Tickets, Profile } from './corporate/pages';
-import { UnassignedDevices, Notifications as CorporateNotifications } from './corporate/corporateExtras';
-import { RequestEnhanced } from './corporate/RequestEnhanced';
-import { TicketDetailEnhanced } from './corporate/TicketDetailEnhanced';
-import { CoverageEnhanced } from './corporate/CoverageEnhanced';
-import { ReviewPage, CorporateReviews } from './corporate/ReviewPage';
 import { AICustomerSupportPanel } from './corporate/AICustomerSupportPanel';
 import { getDevice, getTicket, login } from './corporate/api';
-import { ServiceDashboard, Engineers, ServiceReports, ServiceSettings } from './service/servicePages';
-import { MyTickets } from './service/companyQueue';
-import { DeviceEnrollment } from './service/enrollment';
-import { ServiceNotifications, EscalationMatrix } from './service/serviceExtras';
-import { OperationalTicketDetail } from './service/OperationalTicketDetail';
-import { ServiceCoverage } from './service/coverage';
-import { InternalReviews, InternalReviewDetail } from './service/InternalReviews';
-import { GoogleBusinessProfile } from './service/GoogleBusinessProfile';
 import { AIAssistantContext, Field, InlineAlert } from './ui';
+
+// Pages load per route so each portal only downloads what it uses (charts,
+// enrollment and review tooling stay out of the initial bundle).
+const page = (loader, name) => lazy(() => loader().then(module => ({ default: module[name] })));
+const corporatePages = () => import('./corporate/pages');
+const corporateExtras = () => import('./corporate/corporateExtras');
+const reviewPages = () => import('./corporate/ReviewPage');
+const servicePages = () => import('./service/servicePages');
+const serviceExtras = () => import('./service/serviceExtras');
+const internalReviews = () => import('./service/InternalReviews');
+const Dashboard = page(corporatePages, 'Dashboard');
+const Devices = page(corporatePages, 'Devices');
+const DeviceDetail = page(corporatePages, 'DeviceDetail');
+const Tickets = page(corporatePages, 'Tickets');
+const Profile = page(corporatePages, 'Profile');
+const UnassignedDevices = page(corporateExtras, 'UnassignedDevices');
+const CorporateNotifications = page(corporateExtras, 'Notifications');
+const RequestEnhanced = page(() => import('./corporate/RequestEnhanced'), 'RequestEnhanced');
+const TicketDetailEnhanced = page(() => import('./corporate/TicketDetailEnhanced'), 'TicketDetailEnhanced');
+const CoverageEnhanced = page(() => import('./corporate/CoverageEnhanced'), 'CoverageEnhanced');
+const ReviewPage = page(reviewPages, 'ReviewPage');
+const CorporateReviews = page(reviewPages, 'CorporateReviews');
+const ServiceDashboard = page(servicePages, 'ServiceDashboard');
+const Engineers = page(servicePages, 'Engineers');
+const ServiceReports = page(() => import('./service/ServiceReports'), 'ServiceReports');
+const ServiceSettings = page(servicePages, 'ServiceSettings');
+const MyTickets = page(() => import('./service/companyQueue'), 'MyTickets');
+const DeviceEnrollment = page(() => import('./service/enrollment'), 'DeviceEnrollment');
+const ServiceNotifications = page(serviceExtras, 'ServiceNotifications');
+const EscalationMatrix = page(serviceExtras, 'EscalationMatrix');
+const OperationalTicketDetail = page(() => import('./service/OperationalTicketDetail'), 'OperationalTicketDetail');
+const ServiceCoverage = page(() => import('./service/coverage'), 'ServiceCoverage');
+const InternalReviews = page(internalReviews, 'InternalReviews');
+const InternalReviewDetail = page(internalReviews, 'InternalReviewDetail');
+const GoogleBusinessProfile = page(() => import('./service/GoogleBusinessProfile'), 'GoogleBusinessProfile');
+
+function RouteLoading() {
+  return <div className="route-loading" role="status" aria-live="polite"><span className="sr-only">Loading page…</span><span className="route-loading-bar" aria-hidden="true" /></div>;
+}
 
 const TOKEN_KEY = 'iplanet_token';
 const USER_KEY = 'iplanet_user';
@@ -186,6 +211,7 @@ function ServiceRoutes() {
 export default function UnifiedApp() {
   return <BrowserRouter>
     <AIAssistantProvider>
+      <Suspense fallback={<RouteLoading />}>
       <Routes>
         <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/login" element={sessionIsValid() ? <RoleAlias corporate={corporateHome} service={serviceHome} /> : <Login />} />
@@ -208,6 +234,7 @@ export default function UnifiedApp() {
         <Route path="/tickets/:id" element={<RoleDetailAlias corporateBase="/corporate/service-requests" serviceBase="/service/tickets" />} />
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
+      </Suspense>
     </AIAssistantProvider>
   </BrowserRouter>;
 }

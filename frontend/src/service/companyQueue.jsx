@@ -36,7 +36,7 @@ export function MyTickets() {
       errorTitle="Unable to load tickets"
       onRetry={state.reload}
       toolbar={<FilterBar summary={state.data ? <span className="row">{state.loading && <span className="text-muted">Updating…</span>}{`${tickets.length} ticket${tickets.length === 1 ? '' : 's'}`}{active && <Button size="sm" variant="ghost" icon={X} onClick={clear}>Clear filters</Button>}</span> : null}>
-        <SearchInput value={searchText} onChange={setSearchText} placeholder="Search ticket, device, serial or company" label="Search tickets" />
+        <SearchInput value={searchText} onChange={setSearchText} placeholder="Search ticket ID, device, serial or corporate" label="Search tickets" />
         <FilterSelect label="Status" value={filters.status} onChange={value => update('status', value)} options={statuses} allLabel="All statuses" />
         <FilterSelect label="Priority" value={filters.priority} onChange={value => update('priority', value)} options={['Low', 'Medium', 'High', 'Critical']} allLabel="All priorities" />
         <FilterSelect label="Corporate" value={filters.companyId} onChange={value => update('companyId', value)} options={(lookups.data?.companies || []).map(company => ({ value: company._id, label: company.name }))} allLabel="All corporates" />

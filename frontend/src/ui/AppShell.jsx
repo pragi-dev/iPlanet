@@ -1,8 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { Bell, ChevronDown, ChevronRight, LogOut, Menu, Sparkles, UserRound, X } from 'lucide-react';
+import { Bell, ChevronDown, ChevronRight, LogOut, Menu, Search, Sparkles, UserRound, X } from 'lucide-react';
 import { Avatar, IconButton } from './primitives';
 import { readSessionUser } from './format';
+import { CommandPalette } from './CommandPalette';
 
 // Lets any part of the corporate portal open the AI Support drawer.
 export const AIAssistantContext = createContext({ available: false, open: () => {} });
@@ -26,7 +27,32 @@ function useUnreadCount(fetchUnread) {
   return count;
 }
 
+// The command-bar index is loaded on first open and reused for a minute, so
+// repeated Ctrl+K presses don't refetch every list.
+const INDEX_TTL = 60000;
+let commandIndexCache = { key: null, data: null, at: 0 };
+
+function useCommandIndex(portalKey, load) {
+  const [state, setState] = useState(() => (commandIndexCache.key === portalKey ? { data: commandIndexCache.data, error: null, loading: false } : { data: null, error: null, loading: false }));
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  const reload = useCallback(({ force = true } = {}) => {
+    if (!loadRef.current) return;
+    if (!force && commandIndexCache.key === portalKey && Date.now() - commandIndexCache.at < INDEX_TTL) return;
+    setState(current => ({ ...current, loading: true, error: null }));
+    loadRef.current()
+      .then(data => { commandIndexCache = { key: portalKey, data, at: Date.now() }; setState({ data, error: null, loading: false }); })
+      .catch(error => setState(current => ({ data: current.data, error, loading: false })));
+  }, [portalKey]);
+  return { ...state, reload };
+}
+
+function isMac() {
+  return typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+}
+
 function signOut(navigate) {
+  commandIndexCache = { key: null, data: null, at: 0 };
   localStorage.clear();
   navigate('/login', { replace: true });
 }
@@ -105,8 +131,21 @@ export function AppShell({ config, title, crumbs, children }) {
   const unread = useUnreadCount(config.fetchUnread);
   const ai = useAIAssistant();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const commandIndex = useCommandIndex(config.key, config.commands?.load);
+  const reloadIndex = commandIndex.reload;
 
   useEffect(() => { setMobileOpen(false); }, [location.pathname]);
+  useEffect(() => { if (commandOpen) reloadIndex({ force: false }); }, [commandOpen, reloadIndex]);
+  useEffect(() => {
+    const onKey = event => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k') { event.preventDefault(); setCommandOpen(value => !value); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
+  const runCommand = entry => { if (entry.run === 'ai') ai.open(); };
+  const commandActions = (config.commands?.actions || []).filter(action => action.run !== 'ai' || ai.available);
   useEffect(() => { document.title = title ? `${title} · iPlanet Self-care Portal` : 'iPlanet Self-care Portal'; }, [title]);
   useEffect(() => {
     if (!mobileOpen) return undefined;
@@ -139,6 +178,9 @@ export function AppShell({ config, title, crumbs, children }) {
           </nav>
         </div>
         <div className="topbar-right">
+          {config.commands && <button type="button" className="command-trigger" onClick={() => setCommandOpen(true)} aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'} aria-label="Search tickets, devices, people and actions">
+            <Search size={15} aria-hidden="true" /><span className="command-trigger-text">Search</span><kbd className="kbd" aria-hidden="true">{isMac() ? '⌘K' : 'Ctrl K'}</kbd>
+          </button>}
           {ai.available && <button type="button" className="btn btn-ghost ai-trigger" onClick={ai.open}><Sparkles size={16} aria-hidden="true" /><span>AI Support</span></button>}
           <IconButton label="Notifications" icon={Bell} badge={unread} onClick={() => navigate(config.notificationsRoute)} />
           <span className="topbar-divider" aria-hidden="true" />
@@ -149,5 +191,6 @@ export function AppShell({ config, title, crumbs, children }) {
         <div className="content-inner">{children}</div>
       </main>
     </div>
+    {commandOpen && <CommandPalette onClose={() => setCommandOpen(false)} index={commandIndex} actions={commandActions} onRunAction={runCommand} />}
   </div>;
 }

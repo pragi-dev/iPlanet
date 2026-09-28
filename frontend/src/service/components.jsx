@@ -1,6 +1,26 @@
-import { BarChart3, Bell, LayoutDashboard, MessageSquareText, ScanLine, Settings, ShieldCheck, Siren, Ticket, UsersRound } from 'lucide-react';
+import { BarChart3, Bell, Building2, ClipboardList, Laptop, LayoutDashboard, MessageSquareText, ScanLine, Settings, ShieldAlert, ShieldCheck, Siren, Ticket, UserRound, UserRoundX, UsersRound } from 'lucide-react';
 import { AppShell, Badge as UIBadge, EmptyState, KPI, PageHeader } from '../ui';
-import { getServiceNotificationUnreadCount } from './api';
+import { getCompanies, getCoverage, getEngineers, getServiceNotificationUnreadCount, getServiceTickets } from './api';
+
+// Command-bar index: tickets, engineers, corporates, enrolled devices and the
+// employees on those devices — exactly what the service APIs return.
+async function loadCommandIndex() {
+  const [tickets, engineers, companies, coverage] = await Promise.all([getServiceTickets(), getEngineers(), getCompanies(), getCoverage()]);
+  const devices = coverage?.devices || [];
+  const employees = new Map();
+  devices.forEach(device => {
+    if (!device.employeeName) return;
+    const key = `${device.companyId?._id || ''}:${device.employeeId || device.employeeName}`;
+    if (!employees.has(key)) employees.set(key, { name: device.employeeName, employeeId: device.employeeId, company: device.companyId?.name });
+  });
+  return [
+    ...tickets.map(ticket => ({ id: `t-${ticket._id}`, group: 'Tickets', icon: Ticket, mono: true, title: ticket.ticketId, subtitle: [ticket.issueType, ticket.companyId?.name || ticket.customerId?.company, ticket.status].filter(Boolean).join(' · '), keywords: [ticket.deviceId?.model, ticket.deviceId?.serialNumber, ticket.location, ticket.assignedEngineer].join(' '), to: `/service/tickets/${ticket._id}` })),
+    ...devices.map(device => ({ id: `d-${device._id}`, group: 'Devices', icon: Laptop, title: device.model, subtitle: [device.serialNumber, device.companyId?.name || 'Not assigned', device.location].filter(Boolean).join(' · '), keywords: [device.assetId, device.employeeName, device.employeeId].join(' '), to: `/service/tickets?search=${encodeURIComponent(device.serialNumber)}` })),
+    ...engineers.map(engineer => ({ id: `e-${engineer._id}`, group: 'Engineers', icon: UsersRound, title: engineer.name, subtitle: [engineer.location, engineer.status, `${engineer.assignedTicketCount || 0} open tickets`].filter(Boolean).join(' · '), keywords: [engineer.employeeId, engineer.email, engineer.phone].join(' '), to: `/service/engineers?engineer=${engineer._id}` })),
+    ...companies.map(company => ({ id: `c-${company._id}`, group: 'Corporates', icon: Building2, title: company.name, subtitle: [company.location, company.contactName].filter(Boolean).join(' · '), keywords: [company.companyId, company.contactEmail].join(' '), to: `/service/tickets?companyId=${company._id}` })),
+    ...[...employees.values()].map(person => ({ id: `p-${person.company}-${person.employeeId || person.name}`, group: 'Employees', icon: UserRound, title: person.name, subtitle: [person.employeeId, person.company].filter(Boolean).join(' · '), to: `/service/tickets?search=${encodeURIComponent(person.name)}` })),
+  ];
+}
 
 export const servicePortal = {
   key: 'service',
@@ -11,8 +31,20 @@ export const servicePortal = {
   accountRoute: '/service/settings',
   accountLabel: 'Settings',
   fetchUnread: getServiceNotificationUnreadCount,
+  commands: {
+    load: loadCommandIndex,
+    actions: [
+      { id: 'a-queue', icon: ClipboardList, title: 'Open ticket queue', keywords: 'tickets list', to: '/service/tickets' },
+      { id: 'a-assign', icon: UserRoundX, title: 'Assign engineer to unassigned tickets', keywords: 'unassigned open engineer', to: '/service/tickets?status=Open&assignment=Unassigned' },
+      { id: 'a-sla', icon: ShieldAlert, title: 'Review SLA at-risk tickets', keywords: 'sla risk breach escalation', to: '/service/tickets?slaStatus=At%20Risk' },
+      { id: 'a-enroll', icon: ScanLine, title: 'Enroll a device', keywords: 'serial scan register', to: '/service/device-enrollment' },
+      { id: 'a-coverage', icon: ShieldCheck, title: 'Check coverage', keywords: 'warranty amc expiry', to: '/service/warranty' },
+      { id: 'a-reports', icon: BarChart3, title: 'View reports', keywords: 'analytics charts', to: '/service/reports' },
+      { id: 'a-escalation', icon: Siren, title: 'Escalation matrix', keywords: 'rules levels contacts', to: '/service/escalation' },
+    ],
+  },
   groups: [
-    { label: 'Overview', items: [{ to: '/service/dashboard', icon: LayoutDashboard, label: 'Dashboard' }] },
+    { label: 'Overview', items: [{ to: '/service/dashboard', icon: LayoutDashboard, label: 'Overview' }] },
     { label: 'Operations', items: [
       { to: '/service/tickets', icon: Ticket, label: 'Tickets' },
       { to: '/service/device-enrollment', icon: ScanLine, label: 'Device Enrollment' },

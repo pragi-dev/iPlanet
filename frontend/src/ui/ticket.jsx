@@ -1,4 +1,4 @@
-import { Check, CircleAlert, Clock3, Laptop, Monitor, ShieldAlert, ShieldCheck, Smartphone, Tablet, Watch } from 'lucide-react';
+import { CircleAlert, Clock3, Laptop, Monitor, ShieldAlert, ShieldCheck, Smartphone, Tablet, Watch } from 'lucide-react';
 import { Badge } from './primitives';
 import { formatDateTime, slaLabel, statusTone } from './format';
 
@@ -74,28 +74,6 @@ export function SLAPanel({ ticket, reason, contact, showElapsed = false }) {
       {contact && escalated && <div className="sla-cell" style={{ gridColumn: '1 / -1' }}><span>Escalated to</span><strong>{contact.name} · {contact.contactName}{contact.email ? ` · ${contact.email}` : ''}</strong></div>}
     </div>
   </div>;
-}
-
-const baseFlow = ['Open', 'Engineer Assigned', 'Engineer Accepted', 'In Progress', 'Waiting for Parts', 'Completed', 'Closed'];
-
-// Shows the service workflow. "Waiting for Parts" is only listed when the
-// ticket is, or has been, in that state.
-export function Workflow({ ticket, timeline = [] }) {
-  const visited = new Set(timeline.map(event => event.status));
-  const status = ticket.status || 'Open';
-  const steps = baseFlow.filter(step => step !== 'Waiting for Parts' || status === step || visited.has(step));
-  const currentIndex = Math.max(0, steps.indexOf(status));
-  const closed = status === 'Closed';
-  return <ol className="workflow" aria-label="Service workflow">
-    {steps.map((step, index) => {
-      const hold = step === 'Waiting for Parts' && index === currentIndex;
-      const state = index < currentIndex || (closed && index === currentIndex) ? 'done' : index === currentIndex ? (hold ? 'hold' : 'current') : 'upcoming';
-      return <li key={step} className={`workflow-step workflow-${state}`} aria-current={state === 'current' || state === 'hold' ? 'step' : undefined}>
-        <span className="workflow-dot" aria-hidden="true">{state === 'done' && <Check size={13} strokeWidth={3} />}</span>
-        <span className="workflow-label">{step}{hold && <span className="sr-only"> (on hold)</span>}</span>
-      </li>;
-    })}
-  </ol>;
 }
 
 export function CoverageTiles({ device, entitlements }) {
