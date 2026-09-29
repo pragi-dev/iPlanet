@@ -104,10 +104,18 @@ function Login() {
       </div>
     </header>
     <div className="login-main">
-      <section className="login-hero">
-        <p className="login-eyebrow">iPlanet Self-care Portal</p>
-        <h1>Device care,<br /><span className="login-gradient">handled.</span></h1>
-        <p className="login-lede">Raise and track service, manage coverage, and run service operations — all from one place.</p>
+      <section className="login-intro">
+        <div className="login-hero">
+          <p className="login-eyebrow">iPlanet Self-care Portal</p>
+          <h1>Device care,<br /><span className="login-gradient">handled.</span></h1>
+          <p className="login-lede">Raise and track service, manage coverage, and run service operations — all from one place.</p>
+        </div>
+        <ul className="login-highlights">
+          {highlights.map(({ icon: Icon, title, text }) => <li key={title}>
+            <span className="login-highlight-icon" aria-hidden="true"><Icon size={20} /></span>
+            <span className="login-highlight-text"><strong>{title}</strong><span>{text}</span></span>
+          </li>)}
+        </ul>
       </section>
       <form className="login-card" onSubmit={submit} noValidate>
         <div className="login-card-head">
@@ -134,13 +142,6 @@ function Login() {
         <button className="login-submit" type="submit" disabled={busy || !email || !password}>{busy ? <><span className="login-spinner" aria-hidden="true" />Signing in…</> : <>Continue<ArrowRight size={17} aria-hidden="true" /></>}</button>
         <div className="login-note"><LockKeyhole size={13} aria-hidden="true" /><span>Demo password <strong>Demo@123</strong></span></div>
       </form>
-      <ul className="login-highlights">
-        {highlights.map(({ icon: Icon, title, text }) => <li key={title}>
-          <span className="login-highlight-icon" aria-hidden="true"><Icon size={20} /></span>
-          <strong>{title}</strong>
-          <span>{text}</span>
-        </li>)}
-      </ul>
     </div>
     <footer className="login-foot">
       <div className="login-foot-inner">
