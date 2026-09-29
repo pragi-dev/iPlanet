@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowRight, Building2, Eye, EyeOff, Laptop, LockKeyhole, ShieldCheck, Sparkles, Wrench } from 'lucide-react';
+import { ArrowRight, Building2, Check, Eye, EyeOff, Laptop, LockKeyhole, ShieldCheck, Sparkles, Wrench } from 'lucide-react';
 import { AICustomerSupportPanel } from './corporate/AICustomerSupportPanel';
 import { getDevice, getTicket, login } from './corporate/api';
 import { AIAssistantContext, InlineAlert } from './ui';
@@ -103,10 +103,11 @@ function Login() {
         <span className="login-nav-meta">Self-Care &amp; Service Operations</span>
       </div>
     </header>
+    <div className="login-backdrop" aria-hidden="true"><i /><i /><i /></div>
     <div className="login-main">
       <section className="login-intro">
         <div className="login-hero">
-          <p className="login-eyebrow">iPlanet Self-care Portal</p>
+          <p className="login-eyebrow"><Sparkles size={14} aria-hidden="true" />iPlanet Self-care Portal</p>
           <h1>Device care,<br /><span className="login-gradient">handled.</span></h1>
           <p className="login-lede">Raise and track service, manage coverage, and run service operations — all from one place.</p>
         </div>
@@ -116,7 +117,16 @@ function Login() {
             <span className="login-highlight-text"><strong>{title}</strong><span>{text}</span></span>
           </li>)}
         </ul>
+        <p className="login-trust">
+          <span><LockKeyhole size={14} aria-hidden="true" />Encrypted sign-in</span>
+          <span><ShieldCheck size={14} aria-hidden="true" />Role-based access</span>
+          <span><Building2 size={14} aria-hidden="true" />Built for teams</span>
+        </p>
       </section>
+      <div className="login-stage">
+      <div className="login-halo" aria-hidden="true" />
+      <div className="login-chip login-chip-top" aria-hidden="true"><span className="login-chip-icon login-chip-success"><Check size={14} strokeWidth={3} /></span><span><strong>Repair completed</strong><small>Ready for pickup</small></span></div>
+      <div className="login-chip login-chip-bottom" aria-hidden="true"><span className="login-chip-icon login-chip-info"><Wrench size={14} /></span><span><strong>Engineer assigned</strong><small>Work starts today</small></span></div>
       <form className="login-card" onSubmit={submit} noValidate>
         <div className="login-card-head">
           <h2>Sign in</h2>
@@ -142,6 +152,7 @@ function Login() {
         <button className="login-submit" type="submit" disabled={busy || !email || !password}>{busy ? <><span className="login-spinner" aria-hidden="true" />Signing in…</> : <>Continue<ArrowRight size={17} aria-hidden="true" /></>}</button>
         <div className="login-note"><LockKeyhole size={13} aria-hidden="true" /><span>Demo password <strong>Demo@123</strong></span></div>
       </form>
+      </div>
     </div>
     <footer className="login-foot">
       <div className="login-foot-inner">
