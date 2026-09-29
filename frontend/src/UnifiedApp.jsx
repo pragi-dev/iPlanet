@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowRight, Eye, EyeOff, Laptop, ShieldCheck, Sparkles, Wrench } from 'lucide-react';
+import { ArrowRight, Check, Eye, EyeOff, Laptop, LockKeyhole, Monitor, ShieldCheck, Smartphone, Sparkles, Tablet, Wrench } from 'lucide-react';
 import { AICustomerSupportPanel } from './corporate/AICustomerSupportPanel';
 import { getDevice, getTicket, login } from './corporate/api';
 import { AIAssistantContext, InlineAlert } from './ui';
@@ -92,9 +92,9 @@ function Login() {
   const selectProfile = nextProfile => { setProfile(nextProfile); setEmail(profiles[nextProfile].email); setError(''); };
   const [showPassword, setShowPassword] = useState(false);
   const highlights = [
-    { icon: Wrench, title: 'Raise & track service', text: 'Log a repair in seconds and follow it to resolution.' },
-    { icon: ShieldCheck, title: 'Manage coverage', text: 'See warranty and coverage status across every device.' },
-    { icon: Laptop, title: 'Run operations', text: 'Queues, engineers and reports for the service team.' },
+    { icon: Wrench, title: 'Raise & track', text: 'Log a repair and follow it to resolution.' },
+    { icon: ShieldCheck, title: 'Manage coverage', text: 'Warranty and AMC status for every device.' },
+    { icon: Laptop, title: 'Run operations', text: 'Queues, engineers and reports in one view.' },
   ];
   return <main className="login">
     <aside className="login-panel">
@@ -103,14 +103,42 @@ function Login() {
         <p className="login-eyebrow">Self-Care &amp; Service Operations</p>
         <h1>Device care, handled.</h1>
         <p className="login-lede">Raise and track service, manage coverage, and run service operations — all from one place.</p>
+        <figure className="login-preview">
+          <figcaption>Every request, tracked from raise to resolution</figcaption>
+          <div className="login-preview-card" aria-hidden="true">
+            <div className="login-preview-head">
+              <span className="login-preview-device"><Laptop size={18} /></span>
+              <span className="login-preview-title"><strong>MacBook Pro 14-inch</strong><small>Battery service · Example</small></span>
+              <span className="login-preview-status">In progress</span>
+            </div>
+            <ol className="login-preview-track">
+              {['Raised', 'Assigned', 'Repairing', 'Completed'].map((step, index) => <li key={step} className={index < 2 ? 'done' : index === 2 ? 'current' : ''}>
+                <i>{index < 2 && <Check size={10} strokeWidth={3.5} />}</i><span>{step}</span>
+              </li>)}
+            </ol>
+            <p className="login-preview-foot"><span>Engineer on site</span><span>SLA on track</span></p>
+          </div>
+        </figure>
         <ul className="login-highlights">
           {highlights.map(({ icon: Icon, title, text }) => <li key={title}>
             <span className="login-highlight-icon" aria-hidden="true"><Icon size={18} /></span>
             <span className="login-highlight-text"><strong>{title}</strong><span>{text}</span></span>
           </li>)}
         </ul>
+        <div className="login-devices">
+          <span>Service for</span>
+          <ul>
+            <li><Laptop size={16} aria-hidden="true" />MacBook</li>
+            <li><Smartphone size={16} aria-hidden="true" />iPhone</li>
+            <li><Tablet size={16} aria-hidden="true" />iPad</li>
+            <li><Monitor size={16} aria-hidden="true" />iMac</li>
+          </ul>
+        </div>
       </div>
-      <p className="login-panel-foot">Copyright © {new Date().getFullYear()} iPlanet. All rights reserved.</p>
+      <div className="login-panel-foot">
+        <span>Copyright © {new Date().getFullYear()} iPlanet. All rights reserved.</span>
+        <span className="login-panel-trust"><span><LockKeyhole size={12} aria-hidden="true" />Encrypted sign-in</span><span><ShieldCheck size={12} aria-hidden="true" />Role-based access</span></span>
+      </div>
     </aside>
 
     <section className="login-side">
