@@ -35,7 +35,7 @@ export function DashboardSection({ title, description, actions, children, classN
 }
 
 // A row of figures separated by hairlines. Items with `to` link to the list
-// they count; `tone` colours the figure only when it signals a problem.
+// they count, items with `onClick` act as toggles (`active` marks the pressed one); `tone` colours the figure only when it signals a problem.
 export function MetricSummary({ items, size = 'md', label }) {
   return <ul className={`cc-metrics cc-metrics-${size}`} aria-label={label}>
     {items.filter(Boolean).map(item => {
@@ -44,8 +44,10 @@ export function MetricSummary({ items, size = 'md', label }) {
         <span className="cc-metric-label">{item.label}</span>
         {item.hint && <span className="cc-metric-hint">{item.hint}</span>}
       </>;
-      const className = `cc-metric cc-metric-${item.tone || 'neutral'}`;
-      return <li key={item.label}>{item.to ? <Link className={`${className} cc-metric-link`} to={item.to}>{body}</Link> : <div className={className}>{body}</div>}</li>;
+      const className = `cc-metric cc-metric-${item.tone || 'neutral'}${item.active ? ' cc-metric-active' : ''}`;
+      return <li key={item.label}>{item.to ? <Link className={`${className} cc-metric-link`} to={item.to}>{body}</Link>
+        : item.onClick ? <button type="button" className={`${className} cc-metric-link`} aria-pressed={Boolean(item.active)} onClick={item.onClick}>{body}</button>
+        : <div className={className}>{body}</div>}</li>;
     })}
   </ul>;
 }

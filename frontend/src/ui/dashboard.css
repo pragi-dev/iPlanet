@@ -59,6 +59,8 @@
 .cc-metric-link:hover { background: var(--color-fill); }
 .cc-metric-link:active { background: var(--color-fill-strong); }
 .cc-metric-link:focus-visible { outline: none; box-shadow: var(--focus); }
+:where(button).cc-metric { width: 100%; border: 0; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.cc-metric-active, .cc-metric-active:hover { background: var(--color-fill-strong); }
 
 /* Status distribution ------------------------------------------------------ */
 .cc-distribution { display: grid; gap: var(--space-3); }

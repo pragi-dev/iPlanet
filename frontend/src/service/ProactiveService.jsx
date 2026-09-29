@@ -4,7 +4,7 @@ import { AlertTriangle, BellRing, CalendarCheck2, CalendarClock, CircleSlash, La
 import { ServiceShell } from './components';
 import { getProactiveFollowUp, getProactiveFollowUps, proactiveFollowUpAction, updateDeviceServicePlan } from './api';
 import {
-  Badge, Button, Drawer, EmptyState, ErrorState, Field, FilterSelect, InfoList, InlineAlert, PageHeader, ProactiveStatus, SearchInput, ServiceLifecycle,
+  Badge, Button, Drawer, EmptyState, ErrorState, Field, FilterSelect, InfoList, InlineAlert, MetricSummary, PageHeader, ProactiveStatus, SearchInput, ServiceLifecycle,
   Skeleton, TableCard, dueLabel, formatDate, formatDateTime, friendlyError, pluralize, useAsync,
 } from '../ui';
 
@@ -52,16 +52,18 @@ export function ProactiveService() {
   const data = state.data;
   const summary = data?.summary;
   const facets = data?.facets || { companies: [], serviceCentres: [], locations: [], deviceTypes: [] };
-  const chips = summary ? [
-    { key: 'Needs action', label: 'Needs action', value: summary.needsAction },
-    { key: 'Overdue', label: 'Overdue', value: summary.overdue, tone: 'critical' },
-    { key: 'Due', label: 'Due', value: summary.due, tone: 'warning' },
-    { key: 'Upcoming', label: 'Upcoming', value: summary.upcoming },
-    { key: 'Reminder Due', label: 'Reminder due', value: summary.reminderDue, tone: 'warning' },
-    { key: 'Awaiting customer', label: 'Awaiting customer', value: summary.awaitingCustomer },
-    { key: 'Scheduled', label: 'Scheduled', value: summary.scheduled },
-    { key: 'In Service', label: 'In service', value: summary.inService },
-  ] : [];
+  const config = data?.config;
+  // Each figure filters the table to that status; pressing it again clears the filter.
+  const metrics = summary ? [
+    { key: 'Needs action', label: 'Needs action', value: summary.needsAction, hint: 'Contact now' },
+    { key: 'Overdue', label: 'Overdue', value: summary.overdue, tone: 'critical', hint: `Past ${config?.overdueGraceDays ?? 14}-day grace` },
+    { key: 'Due', label: 'Due', value: summary.due, tone: 'warning', hint: 'Date reached' },
+    { key: 'Upcoming', label: 'Upcoming', value: summary.upcoming, hint: `Next ${config?.upcomingDays ?? 30} days` },
+    { key: 'Reminder Due', label: 'Reminder due', value: summary.reminderDue, tone: 'warning', hint: 'Follow up now' },
+    { key: 'Awaiting customer', label: 'Awaiting reply', value: summary.awaitingCustomer, hint: 'No decision yet' },
+    { key: 'Scheduled', label: 'Scheduled', value: summary.scheduled, hint: 'Date agreed' },
+    { key: 'In Service', label: 'In service', value: summary.inService, hint: 'Request open' },
+  ].map(metric => ({ ...metric, tone: metric.value ? metric.tone : undefined, active: filters.status === metric.key, onClick: () => update('status', filters.status === metric.key ? 'All' : metric.key) })) : [];
 
   return <ServiceShell title="Proactive Service">
     <PageHeader
@@ -69,11 +71,10 @@ export function ProactiveService() {
       description={data ? (view === 'completed' ? 'Follow-ups completed or closed in the last 30 days.' : summary.needsAction ? `${pluralize(summary.needsAction, 'device')} ${summary.needsAction === 1 ? 'requires' : 'require'} proactive follow-up. Contact the customer before raising a request.` : 'No devices need follow-up right now. Devices appear here as they approach their recommended service date.') : 'Devices approaching or past their recommended service date.'}
       actions={<Button variant={view === 'completed' ? 'secondary' : 'ghost'} onClick={() => setParams(view === 'completed' ? {} : { view: 'completed' }, { replace: true })}>{view === 'completed' ? 'Back to active follow-ups' : 'Recently completed'}</Button>} />
 
-    {view === 'active' && summary && <div className="pro-summary" role="group" aria-label="Filter by follow-up status">
-      {chips.map(chip => <button key={chip.key} type="button" className={`pro-chip ${chip.value && chip.tone ? `pro-chip-${chip.tone}` : ''}`} aria-pressed={filters.status === chip.key} onClick={() => update('status', filters.status === chip.key ? 'All' : chip.key)}>
-        {chip.label}<strong>{chip.value}</strong>
-      </button>)}
-    </div>}
+    {view === 'active' && summary && <section className="cc-band pro-band" aria-label="Follow-up summary">
+      <div className="cc-band-head"><p className="cc-band-label">Service follow-ups</p>{filters.status !== 'All' ? <button type="button" className="btn-link text-small" onClick={() => update('status', 'All')}>Show all statuses</button> : <span className="cc-band-note">Select a figure to filter the list</span>}</div>
+      <MetricSummary label="Filter by follow-up status" items={metrics} />
+    </section>}
 
     <TableCard
       columns={8}

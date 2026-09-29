@@ -10,19 +10,8 @@
 .lifecycle-hint { font-size: 12px; color: var(--color-text-tertiary); }
 .lifecycle-arrow { position: absolute; right: 0; top: 22px; color: var(--color-text-tertiary); }
 
-/* Summary chips that double as status filters */
-.pro-summary { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-.pro-chip {
-  display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px; line-height: 1; border: 1px solid var(--color-border); border-radius: var(--radius-pill);
-  background: var(--color-surface); font-size: 14px; color: var(--color-text-secondary); transition: background-color 160ms var(--ease), border-color 160ms var(--ease), color 160ms var(--ease);
-}
-.pro-chip strong { font-size: 15px; font-weight: 600; color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
-.pro-chip:hover { border-color: #b0b0b8; color: var(--color-text-primary); }
-.pro-chip[aria-pressed='true'] { background: var(--color-text-primary); border-color: var(--color-text-primary); color: #fff; }
-.pro-chip[aria-pressed='true'] strong { color: #fff; }
-.pro-chip:focus-visible { outline: none; box-shadow: var(--focus); }
-.pro-chip-critical strong { color: var(--color-error-text); }
-.pro-chip-warning strong { color: var(--color-warning-text); }
+/* Follow-up summary band (Overview-style figures that filter the list) */
+.pro-band { gap: var(--space-4); padding: var(--space-6) var(--space-7); }
 
 /* Toolbar: search + result count, then an even grid of filters */
 .pro-toolbar { display: grid; gap: var(--space-3); padding: var(--space-4) var(--space-6); border-bottom: 1px solid var(--color-divider); }
