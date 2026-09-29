@@ -7,7 +7,7 @@ import multer from 'multer';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Review, Notification, EscalationRule, CallRecord, AITroubleshootingSession, GoogleBusinessIntegration, GoogleBusinessLocationMapping } from './models.js';
+import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Review, Notification, EscalationRule, CallRecord, AITroubleshootingSession, ServiceFollowUp, GoogleBusinessIntegration, GoogleBusinessLocationMapping } from './models.js';
 import { auth, allowRoles } from './middleware.js';
 import { createAiSupportRouter } from './routes/aiSupport.js';
 import { buildGoogleBusinessAuthUrl, parseGoogleBusinessState, encryptGoogleBusinessToken, decryptGoogleBusinessToken, exchangeGoogleBusinessCodeForTokens, refreshGoogleBusinessTokens, getGoogleBusinessOauthConfig, validateGoogleBusinessOauthConfig, inspectGoogleBusinessAuthUrl } from './integrations/googleBusinessProfile/googleBusinessProfileAuth.js';
@@ -18,6 +18,7 @@ import { buildSupportContext } from './ai/contextBuilder.js';
 import { understandRequest, understandDeterministicResult, REQUEST_CATEGORIES, REQUEST_ISSUE_TYPES } from './ai/requestExtractor.js';
 import { indiaToday, resolveServiceDateIntent } from './ai/serviceDate.js';
 import { demoEnrollmentDevices } from './demoData.js';
+import { createProactiveEngine, createProactiveScheduler, proactiveConfig, ProactiveServiceError } from './services/proactiveService/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '../.env') });
@@ -323,6 +324,8 @@ app.post('/api/google-business/locations/map', auth, allowRoles('iplanet_service
 });
 const ticketId = () => `TKT-2026-${String(Date.now()).slice(-5)}`;
 const serviceAuth = [auth, allowRoles('iplanet_service')];
+// Fields a corporate user may set when raising a request; everything else on a ticket is server-owned.
+const TICKET_REQUEST_FIELDS = ['category', 'issueType', 'description', 'location', 'preferredServiceDate', 'priority'];
 const transitions = { Open: ['Engineer Assigned'], 'Engineer Assigned': ['Engineer Accepted'], 'Engineer Accepted': ['In Progress'], 'In Progress': ['Waiting for Parts', 'Completed'], 'Waiting for Parts': ['In Progress'], Completed: ['Closed'], Closed: [] };
 const escalationContacts = { 1: { level: 1, name: 'Service Coordinator', contactName: 'Neha Menon', email: 'service@iplanet.local' }, 2: { level: 2, name: 'Service Manager', contactName: 'Ravi Shah', email: 'manager@iplanet.local' }, 3: { level: 3, name: 'Regional Operations Manager', contactName: 'Kiran Rao', email: 'operations@iplanet.local' } };
 function targetHours(priority = 'Medium') { return { Critical: 4, High: 12, Medium: 24, Low: 48 }[priority] || 24; }
@@ -429,6 +432,37 @@ async function validatedRequestDraft(state, device) {
     employee: { name: device.employeeName, id: device.employeeId, department: device.department }
   };
 }
+const PROACTIVE_SERVICE_QUESTION = /\b(service recommended|recommended service|preventive|preventative|maintenance|service (?:is )?due|due for (?:a )?service|next service|service reminder|routine service|periodic service)\b/i;
+// Date-only strings are calendar days; stored dates are shown in the business time zone.
+const displayDay = value => {
+  if (!value) return 'not on record';
+  const dateOnly = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const date = dateOnly ? new Date(`${value}T00:00:00Z`) : new Date(value);
+  if (Number.isNaN(date.getTime())) return 'not on record';
+  return new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: dateOnly ? 'UTC' : proactiveConfig.timeZone }).format(date);
+};
+const whenText = days => (days === null || days === undefined ? '' : days > 0 ? ` (in ${days} day${days === 1 ? '' : 's'})` : days === 0 ? ' (today)' : ` (${-days} day${days === -1 ? '' : 's'} ago)`);
+const coverageText = coverage => [`Warranty: ${coverage.warrantyStatus || 'not on record'}${coverage.warrantyExpiry ? `, ends ${displayDay(coverage.warrantyExpiry)}` : ''}`, `AMC: ${coverage.amcStatus || 'not on record'}${coverage.amcExpiry ? `, ends ${displayDay(coverage.amcExpiry)}` : ''}`].join('. ');
+// Plain-language summary of preventive-service status built only from engine data.
+function proactiveServiceReply({ device, items, plan }) {
+  if (items.length === 1) {
+    const item = items[0];
+    const stageLine = item.stage === 'Scheduled' ? ` iPlanet Service has scheduled it for ${displayDay(item.scheduledDate)}.`
+      : item.stage === 'Remind Later' ? ` A reminder is set for ${displayDay(item.followUpDate)}.`
+      : item.stage === 'Contacted' ? ' iPlanet Service has already been in touch with your team about it.'
+      : item.stage === 'In Service' ? ' It is already with iPlanet Service under an open service request.' : '';
+    const offer = item.stage === 'In Service' ? '' : ' If you would like it serviced, I can open the service request form with these details filled in. Nothing is submitted until you review and confirm it.';
+    return `Your ${item.device.model} (${item.device.serialNumber}) is ${item.status === 'Upcoming' ? 'coming up for' : item.status === 'Overdue' ? 'overdue for' : 'due for'} preventive service. Last service: ${displayDay(item.lastServiceDate)}. Recommended service date: ${displayDay(item.nextServiceDate)}${whenText(item.daysUntil)}. ${coverageText(item.coverage)}.${stageLine}${offer}`;
+  }
+  if (items.length > 1) {
+    const lines = items.slice(0, 5).map(item => `• ${item.device.model} (${item.device.serialNumber}): ${item.status}, recommended ${displayDay(item.nextServiceDate)}`);
+    return `${items.length} of your devices have preventive service recommended:\n${lines.join('\n')}\nChoose a device below to open a pre-filled service request for review, or tell me its serial number.`;
+  }
+  if (plan?.nextServiceDate) return `Your ${plan.device.model} (${plan.device.serialNumber}) is not due for preventive service yet. Last service: ${displayDay(plan.lastServiceDate)}. Next recommended service: ${displayDay(plan.nextServiceDate)}${whenText(plan.daysUntil)}. ${coverageText(plan.coverage)}.`;
+  if (plan) return `I don't have enough purchase or service history for your ${plan.device.model} to recommend a service date. iPlanet Service can set one up for you.`;
+  if (device) return `I couldn't find service information for your ${device.model}.`;
+  return 'None of your devices has preventive service recommended right now.';
+}
 async function findDeviceMentionedInMessage(message, companyId) {
   const devices = await Device.find({ companyId }).limit(100);
   const normalizedMessage = String(message || '').toLowerCase();
@@ -463,7 +497,7 @@ app.get('/api/devices/serial/:serialNumber', auth, allowRoles('corporate_admin')
 app.get('/api/devices/:id', auth, allowRoles('corporate_admin'), async (req, res) => { const device = await Device.findOne({ _id: req.params.id, ...corporateCompany(req) }); if (!device) return res.status(404).json({ message: 'Device not found' }); res.json(device); });
 app.get('/api/tickets', auth, allowRoles('corporate_admin'), async (req, res) => { const query = { companyId: req.user.companyId, ...(req.query.status && req.query.status !== 'All' ? { status: req.query.status } : {}) }; res.json(await Ticket.find(query).populate('deviceId').populate('companyId').populate('assignedEngineerId').sort({ createdAt: -1 })); });
 app.get('/api/tickets/:id', auth, allowRoles('corporate_admin'), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }).populate('deviceId').populate('companyId').populate('serviceCentreId').populate('assignedEngineerId').populate('customerId'); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); await evaluateEscalation(ticket, true); const [timeline, callHistory, aiSupport, review] = await Promise.all([TicketTimeline.find({ ticketId: ticket._id }).sort({ timestamp: 1 }), CallRecord.find({ ticketId: ticket._id }).sort({ createdAt: -1 }), AITroubleshootingSession.find({ ticketId: ticket._id }).sort({ createdAt: -1 }), Review.findOne({ ticketId: ticket._id })]); const reviewSubmitted = Boolean(review); const reviewEligible = ticket.status === 'Closed' && !reviewSubmitted; res.json({ ticket, reviewEligible, reviewSubmitted, reviewId: review?._id || null, escalation: { status: ticket.escalationStatus, level: ticket.escalationLevel, reason: ticket.escalationReason, responseTarget: ticket.responseTarget, resolutionTarget: ticket.resolutionTarget, slaTargetAt: ticket.slaTargetAt }, escalationContact: escalationContacts[ticket.escalationLevel] || null, timeline, callHistory, aiSupport }); });
-app.post('/api/tickets', auth, allowRoles('corporate_admin'), async (req, res) => { const device = await Device.findOne({ _id: req.body.deviceId, companyId: req.user.companyId }); if (!device) return res.status(400).json({ message: 'Valid company device selection is required' }); const createdAt = new Date(); const ticket = await Ticket.create({ ...req.body, ticketId: ticketId(), customerId: req.user.id, companyId: req.user.companyId, deviceId: device._id, status: 'Open', images: [], originalImages: [], annotatedImages: [], responseTarget: '4 business hours', resolutionTarget: `${targetHours(req.body.priority)} hours`, slaTargetAt: new Date(createdAt.getTime() + targetHours(req.body.priority) * 3600000), slaStatus: 'Healthy', escalationStatus: 'Not Escalated' }); await TicketTimeline.create({ ticketId: ticket._id, status: 'Open', message: 'Service request created by Corporate Admin.', updatedBy: 'Corporate Portal', userRole: 'corporate_admin' }); const users = await serviceUsers(); await notifyUsers({ users, company: ticket.companyId, ticket, device, type: 'NEW_SERVICE_REQUEST', title: 'New service request', message: `${ticket.ticketId} was raised for ${device.model}.` }); res.status(201).json(await ticket.populate('deviceId')); });
+app.post('/api/tickets', auth, allowRoles('corporate_admin'), async (req, res) => { const device = await Device.findOne({ _id: req.body.deviceId, companyId: req.user.companyId }); if (!device) return res.status(400).json({ message: 'Valid company device selection is required' }); let followUp = null; try { followUp = await proactiveEngine.validateTicketLink(req.body.serviceFollowUpId, { companyId: req.user.companyId, deviceId: device._id }); } catch (error) { return res.status(error.status || 400).json({ message: error.message }); } const requestFields = Object.fromEntries(TICKET_REQUEST_FIELDS.filter(field => req.body[field] !== undefined).map(field => [field, req.body[field]])); const createdAt = new Date(); const ticket = await Ticket.create({ ...requestFields, ticketId: ticketId(), serviceFollowUpId: followUp?._id, ...(followUp?.serviceCentreId ? { serviceCentreId: followUp.serviceCentreId } : {}), customerId: req.user.id, companyId: req.user.companyId, deviceId: device._id, status: 'Open', images: [], originalImages: [], annotatedImages: [], responseTarget: '4 business hours', resolutionTarget: `${targetHours(req.body.priority)} hours`, slaTargetAt: new Date(createdAt.getTime() + targetHours(req.body.priority) * 3600000), slaStatus: 'Healthy', escalationStatus: 'Not Escalated' }); await TicketTimeline.create({ ticketId: ticket._id, status: 'Open', message: followUp ? 'Service request created by Corporate Admin from a preventive service recommendation.' : 'Service request created by Corporate Admin.', updatedBy: 'Corporate Portal', userRole: 'corporate_admin' }); if (followUp) await proactiveEngine.linkTicket(followUp, ticket, req.user); const users = await serviceUsers(); await notifyUsers({ users, company: ticket.companyId, ticket, device, type: 'NEW_SERVICE_REQUEST', title: 'New service request', message: `${ticket.ticketId} was raised for ${device.model}.` }); res.status(201).json(await ticket.populate('deviceId')); });
 app.post('/api/tickets/:id/images', auth, allowRoles('corporate_admin'), upload.array('images', 5), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); const paths = req.files.map(file => `/uploads/${file.filename}`); ticket.images.push(...paths); ticket.originalImages.push(...paths); await ticket.save(); res.json(ticket); });
 app.post('/api/tickets/:id/annotated-images', auth, allowRoles('corporate_admin'), upload.array('images', 5), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); const paths = req.files.map(file => `/uploads/${file.filename}`); ticket.images.push(...paths); ticket.annotatedImages.push(...paths); await ticket.save(); res.json(ticket); });
 app.get('/api/tickets/:id/calls', auth, async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }).populate('customerId'); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); res.json(await CallRecord.find({ ticketId: ticket._id }).sort({ createdAt: -1 })); });
@@ -534,6 +568,22 @@ app.post('/api/ai/support/chat', auth, async (req, res) => {
       activeSession.messages.push({ role: 'assistant', content: reply, timestamp: new Date() });
       await activeSession.save();
       return res.json({ success: true, message: reply, conversationId: activeSession.sessionId, session: activeSession });
+    }
+    // Preventive-service questions are answered from the proactive-service
+    // engine, the same source the portals use. The reply can only offer to
+    // open a pre-filled Raise Request; it never creates a ticket itself.
+    if (PROACTIVE_SERVICE_QUESTION.test(trimmedMessage)) {
+      const scope = { companyId: req.user.companyId };
+      const { items } = await proactiveEngine.list({ scope });
+      // Without a named device, only list recommendations the customer can still act on.
+      const relevant = device ? items.filter(item => item.deviceId === String(device._id)) : items.filter(item => item.stage !== 'In Service');
+      const plan = device && !relevant.length ? await proactiveEngine.devicePlan(device._id, scope) : null;
+      const reply = proactiveServiceReply({ device, items: relevant, plan });
+      const serviceRecommendations = relevant.filter(item => item._id && ['Open', 'Contacted', 'Remind Later', 'Scheduled'].includes(item.stage)).slice(0, 3)
+        .map(item => ({ followUpId: item._id, deviceId: item.deviceId, deviceName: item.device.model, serialNumber: item.device.serialNumber, status: item.status, nextServiceDate: item.nextServiceDate }));
+      activeSession.messages.push({ role: 'assistant', content: reply, timestamp: new Date() });
+      await activeSession.save();
+      return res.json({ success: true, message: reply, conversationId: activeSession.sessionId, session: activeSession, serviceRecommendations });
     }
     const currentFlow = activeSession.issueContext?.flowState || 'initial';
     let pendingDraft = null;
@@ -804,7 +854,7 @@ app.post('/api/iplanet/tickets/:id/ai-support', ...serviceAuth, async (req, res)
     res.status(503).json({ message: 'AI troubleshooting is currently unavailable.', session });
   }
 });
-async function engineerAction(req, res, status, message, title = `${status} update`) { const ticket = await serviceTicket(req.params.id); if (!ticket) return res.status(404).json({ message: 'Service ticket not found' }); if (!ticket.assignedEngineerId) return res.status(409).json({ message: 'Assign an engineer before updating this ticket' }); if (!transitions[ticket.status]?.includes(status)) return res.status(409).json({ message: `Cannot move a ${ticket.status} ticket to ${status}` }); const updateMessage = req.body.note?.trim() || message || `${status} update recorded.`; await addTimeline(ticket, status, updateMessage, req.user); await notifyTicketUpdate(ticket, ticket.deviceId, 'TICKET_UPDATE', title, `${ticket.ticketId}: ${updateMessage}`); if (status === 'Closed') await notifyReviewRequest(ticket); await evaluateEscalation(ticket, true); res.json(await serviceTicket(ticket._id)); }
+async function engineerAction(req, res, status, message, title = `${status} update`) { const ticket = await serviceTicket(req.params.id); if (!ticket) return res.status(404).json({ message: 'Service ticket not found' }); if (!ticket.assignedEngineerId) return res.status(409).json({ message: 'Assign an engineer before updating this ticket' }); if (!transitions[ticket.status]?.includes(status)) return res.status(409).json({ message: `Cannot move a ${ticket.status} ticket to ${status}` }); const updateMessage = req.body.note?.trim() || message || `${status} update recorded.`; await addTimeline(ticket, status, updateMessage, req.user); await notifyTicketUpdate(ticket, ticket.deviceId, 'TICKET_UPDATE', title, `${ticket.ticketId}: ${updateMessage}`); if (status === 'Closed') await notifyReviewRequest(ticket); if (status === 'Completed') await proactiveEngine.onTicketCompleted(ticket); await evaluateEscalation(ticket, true); res.json(await serviceTicket(ticket._id)); }
 app.post('/api/iplanet/tickets/:id/accept', ...serviceAuth, async (req, res) => engineerAction(req, res, 'Engineer Accepted', 'Engineer accepted the service assignment.'));
 app.post('/api/iplanet/tickets/:id/start', ...serviceAuth, async (req, res) => engineerAction(req, res, 'In Progress', 'Work started on the service request.', 'Work started'));
 app.post('/api/iplanet/tickets/:id/waiting-parts', ...serviceAuth, async (req, res) => engineerAction(req, res, 'Waiting for Parts', 'Waiting for replacement parts.', 'Waiting for parts'));
@@ -825,6 +875,61 @@ app.get('/api/iplanet/activity', ...serviceAuth, async (req, res) => {
   ]);
   res.json({ events: events.filter(event => event.ticketId), completedToday: completedTicketIds.length, since });
 });
+// ---------------------------------------------------------------------------
+// Proactive device service. The engine owns every calculation; these routes
+// only authorise the caller and scope what they can see. Corporate users are
+// always scoped to their own company from the token, never from the request.
+// ---------------------------------------------------------------------------
+const proactiveEngine = createProactiveEngine({ notifyUsers });
+const proactiveScheduler = createProactiveScheduler({ engine: proactiveEngine, minutes: proactiveConfig.schedulerMinutes });
+const proactiveRoute = handler => async (req, res) => {
+  try { await handler(req, res); } catch (error) {
+    if (error instanceof ProactiveServiceError) return res.status(error.status).json({ message: error.message });
+    console.error('[Proactive service]', error);
+    res.status(500).json({ message: 'Proactive service is temporarily unavailable.' });
+  }
+};
+const serviceScope = req => (req.user.serviceCentreId ? { serviceCentreId: req.user.serviceCentreId } : {});
+const PROACTIVE_FILTERS = ['status', 'companyId', 'serviceCentreId', 'location', 'dueWithin', 'deviceType', 'warranty', 'amc', 'search', 'view'];
+const proactiveFilters = query => Object.fromEntries(PROACTIVE_FILTERS.filter(key => typeof query[key] === 'string' && query[key]).map(key => [key, query[key].slice(0, 120)]));
+const SERVICE_FOLLOW_UP_ACTIONS = ['contact', 'schedule', 'remind-later', 'mark-not-required'];
+const CORPORATE_RECOMMENDATION_ACTIONS = ['schedule-later', 'not-required'];
+
+app.get('/api/iplanet/proactive-service/followups', ...serviceAuth, proactiveRoute(async (req, res) => res.json(await proactiveEngine.list({ scope: serviceScope(req), filters: proactiveFilters(req.query) }))));
+app.get('/api/iplanet/proactive-service/followups/:id', ...serviceAuth, proactiveRoute(async (req, res) => res.json(await proactiveEngine.detail(req.params.id, serviceScope(req)))));
+app.post('/api/iplanet/proactive-service/followups/:id/:action', ...serviceAuth, proactiveRoute(async (req, res) => {
+  if (!SERVICE_FOLLOW_UP_ACTIONS.includes(req.params.action)) return res.status(404).json({ message: 'Unknown action' });
+  res.json(await proactiveEngine.serviceAction(req.params.id, req.params.action, req.body, req.user, serviceScope(req)));
+}));
+app.patch('/api/iplanet/devices/:id/service-plan', ...serviceAuth, proactiveRoute(async (req, res) => res.json(await proactiveEngine.updatePlan(req.params.id, req.body))));
+app.get('/api/iplanet/proactive-service/scheduler', ...serviceAuth, (_, res) => res.json(proactiveScheduler.status()));
+app.post('/api/iplanet/proactive-service/run', ...serviceAuth, proactiveRoute(async (_, res) => res.json(await proactiveScheduler.run('manual'))));
+// External cron trigger. Disabled unless PROACTIVE_SERVICE_CRON_SECRET is set.
+app.post('/api/internal/proactive-service/run', proactiveRoute(async (req, res) => {
+  if (!proactiveConfig.cronSecret) return res.status(404).json({ message: 'Not found' });
+  if (req.get('authorization') !== `Bearer ${proactiveConfig.cronSecret}`) return res.status(401).json({ message: 'Unauthorized' });
+  res.json(await proactiveScheduler.run('cron'));
+}));
+
+app.get('/api/corporate/service-recommendations', auth, allowRoles('corporate_admin'), proactiveRoute(async (req, res) => {
+  const filters = proactiveFilters(req.query);
+  delete filters.companyId;
+  delete filters.serviceCentreId;
+  res.json(await proactiveEngine.list({ scope: { companyId: req.user.companyId }, filters }));
+}));
+app.get('/api/corporate/service-recommendations/:id', auth, allowRoles('corporate_admin'), proactiveRoute(async (req, res) => {
+  const { contact, contactLog, options, ...item } = await proactiveEngine.detail(req.params.id, { companyId: req.user.companyId });
+  res.json({ ...item, options: { notRequiredReasons: options.notRequiredReasons }, lastContact: item.lastContact ? { at: item.lastContact.at, method: item.lastContact.method, outcome: item.lastContact.outcome } : null });
+}));
+app.post('/api/corporate/service-recommendations/:id/:action', auth, allowRoles('corporate_admin'), proactiveRoute(async (req, res) => {
+  if (!CORPORATE_RECOMMENDATION_ACTIONS.includes(req.params.action)) return res.status(404).json({ message: 'Unknown action' });
+  const { contact, contactLog, ...item } = await proactiveEngine.corporateAction(req.params.id, req.params.action, req.body, req.user);
+  res.json(item);
+}));
+app.get('/api/corporate/devices/:id/service-plan', auth, allowRoles('corporate_admin'), proactiveRoute(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ message: 'Device not found' });
+  res.json(await proactiveEngine.devicePlan(req.params.id, { companyId: req.user.companyId }));
+}));
 app.get('/api/iplanet/reports', ...serviceAuth, async (_, res) => { const tickets = await Ticket.find().populate('deviceId'); const group = key => Object.entries(tickets.reduce((result, ticket) => { const value = key === 'deviceType' ? ticket.deviceId?.deviceType : ticket[key]; result[value || 'Other'] = (result[value || 'Other'] || 0) + 1; return result; }, {})).map(([name, value]) => ({ name, value })); res.json({ total: tickets.length, open: tickets.filter(t => t.status === 'Open').length, completed: tickets.filter(t => t.status === 'Completed').length, closed: tickets.filter(t => t.status === 'Closed').length, averageClosureTat: '2.4 days', locations: group('location'), deviceTypes: group('deviceType'), issueTypes: group('issueType') }); });
 app.get('/api/iplanet/notifications', ...serviceAuth, async (req, res) => {
   const query = { user: req.user.id, portalRole: 'iplanet_service' };
@@ -943,4 +1048,4 @@ async function ensureDemoAccounts() {
   );
 }
  
-mongoose.connect(process.env.MONGODB_URI).then(async () => { await ensureDemoAccounts(); await ensureDemoEnrollmentDevices(); await ensureEscalationRules(); await ensureServiceCentres(); await ensureReviewIndexes(); await ensureGoogleBusinessIntegrationIndexes(); await ensureGoogleBusinessLocationMappingIndexes(); app.listen(port, '0.0.0.0', () => console.log(`API running at http://localhost:${port}`)); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });
+mongoose.connect(process.env.MONGODB_URI).then(async () => { await ensureDemoAccounts(); await ensureDemoEnrollmentDevices(); await ensureEscalationRules(); await ensureServiceCentres(); await ensureReviewIndexes(); await ensureGoogleBusinessIntegrationIndexes(); await ensureGoogleBusinessLocationMappingIndexes(); await ServiceFollowUp.createIndexes(); proactiveScheduler.start(); app.listen(port, '0.0.0.0', () => console.log(`API running at http://localhost:${port}`)); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });

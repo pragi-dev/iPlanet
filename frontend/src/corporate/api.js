@@ -36,3 +36,8 @@ export async function sendAiSupportMessage(ticketId, payload) { return request('
 export async function getAiPreparedRequest(conversationId) { return request(`/ai/support/request-data/${encodeURIComponent(conversationId)}`); }
 export async function getCoverage() { return request('/coverage'); }
 export async function submitAiSupportFeedback(conversationId, payload) { return request(`/ai/support/feedback/${encodeURIComponent(conversationId)}`, { method: 'POST', body: JSON.stringify(payload) }); }
+// Proactive device service
+export async function getServiceRecommendations() { return request('/corporate/service-recommendations'); }
+export async function getServiceRecommendation(id) { return request(`/corporate/service-recommendations/${id}`); }
+export async function respondToServiceRecommendation(id, action, payload) { return request(`/corporate/service-recommendations/${id}/${action}`, { method: 'POST', body: JSON.stringify(payload) }); }
+export async function getDeviceServicePlan(deviceId) { return request(`/corporate/devices/${deviceId}/service-plan`); }

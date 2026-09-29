@@ -1,0 +1,81 @@
+/* ==========================================================================
+   Proactive device service — lifecycle strip, follow-up list, detail drawer
+   ========================================================================== */
+
+/* Lifecycle strip: four facts read left to right */
+.lifecycle-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-4); }
+.lifecycle-strip > li { position: relative; display: grid; gap: 4px; align-content: start; min-width: 0; padding-right: var(--space-5); }
+.lifecycle-label { font-size: 12px; font-weight: 600; color: var(--color-text-secondary); }
+.lifecycle-value { font-size: 16px; font-weight: 600; letter-spacing: -0.012em; color: var(--color-text-primary); }
+.lifecycle-hint { font-size: 12px; color: var(--color-text-tertiary); }
+.lifecycle-arrow { position: absolute; right: 0; top: 22px; color: var(--color-text-tertiary); }
+
+/* Summary chips that double as status filters */
+.pro-summary { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.pro-chip {
+  display: inline-flex; align-items: baseline; gap: 8px; height: 36px; padding: 0 14px; border: 1px solid var(--color-border); border-radius: var(--radius-pill);
+  background: var(--color-surface); font-size: 14px; color: var(--color-text-secondary); transition: background-color 160ms var(--ease), border-color 160ms var(--ease), color 160ms var(--ease);
+}
+.pro-chip strong { font-size: 15px; font-weight: 600; color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
+.pro-chip:hover { border-color: #b0b0b8; color: var(--color-text-primary); }
+.pro-chip[aria-pressed='true'] { background: var(--color-text-primary); border-color: var(--color-text-primary); color: #fff; }
+.pro-chip[aria-pressed='true'] strong { color: #fff; }
+.pro-chip:focus-visible { outline: none; box-shadow: var(--focus); }
+.pro-chip-critical strong { color: var(--color-error-text); }
+.pro-chip-warning strong { color: var(--color-warning-text); }
+
+/* Follow-up table; each row becomes a card on phones */
+.pro-table td { vertical-align: middle; }
+.pro-table tr.row-selected { background: var(--color-accent-soft); }
+.pro-due { display: grid; gap: 1px; }
+.pro-due strong { font-weight: 600; font-size: 14px; }
+.pro-due small { font-size: 12px; color: var(--color-text-tertiary); }
+.pro-due-critical strong { color: var(--color-error-text); }
+.pro-due-warning strong { color: var(--color-warning-text); }
+.pro-coverage { display: grid; gap: 2px; font-size: 13px; color: var(--color-text-secondary); white-space: nowrap; }
+.pro-cell-actions { text-align: right; white-space: nowrap; }
+.pro-actions { display: inline-flex; justify-content: flex-end; gap: var(--space-2); }
+
+/* Detail drawer */
+.pro-drawer-section { display: grid; gap: var(--space-3); }
+.pro-drawer-section + .pro-drawer-section { padding-top: var(--space-5); border-top: 1px solid var(--color-divider); }
+.pro-drawer-title { font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
+.pro-reason { display: flex; gap: var(--space-3); align-items: flex-start; padding: 14px 16px; border-radius: var(--radius-md); background: var(--color-fill); font-size: 14px; line-height: 1.45; }
+.pro-reason svg { flex: none; margin-top: 2px; color: var(--color-warning-text); }
+.pro-log { display: grid; }
+.pro-log li { display: grid; gap: 2px; padding: 10px 0; border-top: 1px solid var(--color-divider); font-size: 13px; }
+.pro-log li:first-child { border-top: 0; padding-top: 0; }
+.pro-log strong { font-size: 14px; font-weight: 600; }
+.pro-log span { color: var(--color-text-secondary); }
+.pro-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+.pro-action-grid .btn { justify-content: center; }
+.pro-form { display: grid; gap: var(--space-4); }
+.pro-form-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+.pro-choice-list { display: grid; gap: var(--space-2); }
+.pro-choice { display: flex; align-items: center; gap: var(--space-3); padding: 12px 14px; border: 1px solid var(--color-border); border-radius: var(--radius-md); font-size: 15px; cursor: pointer; transition: border-color 160ms var(--ease), background-color 160ms var(--ease); }
+.pro-choice:hover { border-color: #b0b0b8; }
+.pro-choice:has(input:checked) { border-color: var(--color-accent); background: var(--color-accent-soft); }
+.pro-choice input { accent-color: var(--color-accent); }
+
+@media (max-width: 1199px) {
+  .pro-table .pro-col-optional { display: none; }
+}
+@media (max-width: 767px) {
+  .lifecycle-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: var(--space-5); }
+  .lifecycle-arrow { display: none; }
+  .pro-form-row, .pro-action-grid { grid-template-columns: minmax(0, 1fr); }
+  /* Table rows become stacked cards */
+  .pro-table thead { display: none; }
+  .pro-table, .pro-table tbody, .pro-table tr, .pro-table td { display: block; width: 100%; }
+  .pro-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px var(--space-3); padding: var(--space-4); border-top: 1px solid var(--color-divider); }
+  .pro-table tbody tr:first-child { border-top: 0; }
+  .pro-table td { padding: 0 !important; border: 0 !important; }
+  .pro-table td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; font-weight: 600; color: var(--color-text-tertiary); margin-bottom: 2px; }
+  .pro-table .pro-cell-device { grid-column: 1; }
+  .pro-table .pro-cell-status { grid-column: 2; grid-row: 1; justify-self: end; }
+  .pro-table .pro-cell-wide { grid-column: 1 / -1; }
+  .pro-table .pro-col-optional { display: block; }
+  .pro-table .pro-cell-actions { grid-column: 1 / -1; }
+  .pro-table .pro-actions { display: flex; flex-wrap: wrap; justify-content: stretch; }
+  .pro-table .pro-actions .btn { flex: 1; }
+}

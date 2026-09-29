@@ -64,6 +64,8 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
   const [failedMessage, setFailedMessage] = useState('');
   const [conversationId, setConversationId] = useState(null);
   const [requestData, setRequestData] = useState(null);
+  // Preventive-service recommendations the assistant offered; each only opens a pre-filled request.
+  const [serviceRecommendations, setServiceRecommendations] = useState([]);
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [voiceActive, setVoiceActive] = useState(false);
   const [speakingIndex, setSpeakingIndex] = useState(null);
@@ -74,7 +76,7 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
   const inputRef = useRef(null);
   const loadedContext = useRef(null);
 
-  const reset = () => { setMessages([]); setConversationId(null); setRequestData(null); setError(''); setFailedMessage(''); setFeedbackSubmitted(false); setFlowState(null); };
+  const reset = () => { setMessages([]); setConversationId(null); setRequestData(null); setServiceRecommendations([]); setError(''); setFailedMessage(''); setFeedbackSubmitted(false); setFlowState(null); };
 
   // The conversation is kept while the drawer is closed and reopened on the
   // same page context; it starts fresh only when the device/ticket changes.
@@ -130,6 +132,7 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
       setFlowState(result?.session?.issueContext?.flowState || null);
       setConversationId(result?.conversationId || conversationId);
       setRequestData(result?.requestData || null);
+      setServiceRecommendations(Array.isArray(result?.serviceRecommendations) ? result.serviceRecommendations : []);
     } catch {
       setError('AI Support is temporarily unavailable. Please try again.');
       setFailedMessage(value);
@@ -239,6 +242,12 @@ export function AICustomerSupportPanel({ ticket, device, open = false, onClose }
         <span>{[requestData.deviceName, requestData.issueType].filter(Boolean).join(' · ')}</span>
         <Button variant="primary" size="sm" icon={FilePlus2} onClick={() => { onClose?.(); navigate(`/corporate/raise-request?source=ai&conversationId=${encodeURIComponent(conversationId || '')}`, { state: { aiRequest: requestData } }); }}>Review request</Button>
       </div>}
+
+      {!requestData && serviceRecommendations.map(item => <div className="ai-draft" key={item.followUpId}>
+        <strong>Preventive service · {item.status}</strong>
+        <span>{[item.deviceName, item.serialNumber].filter(Boolean).join(' · ')}</span>
+        <Button variant="primary" size="sm" icon={FilePlus2} onClick={() => { onClose?.(); navigate(`/corporate/raise-request?serviceFollowUp=${encodeURIComponent(item.followUpId)}`); }}>Request service</Button>
+      </div>)}
     </div>
 
     <form className="ai-composer" onSubmit={event => { event.preventDefault(); void sendMessage(); }}>

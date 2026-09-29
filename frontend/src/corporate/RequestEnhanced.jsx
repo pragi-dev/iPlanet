@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Camera, CheckCircle2, FilePlus2, HeartPulse, ImagePlus, Pencil, Recycle, RefreshCcw, Search, Trash2, Wrench, BadgeIndianRupee } from 'lucide-react';
 import { Shell } from './components';
-import { createTicket, getAiPreparedRequest, getDevices, getTickets, uploadAnnotatedImages, uploadImages } from './api';
+import { createTicket, getAiPreparedRequest, getDevices, getServiceRecommendation, getTickets, uploadAnnotatedImages, uploadImages } from './api';
 import { ImageAnnotator } from './ImageAnnotator';
-import { Badge, Button, Card, CoverageTiles, DeviceIcon, EmptyState, ErrorState, Field, InfoList, InlineAlert, PageHeader, Scanner, Skeleton, Stepper, formatDate, friendlyError, idOf, isActiveTicket, useAIAssistant } from '../ui';
+import { Badge, Button, Card, CoverageTiles, DeviceIcon, EmptyState, ErrorState, Field, InfoList, InlineAlert, PageHeader, Scanner, Skeleton, Stepper, canRespond, formatDate, friendlyError, idOf, isActiveTicket, useAIAssistant } from '../ui';
 
 const locations = ['Chennai', 'Coimbatore', 'Bengaluru', 'Madurai'];
 const issueTypes = ['Screen / Display', 'Battery', 'Charging', 'Keyboard', 'Trackpad', 'Camera', 'Speaker', 'Software', 'Performance', 'Physical Damage', 'Other'];
@@ -27,6 +27,21 @@ function todayInIndia() {
 
 const annotatedName = file => `annotated-${file.name}`;
 
+// Starting text for a request raised from a preventive-service recommendation.
+// The customer can edit all of it before submitting.
+function recommendationDescription(item) {
+  const coverage = [
+    `Warranty: ${item.coverage.warrantyStatus || 'not on record'}${item.coverage.warrantyExpiry ? ` (until ${formatDate(item.coverage.warrantyExpiry)})` : ''}`,
+    `AMC: ${item.coverage.amcStatus || 'not on record'}${item.coverage.amcExpiry ? ` (until ${formatDate(item.coverage.amcExpiry)})` : ''}`,
+  ];
+  return [
+    'Preventive service requested following the iPlanet service recommendation.',
+    `Recommended service date: ${formatDate(item.nextServiceDate)}.${item.scheduledDate ? ` Scheduled with iPlanet Service for ${formatDate(item.scheduledDate)}.` : ''}`,
+    `Last service: ${formatDate(item.lastServiceDate, 'none recorded')}.`,
+    `${coverage.join('. ')}.`,
+  ].join('\n');
+}
+
 function PhotoCard({ file, annotation, onAnnotate, onRemove }) {
   const url = useMemo(() => URL.createObjectURL(annotation || file), [file, annotation]);
   useEffect(() => () => URL.revokeObjectURL(url), [url]);
@@ -46,6 +61,8 @@ export function RequestEnhanced() {
   const route = useLocation();
   const ai = useAIAssistant();
   const presetDevice = new URLSearchParams(route.search).get('device');
+  const followUpId = new URLSearchParams(route.search).get('serviceFollowUp');
+  const [recommendation, setRecommendation] = useState(null);
   const [aiRequest, setAiRequest] = useState(route.state?.aiRequest || null);
   const [devices, setDevices] = useState(null);
   const [loadError, setLoadError] = useState(null);
@@ -81,6 +98,22 @@ export function RequestEnhanced() {
     setStep(1);
   }, [aiRequest, devices]);
   useEffect(() => {
+    if (!followUpId) return;
+    getServiceRecommendation(followUpId).then(setRecommendation).catch(loadFailure => setError(friendlyError(loadFailure, 'This service recommendation is no longer available. You can still raise a request manually.')));
+  }, [followUpId]);
+  // A recommendation pre-fills the normal request; nothing is submitted until the customer reviews it.
+  useEffect(() => {
+    if (!recommendation || !devices || aiRequest) return;
+    const match = devices.find(item => item._id === recommendation.deviceId);
+    if (!match) return;
+    const today = todayInIndia();
+    const preferred = recommendation.scheduledDate || (recommendation.nextServiceDate && recommendation.nextServiceDate > today ? recommendation.nextServiceDate : today);
+    setDevice(match);
+    setSerial(match.serialNumber);
+    setForm(current => ({ ...current, deviceId: match._id, category: 'Service', issueType: 'Other', description: recommendationDescription(recommendation), preferredServiceDate: preferred, ...(locations.includes(match.location) ? { location: match.location } : {}) }));
+    setStep(1);
+  }, [recommendation, devices, aiRequest]);
+  useEffect(() => {
     if (!presetDevice || !devices || aiRequest) return;
     const match = devices.find(item => item._id === presetDevice);
     if (match) { setDevice(match); setSerial(match.serialNumber); setForm(current => ({ ...current, deviceId: match._id, location: locations.includes(match.location) ? match.location : current.location })); }
@@ -115,6 +148,7 @@ export function RequestEnhanced() {
   const canContinue = [Boolean(form.deviceId), Boolean(form.description.trim()), true, Boolean(form.deviceId && form.description.trim())];
   const next = () => { if (!canContinue[step]) { setTouched(true); return; } setTouched(false); setStep(current => Math.min(lastEditableStep, current + 1)); };
   const existingRequest = device ? openTickets.find(ticket => idOf(ticket.deviceId) === String(device._id)) : null;
+  const linkedRecommendation = recommendation && canRespond(recommendation) && form.deviceId === recommendation.deviceId ? recommendation : null;
   const back = () => setStep(current => Math.max(0, current - 1));
 
   const submit = async () => {
@@ -123,7 +157,8 @@ export function RequestEnhanced() {
     setError('');
     let ticket;
     try {
-      ticket = await createTicket(form);
+      // The recommendation link is only sent while the request is still for the recommended device.
+      ticket = await createTicket({ ...form, ...(linkedRecommendation ? { serviceFollowUpId: linkedRecommendation._id } : {}) });
     } catch (submitError) {
       setError(friendlyError(submitError, 'Unable to submit your request. Please try again.'));
       setSubmitting(false);
@@ -142,7 +177,7 @@ export function RequestEnhanced() {
     setSubmitting(false);
   };
 
-  const reset = () => { setDone(null); setDevice(null); setSerial(''); setFiles([]); setAnnotated([]); setForm(current => ({ ...current, description: '', deviceId: '', preferredServiceDate: todayInIndia() })); setStep(0); setAiRequest(null); };
+  const reset = () => { setDone(null); setDevice(null); setSerial(''); setFiles([]); setAnnotated([]); setForm(current => ({ ...current, description: '', deviceId: '', preferredServiceDate: todayInIndia() })); setStep(0); setAiRequest(null); setRecommendation(null); };
 
   if (done) return <Shell title="Raise Request" crumbs={[{ label: 'Raise Request' }]}>
     <Stepper steps={steps} current={steps.length} />
@@ -150,7 +185,7 @@ export function RequestEnhanced() {
       <span className="success-mark"><CheckCircle2 size={26} aria-hidden="true" /></span>
       <h2>Service request submitted</h2>
       <p>iPlanet Service has received your request and will review it shortly. You'll be notified as it progresses.</p>
-      <InfoList items={[['Request ID', <span className="mono">{done.ticket.ticketId}</span>], ['Device', device?.model], ['Category', form.category], ['Status', <Badge dot>Open</Badge>]]} />
+      <InfoList items={[['Request ID', <span className="mono">{done.ticket.ticketId}</span>], ['Device', device?.model], ['Category', form.category], ...(done.ticket.serviceFollowUpId ? [['Service type', 'Preventive service']] : []), ['Status', <Badge dot>Open</Badge>]]} />
       {done.uploadError && <InlineAlert tone="warning" title="Photos were not attached">{done.uploadError} You can share them with the service team when they contact you.</InlineAlert>}
       <div className="row" style={{ justifyContent: 'center' }}>
         <Button icon={FilePlus2} onClick={reset}>Raise another request</Button>
@@ -164,6 +199,8 @@ export function RequestEnhanced() {
   return <Shell title="Raise Request">
     <PageHeader title="Raise Request" description="Tell us which device needs attention and what's happening." />
     {aiRequest && <InlineAlert tone="info" title="Prepared from your AI Support conversation">Review the details before submitting.</InlineAlert>}
+    {linkedRecommendation && <InlineAlert tone="info" title="Prepared from a service recommendation">Preventive service for {recommendation.device.model} was recommended for {formatDate(recommendation.nextServiceDate)}. Review and edit the details before submitting.</InlineAlert>}
+    {recommendation && !canRespond(recommendation) && <InlineAlert tone="warning" title="This recommendation has already been handled">You can still raise a request, but it won't be linked to the recommendation.</InlineAlert>}
     <Stepper steps={steps} current={step} onStepClick={setStep} />
     {error && <InlineAlert title={error} />}
 

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ChevronLeft, FilePlus2, KeyRound, Laptop, LogOut, Search, ShieldCheck, Sparkles, Ticket, UserRoundPlus } from 'lucide-react';
+import { Bell, CalendarClock, ChevronLeft, FilePlus2, KeyRound, Laptop, LogOut, Search, ShieldCheck, Sparkles, Ticket, UserRoundPlus } from 'lucide-react';
 import { Shell } from './components';
-import { getCoverage, getDashboardStats, getDevice, getDevices, getMyReviews, getProfile, getTickets } from './api';
+import { getCoverage, getDashboardStats, getDevice, getDeviceServicePlan, getDevices, getMyReviews, getProfile, getServiceRecommendations, getTickets } from './api';
+import { NotRequiredDialog, ScheduleLaterDialog } from './ServiceRecommendations';
 import {
   ActivityFeed, AttentionFeed, Avatar, Badge, Button, CalmState, DashboardHeader, DashboardSection, DeviceIcon, DisclosureRow, EmptyState, ErrorState, FilterBar, FilterSelect, HealthRing, InfoList, Insight, JourneyTrack,
-  MetricSummary, NextAction, PageHeader, PageSkeleton, QuickActions, RowAction, SearchInput, Section, Skeleton, Surface, TableCard, coverageExpiring, daysUntil, formatDate, formatDateTime, formatRelative, friendlyError, greeting,
+  MetricSummary, NextAction, PageHeader, PageSkeleton, QuickActions, ServiceLifecycle, canRespond, customerStatus, dueLabel, RowAction, SearchInput, Section, Skeleton, Surface, TableCard, coverageExpiring, daysUntil, formatDate, formatDateTime, formatRelative, friendlyError, greeting,
   idOf, isActiveTicket, issueClusters, pluralize, readSessionUser, recurringIssues, riskLabel, riskTone, slaCountdown, slaLabel, slaRisk, todayLabel, useAIAssistant, useAsync,
 } from '../ui';
 
@@ -13,12 +14,14 @@ const ticketStatuses = ['Open', 'Engineer Assigned', 'Engineer Accepted', 'In Pr
 const toneRank = { critical: 0, warning: 1, info: 2, neutral: 3 };
 
 // A device is healthy when it has no active service request, no recurring
-// issue (same issue type twice in 90 days) and no warranty/AMC expiring soon.
+// issue (same issue type twice in 90 days), no warranty/AMC expiring soon and
+// no preventive service due or overdue.
 // Every figure is a count of device records; nothing is scored or weighted.
-function fleetHealth({ devices, tickets }) {
+function fleetHealth({ devices, tickets, recommendations = [] }) {
   const inServiceIds = new Set(tickets.filter(isActiveTicket).map(ticket => idOf(ticket.deviceId)));
   const flaggedIds = new Set(recurringIssues(tickets).map(group => group.deviceId));
   devices.forEach(device => { if (coverageExpiring(device).length) flaggedIds.add(String(device._id)); });
+  recommendations.filter(serviceNeedsAttention).forEach(item => flaggedIds.add(item.deviceId));
   const inService = devices.filter(device => inServiceIds.has(String(device._id)));
   const attention = devices.filter(device => !inServiceIds.has(String(device._id)) && flaggedIds.has(String(device._id)));
   const unassigned = devices.filter(device => device.deviceAllocationStatus === 'Unassigned' && !inServiceIds.has(String(device._id)));
@@ -50,6 +53,24 @@ function slaMeta(ticket) {
 
 // Builds the "needs your attention" feed from live records. Each item says
 // what needs attention, why, and carries the one action that resolves it.
+// A recommendation the customer should act on now: due, overdue or a reminder
+// that has come due (upcoming ones are listed on the Service Recommended page).
+const serviceNeedsAttention = item => canRespond(item) && (['Due', 'Overdue'].includes(item.timing) || item.status === 'Reminder Due') && item.status !== 'Remind Later';
+
+function serviceAttention(recommendations) {
+  const pending = recommendations.filter(serviceNeedsAttention);
+  if (pending.length > 3) return [{ key: 'svc-many', tone: 'warning', category: 'Preventive service', title: `${pending.length} devices are due for preventive service`,
+    reason: 'Request service, set a reminder, or let iPlanet Service know it is not needed.', action: { label: 'Review devices', to: '/corporate/service-recommendations' } }];
+  return pending.map(item => {
+    const status = customerStatus(item);
+    return { key: `svc-${item._id}`, tone: 'warning', category: status.label, meta: item.stage === 'Scheduled' ? `Scheduled ${formatDate(item.scheduledDate)}` : dueLabel(item.daysUntil),
+      title: [item.device.model, item.device.employeeName].filter(Boolean).join(' · '),
+      reason: item.stage === 'Scheduled' ? 'iPlanet Service has scheduled preventive service. Confirm it by raising the request.' : `Preventive service recommended for ${formatDate(item.nextServiceDate)}. Last serviced ${formatDate(item.lastServiceDate, 'never on record')}.`,
+      context: [item.device.serialNumber, `Warranty ${item.coverage.warrantyStatus || 'not on record'}`, `AMC ${item.coverage.amcStatus || 'not on record'}`].join(' · '),
+      action: { label: 'Review', to: `/corporate/service-recommendations?followUp=${item._id}` } };
+  });
+}
+
 function corporateAttention({ tickets, devices, reviewedIds }) {
   const items = [];
   tickets.filter(slaRisk).sort((a, b) => new Date(a.slaTargetAt) - new Date(b.slaTargetAt)).forEach(ticket => {
@@ -110,6 +131,7 @@ export function Dashboard() {
   const main = useAsync(() => getDashboardStats().then(() => getTickets()), []);
   const coverage = useAsync(getCoverage, []);
   const reviews = useAsync(getMyReviews, []);
+  const service = useAsync(getServiceRecommendations, []);
 
   if (main.loading && !main.data) return <Shell title="Overview"><PageSkeleton kpis={3} /></Shell>;
   if (main.error) return <Shell title="Overview"><PageHeader title="Overview" /><div className="card"><ErrorState title="Unable to load your service overview" message={friendlyError(main.error)} onRetry={main.reload} /></div></Shell>;
@@ -121,9 +143,12 @@ export function Dashboard() {
   const coverageReady = Boolean(coverage.data);
   const active = tickets.filter(isActiveTicket);
   const atRisk = active.filter(slaRisk);
-  const health = fleetHealth({ devices, tickets });
+  const recommendations = service.data?.items || [];
+  const openRecommendations = recommendations.filter(item => canRespond(item) && item.status !== 'Remind Later');
+  const serviceDue = recommendations.filter(serviceNeedsAttention).length;
+  const health = fleetHealth({ devices, tickets, recommendations });
   const reviewedIds = reviews.data ? new Set(reviews.data.map(review => idOf(review.ticketId))) : null;
-  const attention = coverageReady ? corporateAttention({ tickets, devices, reviewedIds }) : [];
+  const attention = coverageReady ? [...corporateAttention({ tickets, devices, reviewedIds }), ...serviceAttention(recommendations)].sort((a, b) => toneRank[a.tone] - toneRank[b.tone]) : [];
   const recent = [...tickets].sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt)).slice(0, 5);
   const [cluster] = issueClusters(tickets);
   const ringTone = health.total && health.healthy / health.total < 0.6 ? 'warning' : 'success';
@@ -146,13 +171,14 @@ export function Dashboard() {
             <div className="cc-fleet-body">
               <div>
                 <p className="cc-fleet-statement">{health.healthy === health.total ? 'Every device is healthy.' : `${health.healthy} of ${pluralize(health.total, 'device')} healthy`}</p>
-                <p className="cc-fleet-caption">Healthy means no open service request, no repeated issue in the last 90 days and no warranty or AMC expiring soon.</p>
+                <p className="cc-fleet-caption">Healthy means no open service request, no repeated issue in the last 90 days, no warranty or AMC expiring soon and no preventive service due.</p>
               </div>
               <MetricSummary label="Device status" items={[
                 { label: 'Devices', value: health.total, to: '/corporate/devices' },
                 { label: 'In use', value: health.inUse, hint: 'Assigned, not in service' },
                 { label: 'In service', value: health.inService, hint: atRisk.length ? `${atRisk.length} at SLA risk` : 'With iPlanet now', tone: atRisk.length ? 'warning' : undefined, to: '/corporate/service-requests' },
-                { label: 'Need attention', value: health.attention, hint: 'Recurring issue or coverage', tone: health.attention ? 'warning' : undefined },
+                { label: 'Need attention', value: health.attention, hint: 'Issue, coverage or service due', tone: health.attention ? 'warning' : undefined },
+                { label: 'Service recommended', value: service.data ? openRecommendations.length : '—', hint: service.error ? 'Unavailable' : serviceDue ? `${serviceDue} due now` : 'Preventive service', tone: serviceDue ? 'warning' : undefined, to: '/corporate/service-recommendations' },
                 { label: 'Unassigned', value: health.unassigned, hint: 'No employee yet', to: health.unassigned ? '/corporate/unassigned-devices' : undefined },
               ]} />
               <p className="cc-coverage-line">
@@ -183,10 +209,12 @@ export function Dashboard() {
           <DashboardSection className="cc-order-2" title="Quick actions">
             <QuickActions actions={[
               { label: 'Raise service request', hint: 'Report an issue on any device', icon: FilePlus2, to: '/corporate/raise-request' },
+              { label: 'Review service', hint: openRecommendations.length ? `${pluralize(openRecommendations.length, 'device')} recommended for service` : 'Preventive service recommendations', icon: CalendarClock, to: '/corporate/service-recommendations', count: openRecommendations.length, tone: serviceDue ? 'warning' : 'neutral' },
               { label: 'Find device', hint: devices.length ? `Search ${pluralize(devices.length, 'device')}` : 'Search by serial, model or employee', icon: Search, to: '/corporate/devices' },
               { label: 'Check coverage', hint: summary.expiringSoon ? `${summary.expiringSoon} expiring soon` : 'Warranty and AMC status', icon: ShieldCheck, to: summary.expiringSoon ? '/corporate/warranty?filter=Expiring%20Soon' : '/corporate/warranty', count: summary.expiringSoon, tone: 'warning' },
               { label: 'Track request', hint: active.length ? `${pluralize(active.length, 'request')} in progress` : 'No requests in progress', icon: Ticket, to: '/corporate/service-requests', count: active.length },
               ai.available && { label: 'Ask AI', hint: 'Troubleshoot before raising a request', icon: Sparkles, onClick: ai.open },
+              { label: 'Notifications', hint: 'Updates on devices, requests and service', icon: Bell, to: '/corporate/notifications' },
             ]} />
           </DashboardSection>
 
@@ -290,13 +318,16 @@ function deviceLifecycle(device, tickets, activeTicket) {
   ];
 }
 
-function deviceNextAction(device, activeTicket) {
+function deviceNextAction(device, activeTicket, plan) {
   if (activeTicket) {
     const risk = slaRisk(activeTicket);
     return { tone: risk ? riskTone(risk) : 'info', eyebrow: risk ? riskLabel(risk) : 'In service', title: `${activeTicket.issueType || 'Service request'} · ${activeTicket.status}`,
       description: [activeTicket.assignedEngineer ? `Engineer ${activeTicket.assignedEngineer}` : 'iPlanet Service will assign an engineer', activeTicket.slaTargetAt ? `target ${formatDateTime(activeTicket.slaTargetAt)}` : null].filter(Boolean).join(' · '),
       actions: [{ label: 'Track request', icon: Ticket, to: `/corporate/service-requests/${activeTicket._id}` }] };
   }
+  if (plan && canRespond(plan) && ['Due', 'Overdue', 'Reminder Due'].includes(plan.status)) return { tone: plan.status === 'Overdue' ? 'critical' : 'warning', eyebrow: 'Preventive service', title: plan.status === 'Overdue' ? 'Preventive service is overdue' : 'Preventive service is due',
+    description: `Recommended ${formatDate(plan.nextServiceDate)} (${dueLabel(plan.daysUntil).toLowerCase()}). Last service ${formatDate(plan.lastServiceDate, 'not on record')}.`,
+    actions: [{ label: plan.stage === 'Scheduled' ? 'Confirm request' : 'Request service', icon: FilePlus2, to: `/corporate/raise-request?serviceFollowUp=${plan._id}` }] };
   if (device.deviceAllocationStatus === 'Unassigned') return { tone: 'info', title: 'Assign this device to an employee', description: 'Assigned devices can be traced to the person using them when service is needed.', actions: [{ label: 'Assign device', icon: UserRoundPlus, to: '/corporate/unassigned-devices' }] };
   const covered = ['Active', 'Expiring Soon'].includes(device.warrantyStatus) || ['Active', 'Expiring Soon'].includes(device.amcStatus);
   if (!covered && (device.warrantyStatus || device.amcStatus)) return { tone: 'warning', eyebrow: 'Coverage', title: 'No active warranty or AMC', description: `Warranty ${String(device.warrantyStatus || 'not on record').toLowerCase()} · AMC ${String(device.amcStatus || 'not on record').toLowerCase()}.`, actions: [{ label: 'View coverage', icon: ShieldCheck, to: '/corporate/warranty' }] };
@@ -310,6 +341,8 @@ export function DeviceDetail() {
   const user = readSessionUser();
   const ai = useAIAssistant();
   const state = useAsync(() => Promise.all([getDevice(id), getTickets()]).then(([device, all]) => ({ device, tickets: all.filter(ticket => idOf(ticket.deviceId) === id) })), [id]);
+  const servicePlan = useAsync(() => getDeviceServicePlan(id), [id]);
+  const [planDialog, setPlanDialog] = useState(null);
   const crumbs = [{ label: 'Devices', to: '/corporate/devices' }, { label: state.data?.device?.model || 'Device details' }];
   if (state.loading && !state.data) return <Shell title="Device details" crumbs={crumbs}><PageSkeleton variant="detail" kpis={0} /></Shell>;
   if (state.error) return <Shell title="Device details" crumbs={crumbs}><PageHeader title="Device details" back={{ to: '/corporate/devices', label: 'Devices' }} /><div className="card"><ErrorState title={state.error.status === 404 ? 'Device not found' : 'Unable to load this device'} message={friendlyError(state.error)} onRetry={state.reload} /></div></Shell>;
@@ -319,7 +352,8 @@ export function DeviceDetail() {
   const unassigned = device.deviceAllocationStatus === 'Unassigned';
   const allocation = activeTicket ? 'Under Service' : unassigned ? 'Unassigned' : 'Assigned';
   const recurring = recurringIssues(tickets, { windowDays: 0 });
-  const next = deviceNextAction(device, activeTicket);
+  const plan = servicePlan.data;
+  const next = deviceNextAction(device, activeTicket, plan);
 
   return <Shell title={device.model} crumbs={crumbs}>
     <div className="page-header asset-hero">
@@ -359,6 +393,22 @@ export function DeviceDetail() {
       <Section title="Lifecycle" description="Where this device is today">
         <JourneyTrack orientation="horizontal" label="Device lifecycle" steps={deviceLifecycle(device, tickets, activeTicket)} />
       </Section>
+      <Section title="Service lifecycle" description="Preventive service, calculated from the device's purchase and service records">
+        {servicePlan.loading && !plan ? <div className="stack-12"><Skeleton height={48} /><Skeleton width="50%" /></div>
+          : servicePlan.error ? <ErrorState compact title="Service lifecycle unavailable" message={friendlyError(servicePlan.error)} onRetry={servicePlan.reload} />
+          : plan.retired ? <p className="text-muted">This device is retired, so preventive service is not tracked.</p>
+          : <div className="stack-16">
+            <ServiceLifecycle plan={plan} status={plan._id ? customerStatus(plan) : null} />
+            {canRespond(plan) && <div className="row">
+              <Button variant="primary" size="sm" icon={FilePlus2} to={`/corporate/raise-request?serviceFollowUp=${plan._id}`}>{plan.stage === 'Scheduled' ? 'Confirm request' : 'Request service'}</Button>
+              <Button size="sm" onClick={() => setPlanDialog('later')}>Remind me later</Button>
+              <Button size="sm" variant="ghost" onClick={() => setPlanDialog('not-required')}>Not required</Button>
+            </div>}
+            {plan.previousCycles?.length > 0 && <ul className="disclosure-list"><DisclosureRow summary={<span>Previous service cycles ({plan.previousCycles.length})</span>}>
+              <InfoList items={plan.previousCycles.map(cycle => [formatDate(cycle.dueDate), cycle.stage === 'Completed' ? `Serviced ${formatDate(cycle.completedAt)}` : `Not required — ${cycle.notRequiredReason || 'no reason given'}`])} />
+            </DisclosureRow></ul>}
+          </div>}
+      </Section>
       <Section title="Service history" description={tickets.length ? `${pluralize(tickets.length, 'request')} raised for this device` : 'No requests raised yet'}>
         <div className="stack-16" id="service-history">
           {recurring.map(group => <Insight key={group.issueType} title={`${pluralize(group.count, `${group.issueType} request`)} for this device`}>
@@ -366,7 +416,7 @@ export function DeviceDetail() {
           </Insight>)}
           {tickets.length ? <ul className="disclosure-list">{tickets.map(ticket => <DisclosureRow key={ticket._id} summary={<span className="history-summary">
             <span className="history-date">{formatDate(ticket.createdAt)}</span>
-            <span className="history-title"><strong>{ticket.issueType || 'Service request'}</strong><small><span className="mono">{ticket.ticketId}</span>{ticket.category ? ` · ${ticket.category}` : ''}</small></span>
+            <span className="history-title"><strong>{ticket.issueType || 'Service request'}</strong><small><span className="mono">{ticket.ticketId}</span>{ticket.category ? ` · ${ticket.category}` : ''}{ticket.serviceFollowUpId ? ' · Preventive service' : ''}</small></span>
             <Badge dot>{ticket.status}</Badge>
           </span>}>
             {ticket.description && <p className="description-text" style={{ fontSize: 15 }}>{ticket.description}</p>}
@@ -377,9 +427,11 @@ export function DeviceDetail() {
         </div>
       </Section>
       <Section title="Device record" description="Hardware and purchase details">
-        <InfoList columns={2} items={[['Model', device.model], ['Device type', device.deviceType], ['Purchase date', formatDate(device.purchaseDate, '')], ['Department', device.department], ['Employee ID', device.employeeId], ['Last service', formatDate(device.lastServiceDate, '')]]} />
+        <InfoList columns={2} items={[['Model', device.model], ['Device type', device.deviceType], ['Purchase date', formatDate(device.purchaseDate, '')], ['Department', device.department], ['Employee ID', device.employeeId], ['Last service', formatDate(plan?.lastServiceDate, '')]]} />
       </Section>
     </Surface>
+    {planDialog === 'later' && plan && <ScheduleLaterDialog item={plan} onClose={() => setPlanDialog(null)} onDone={() => { setPlanDialog(null); servicePlan.reload(); }} />}
+    {planDialog === 'not-required' && plan && <NotRequiredDialog item={plan} reasons={plan.options?.notRequiredReasons || []} onClose={() => setPlanDialog(null)} onDone={() => { setPlanDialog(null); servicePlan.reload(); }} />}
   </Shell>;
 }
 

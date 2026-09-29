@@ -13,10 +13,34 @@ const serviceCentreSchema = new mongoose.Schema({
   email: String,
   status: { type: String, default: 'Active' },
 }, { timestamps: true });
-const deviceSchema = new mongoose.Schema({ assetId: String, serialNumber: { type: String, unique: true }, deviceType: String, model: String, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, selectedEntityId: { type: mongoose.Schema.Types.ObjectId }, selectedEntityType: { type: String, enum: ['corporate', 'service_centre'] }, employeeName: String, employeeId: String, department: String, location: String, purchaseDate: Date, warrantyStatus: String, warrantyExpiry: Date, amcStatus: String, amcExpiry: Date, deviceStatus: String, deviceAllocationStatus: { type: String, enum: ['Unassigned', 'Assigned'], default: 'Unassigned' }, lastServiceDate: Date });
+const deviceSchema = new mongoose.Schema({ assetId: String, serialNumber: { type: String, unique: true }, deviceType: String, model: String, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, selectedEntityId: { type: mongoose.Schema.Types.ObjectId }, selectedEntityType: { type: String, enum: ['corporate', 'service_centre'] }, employeeName: String, employeeId: String, department: String, location: String, purchaseDate: Date, warrantyStatus: String, warrantyExpiry: Date, amcStatus: String, amcExpiry: Date, deviceStatus: String, deviceAllocationStatus: { type: String, enum: ['Unassigned', 'Assigned'], default: 'Unassigned' }, lastServiceDate: Date, installationDate: Date, serviceIntervalMonths: { type: Number, min: 1, max: 60 }, nextServiceDate: Date });
 const deviceMasterSchema = new mongoose.Schema({ serialNumber: { type: String, unique: true }, deviceType: String, model: String, assetId: String, purchaseDate: Date, warrantyStatus: String, warrantyExpiry: Date, amcStatus: String, amcExpiry: Date });
 const engineerSchema = new mongoose.Schema({ name: String, employeeId: { type: String, unique: true }, email: { type: String, unique: true }, phone: String, location: String, status: { type: String, default: 'Available' }, userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' } });
-const ticketSchema = new mongoose.Schema({ ticketId: { type: String, unique: true }, customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, category: String, issueType: String, description: String, images: [String], originalImages: [String], annotatedImages: [String], location: String, preferredServiceDate: Date, priority: String, status: { type: String, default: 'Open' }, assignedEngineer: String, assignedEngineerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Engineer' }, assignedAt: Date, expectedTAT: String, responseTarget: String, resolutionTarget: String, slaTargetAt: Date, slaStatus: { type: String, enum: ['Healthy', 'At Risk', 'Escalated', 'SLA Breached', 'Resolved'], default: 'Healthy' }, escalationLevel: { type: Number, default: 0 }, escalationStatus: { type: String, enum: ['Not Escalated', 'At Risk', 'Escalated', 'SLA Breached', 'Resolved'], default: 'Not Escalated' }, escalationReason: String, escalatedAt: Date }, { timestamps: true });
+const ticketSchema = new mongoose.Schema({ ticketId: { type: String, unique: true }, customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, category: String, issueType: String, description: String, images: [String], originalImages: [String], annotatedImages: [String], location: String, preferredServiceDate: Date, priority: String, status: { type: String, default: 'Open' }, assignedEngineer: String, assignedEngineerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Engineer' }, assignedAt: Date, expectedTAT: String, responseTarget: String, resolutionTarget: String, slaTargetAt: Date, slaStatus: { type: String, enum: ['Healthy', 'At Risk', 'Escalated', 'SLA Breached', 'Resolved'], default: 'Healthy' }, escalationLevel: { type: Number, default: 0 }, escalationStatus: { type: String, enum: ['Not Escalated', 'At Risk', 'Escalated', 'SLA Breached', 'Resolved'], default: 'Not Escalated' }, escalationReason: String, escalatedAt: Date, serviceFollowUpId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceFollowUp' } }, { timestamps: true });
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+// One proactive-service cycle for one device: the recommended service date the
+// cycle is about, what the service team and the corporate customer did about
+// it, and which notifications have already been sent for it.
+const serviceFollowUpSchema = new mongoose.Schema({
+  deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device', required: true },
+  companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', index: true },
+  serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre', index: true },
+  dueDate: { type: String, required: true, match: DATE_ONLY },
+  intervalMonths: Number,
+  basis: String,
+  stage: { type: String, enum: ['Open', 'Contacted', 'Remind Later', 'Scheduled', 'In Service', 'Completed', 'Not Required', 'Superseded'], default: 'Open', index: true },
+  contactLog: [{ at: { type: Date, default: Date.now }, byUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, byName: String, method: String, outcome: String, notes: String }],
+  customerResponse: { type: { type: String }, at: Date, byUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, byName: String, reason: String, notes: String },
+  followUpDate: { type: String, match: DATE_ONLY },
+  followUpSetBy: { type: String, enum: ['iplanet_service', 'corporate_admin'] },
+  scheduledDate: { type: String, match: DATE_ONLY },
+  ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' },
+  completedAt: Date,
+  notRequiredReason: String,
+  closedAt: Date,
+  notifiedStates: { type: [String], default: [] }
+}, { timestamps: true });
+serviceFollowUpSchema.index({ deviceId: 1, dueDate: 1 }, { unique: true });
 const escalationRuleSchema = new mongoose.Schema({ name: { type: String, required: true }, level: { type: Number, min: 1, max: 3, required: true }, trigger: { type: String, required: true }, priority: { type: String, default: 'All' }, slaThreshold: { type: Number, min: 0, max: 100, required: true }, action: { type: String, required: true }, isActive: { type: Boolean, default: true } }, { timestamps: true });
 const reviewSchema = new mongoose.Schema({ ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket', required: true, unique: true, index: true }, corporateId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true }, customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre', index: true }, deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, engineerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Engineer' }, rating: { type: Number, required: true, min: 1, max: 5 }, comment: { type: String, required: true, trim: true, maxlength: 2000 } }, { timestamps: true });
 reviewSchema.index({ corporateId: 1, createdAt: -1 });
@@ -65,5 +89,6 @@ export const GoogleBusinessIntegration = mongoose.model('GoogleBusinessIntegrati
 export const GoogleBusinessLocationMapping = mongoose.model('GoogleBusinessLocationMapping', googleBusinessLocationMappingSchema);
 export const Notification = mongoose.model('Notification', notificationSchema);
 export const EscalationRule = mongoose.model('EscalationRule', escalationRuleSchema);
+export const ServiceFollowUp = mongoose.model('ServiceFollowUp', serviceFollowUpSchema);
 export const CallRecord = mongoose.model('CallRecord', callRecordSchema);
 export const AITroubleshootingSession = mongoose.model('AITroubleshootingSession', aiSupportSessionSchema);

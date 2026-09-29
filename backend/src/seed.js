@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import mongoose from 'mongoose';
-import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Notification, EscalationRule, CallRecord, AITroubleshootingSession } from './models.js';
+import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Notification, EscalationRule, CallRecord, AITroubleshootingSession, ServiceFollowUp } from './models.js';
 import { demoEnrollmentDevices } from './demoData.js';
 
 const password = 'Demo@123';
@@ -85,8 +85,16 @@ const ticketDefinitions = [
 const sequenceByStatus = { Open: ['Open'], 'Engineer Assigned': ['Open', 'Request Reviewed', 'Engineer Assigned'], 'Engineer Accepted': ['Open', 'Request Reviewed', 'Engineer Assigned', 'Engineer Accepted'], 'In Progress': ['Open', 'Request Reviewed', 'Engineer Assigned', 'Engineer Accepted', 'In Progress'], 'Waiting for Parts': ['Open', 'Request Reviewed', 'Engineer Assigned', 'Engineer Accepted', 'In Progress', 'Waiting for Parts'], Completed: ['Open', 'Request Reviewed', 'Engineer Assigned', 'Engineer Accepted', 'In Progress', 'Completed'], Closed: ['Open', 'Request Reviewed', 'Engineer Assigned', 'Engineer Accepted', 'In Progress', 'Completed', 'Closed'] };
 
 const date = (month, day, hour = 10) => new Date(2026, month - 1, day, hour, 0, 0);
+// Calendar helpers for device records. Coverage and service dates are relative
+// to the day the demo is seeded so every proactive-service state is present.
+const dateY = (year, month, day) => new Date(Date.UTC(year, month - 1, day));
+const daysFromNow = days => { const value = new Date(); value.setUTCHours(0, 0, 0, 0); value.setUTCDate(value.getUTCDate() + days); return value; };
+// Days until the next 6-monthly service, cycled across the seeded devices so
+// every company has overdue, due, upcoming and not-yet-due devices.
+const serviceDueOffsets = [-40, 90, 0, 5, 18, 29, -3, 150];
+const lastServiceFor = daysUntilDue => { const due = daysFromNow(daysUntilDue); const lastDay = new Date(Date.UTC(due.getUTCFullYear(), due.getUTCMonth() - 5, 0)).getUTCDate(); return new Date(Date.UTC(due.getUTCFullYear(), due.getUTCMonth() - 6, Math.min(due.getUTCDate(), lastDay))); };
 await mongoose.connect(process.env.MONGODB_URI);
-await Promise.all([User.deleteMany({}), Company.deleteMany({}), ServiceCentre.deleteMany({}), Device.deleteMany({}), DeviceMaster.deleteMany({}), Engineer.deleteMany({}), Ticket.deleteMany({}), TicketTimeline.deleteMany({}), Notification.deleteMany({}), EscalationRule.deleteMany({}), CallRecord.deleteMany({}), AITroubleshootingSession.deleteMany({})]);
+await Promise.all([User.deleteMany({}), Company.deleteMany({}), ServiceCentre.deleteMany({}), Device.deleteMany({}), DeviceMaster.deleteMany({}), Engineer.deleteMany({}), Ticket.deleteMany({}), TicketTimeline.deleteMany({}), Notification.deleteMany({}), EscalationRule.deleteMany({}), CallRecord.deleteMany({}), AITroubleshootingSession.deleteMany({}), ServiceFollowUp.deleteMany({})]);
 
 const companies = await Company.insertMany(companyDefinitions);
 const serviceCentres = await ServiceCentre.insertMany(serviceCentreDefinitions);
@@ -96,7 +104,7 @@ const serviceUser = await User.create({ name: 'Neha Menon', email: 'service@ipla
 const engineerUsers = await User.insertMany(engineerDefinitions.map(([name, email, employeeId, location, status, phone]) => ({ name, email, password, role: 'iplanet_service', company: 'iPlanet Service Desk', phone })));
 const engineers = await Engineer.insertMany(engineerDefinitions.map(([name, email, employeeId, location, status, phone], index) => ({ name, employeeId, email, phone, location, status, userId: engineerUsers[index]._id })));
 
-const devices = await Device.insertMany(deviceDefinitions.map(([assetId, serialNumber, model, deviceType, companyIndex, employeeName, employeeId, department, location, warrantyStatus, amcStatus, allocation, deviceStatus], index) => ({ assetId, serialNumber, deviceType, model, companyId: companies[companyIndex]._id, selectedEntityId: companies[companyIndex]._id, selectedEntityType: 'corporate', employeeName, employeeId, department, location, purchaseDate: date(4 + (index % 8), 5 + (index % 20)), warrantyStatus, warrantyExpiry: warrantyStatus === 'Active' ? date(2027, 4 + (index % 6), 5 + index) : warrantyStatus === 'Expiring Soon' ? date(2026, 10 + (index % 2), 5 + index) : date(2025, 3 + (index % 5), 5 + index), amcStatus, amcExpiry: amcStatus === 'Active' ? date(2028, 2 + (index % 6), 10 + index) : amcStatus === 'Expiring Soon' ? date(2026, 10 + (index % 2), 10 + index) : date(2025, 4 + (index % 5), 10 + index), deviceStatus, deviceAllocationStatus: allocation, lastServiceDate: date(2026, 2 + (index % 6), 12 + (index % 10)) })));
+const devices = await Device.insertMany(deviceDefinitions.map(([assetId, serialNumber, model, deviceType, companyIndex, employeeName, employeeId, department, location, warrantyStatus, amcStatus, allocation, deviceStatus], index) => ({ assetId, serialNumber, deviceType, model, companyId: companies[companyIndex]._id, selectedEntityId: companies[companyIndex]._id, selectedEntityType: 'corporate', employeeName, employeeId, department, location, purchaseDate: dateY(2024 + (index % 2), 1 + (index % 12), 5 + (index % 20)), warrantyStatus, warrantyExpiry: warrantyStatus === 'Active' ? daysFromNow(200 + index * 20) : warrantyStatus === 'Expiring Soon' ? daysFromNow(20 + index) : daysFromNow(-100 - index * 10), amcStatus, amcExpiry: amcStatus === 'Active' ? daysFromNow(300 + index * 15) : amcStatus === 'Expiring Soon' ? daysFromNow(25 + index) : daysFromNow(-60 - index * 10), deviceStatus, deviceAllocationStatus: allocation, lastServiceDate: lastServiceFor(serviceDueOffsets[index % serviceDueOffsets.length])})));
 const deviceMasters = [...demoEnrollmentDevices, ...devices.map(device => ({ serialNumber: device.serialNumber, deviceType: device.deviceType, model: device.model, assetId: device.assetId, purchaseDate: device.purchaseDate, warrantyStatus: device.warrantyStatus, warrantyExpiry: device.warrantyExpiry, amcStatus: device.amcStatus, amcExpiry: device.amcExpiry }))];
 await DeviceMaster.insertMany(deviceMasters.filter((item, index, all) => all.findIndex(other => other.serialNumber === item.serialNumber) === index));
 

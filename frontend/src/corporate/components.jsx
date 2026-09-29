@@ -1,4 +1,4 @@
-import { Bell, FilePlus2, Laptop, LayoutDashboard, MessageSquareText, Search, ShieldCheck, Sparkles, Ticket, UserRound, UserRoundPlus } from 'lucide-react';
+import { Bell, CalendarClock, FilePlus2, Laptop, LayoutDashboard, MessageSquareText, Search, ShieldCheck, Sparkles, Ticket, UserRound, UserRoundPlus } from 'lucide-react';
 import { AppShell, Badge as UIBadge, EmptyState, PageHeader, RowAction, KPI } from '../ui';
 import { getDevices, getNotificationUnreadCount, getTickets } from './api';
 
@@ -36,6 +36,7 @@ export const corporatePortal = {
       { id: 'a-raise', icon: FilePlus2, title: 'Raise service request', keywords: 'new create repair ticket', to: '/corporate/raise-request' },
       { id: 'a-find', icon: Search, title: 'Find a device', keywords: 'serial model employee search', to: '/corporate/devices' },
       { id: 'a-coverage', icon: ShieldCheck, title: 'Check coverage', keywords: 'warranty amc expiry', to: '/corporate/warranty' },
+      { id: 'a-service', icon: CalendarClock, title: 'Review recommended service', keywords: 'preventive maintenance due service recommended', to: '/corporate/service-recommendations' },
       { id: 'a-track', icon: Ticket, title: 'Track service requests', keywords: 'status tickets progress', to: '/corporate/service-requests' },
       { id: 'a-unassigned', icon: UserRoundPlus, title: 'Assign a device to an employee', keywords: 'unassigned allocate', to: '/corporate/unassigned-devices' },
       { id: 'a-ai', icon: Sparkles, title: 'Ask AI Support', keywords: 'help troubleshoot chat assistant', run: 'ai' },
@@ -50,6 +51,7 @@ export const corporatePortal = {
     { label: 'Service', items: [
       { to: '/corporate/service-requests', icon: Ticket, label: 'Service Requests' },
       { to: '/corporate/raise-request', icon: FilePlus2, label: 'Raise Request' },
+      { to: '/corporate/service-recommendations', icon: CalendarClock, label: 'Service Recommended' },
     ] },
     { label: 'Coverage', items: [
       { to: '/corporate/warranty', icon: ShieldCheck, label: 'Warranty & Coverage' },

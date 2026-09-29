@@ -53,3 +53,9 @@ export async function saveTicketCall(ticketId, payload) { return request(`/iplan
 export async function getTicketAITroubleshooting(ticketId) { return request(`/iplanet/tickets/${ticketId}/ai-support`); }
 export async function startTicketAITroubleshooting(ticketId, payload) { return request(`/iplanet/tickets/${ticketId}/ai-support`, { method: 'POST', body: JSON.stringify(payload) }); }
 export async function getCoverage() { return request('/coverage'); }
+// Proactive device service
+const query = filters => { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value && value !== 'All')); return params.toString() ? `?${params}` : ''; };
+export async function getProactiveFollowUps(filters = {}) { return request(`/iplanet/proactive-service/followups${query(filters)}`); }
+export async function getProactiveFollowUp(id) { return request(`/iplanet/proactive-service/followups/${id}`); }
+export async function proactiveFollowUpAction(id, action, payload) { return request(`/iplanet/proactive-service/followups/${id}/${action}`, { method: 'POST', body: JSON.stringify(payload) }); }
+export async function updateDeviceServicePlan(deviceId, payload) { return request(`/iplanet/devices/${deviceId}/service-plan`, { method: 'PATCH', body: JSON.stringify(payload) }); }

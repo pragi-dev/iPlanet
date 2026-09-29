@@ -39,6 +39,8 @@ const ServiceCoverage = page(() => import('./service/coverage'), 'ServiceCoverag
 const InternalReviews = page(internalReviews, 'InternalReviews');
 const InternalReviewDetail = page(internalReviews, 'InternalReviewDetail');
 const GoogleBusinessProfile = page(() => import('./service/GoogleBusinessProfile'), 'GoogleBusinessProfile');
+const ProactiveService = page(() => import('./service/ProactiveService'), 'ProactiveService');
+const ServiceRecommendations = page(() => import('./corporate/ServiceRecommendations'), 'ServiceRecommendations');
 
 function RouteLoading() {
   return <div className="route-loading" role="status" aria-live="polite"><span className="sr-only">Loading page…</span><span className="route-loading-bar" aria-hidden="true" /></div>;
@@ -213,6 +215,7 @@ function CorporateRoutes() {
     <Route path="/corporate/service-requests" element={<Protected role="corporate_admin"><Tickets /></Protected>} />
     <Route path="/corporate/service-requests/:id" element={<Protected role="corporate_admin"><TicketDetailEnhanced /></Protected>} />
     <Route path="/corporate/raise-request" element={<Protected role="corporate_admin"><RequestEnhanced /></Protected>} />
+    <Route path="/corporate/service-recommendations" element={<Protected role="corporate_admin"><ServiceRecommendations /></Protected>} />
     <Route path="/corporate/warranty" element={<Protected role="corporate_admin"><CoverageEnhanced /></Protected>} />
     <Route path="/corporate/notifications" element={<Protected role="corporate_admin"><CorporateNotifications /></Protected>} />
     <Route path="/corporate/profile" element={<Protected role="corporate_admin"><Profile /></Protected>} />
@@ -226,6 +229,7 @@ function ServiceRoutes() {
     <Route path="/service/dashboard" element={<Protected role="iplanet_service"><ServiceDashboard /></Protected>} />
     <Route path="/service/tickets" element={<Protected role="iplanet_service"><MyTickets /></Protected>} />
     <Route path="/service/tickets/:id" element={<Protected role="iplanet_service"><OperationalTicketDetail /></Protected>} />
+    <Route path="/service/proactive" element={<Protected role="iplanet_service"><ProactiveService /></Protected>} />
     <Route path="/service/reviews" element={<Protected role="iplanet_service"><InternalReviews /></Protected>} />
     <Route path="/service/reviews/google" element={<Protected role="iplanet_service"><GoogleBusinessProfile /></Protected>} />
     <Route path="/service/reviews/:reviewId" element={<Protected role="iplanet_service"><InternalReviewDetail /></Protected>} />

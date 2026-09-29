@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { BarChart3, Building2, ChevronRight, ClipboardList, KeyRound, LogOut, Mail, MapPin, ScanLine, ShieldAlert, Ticket, UserCheck, UsersRound, Wrench } from 'lucide-react';
+import { BarChart3, Building2, CalendarClock, CalendarDays, ChevronRight, ClipboardList, KeyRound, LogOut, Mail, MapPin, ScanLine, ShieldAlert, Ticket, UserCheck, UsersRound, Wrench } from 'lucide-react';
 import { ServiceShell } from './components';
 import { engineerFilterOptions, filterEngineers } from './engineerFilters';
-import { getEngineers, getServiceActivity, getServiceCentres, getServiceTickets } from './api';
+import { getEngineers, getProactiveFollowUps, getServiceActivity, getServiceCentres, getServiceTickets } from './api';
 import {
   ActivityFeed, AttentionFeed, Avatar, Badge, Button, CalmState, Card, DashboardHeader, DashboardSection, Drawer, EmptyState, ErrorState, FilterBar, FilterSelect, InfoList, Insight, KPI, KPIGrid,
   MetricSummary, PageHeader, PageSkeleton, QuickActions, SearchInput, Skeleton, StatusDistribution, TableCard, formatDateTime, formatRelative, friendlyError, greeting, idOf, isActiveTicket,
@@ -95,6 +95,23 @@ function operationsAttention(tickets, engineers) {
 }
 
 // Engineers and active work grouped by service location.
+// Proactive-service items for the attention feed, from the engine's summary.
+// Each is a count with the filtered follow-up list as its action.
+function proactiveAttention(summary, config) {
+  if (!summary) return [];
+  const items = [];
+  const due = summary.due + summary.reminderDue;
+  if (due) items.push({ key: 'pro-due', tone: 'warning', category: 'Proactive service', title: `${pluralize(due, 'device')} due for preventive service`,
+    reason: `Contact the customer before raising a request.${summary.reminderDue ? ` Includes ${pluralize(summary.reminderDue, 'reminder')} that came due.` : ''}`, action: { label: 'Review follow-ups', to: '/service/proactive?status=Needs%20action' } });
+  if (summary.overdue) items.push({ key: 'pro-overdue', tone: 'warning', category: 'Proactive service', title: `${pluralize(summary.overdue, 'overdue follow-up')}`,
+    reason: `More than ${config?.overdueGraceDays ?? 14} days past the recommended service date with no customer decision.`, action: { label: 'Review overdue', to: '/service/proactive?status=Overdue' } });
+  if (summary.awaitingCustomer) items.push({ key: 'pro-awaiting', tone: 'info', category: 'Customer response', title: `${summary.awaitingCustomer} ${summary.awaitingCustomer === 1 ? 'customer is' : 'customers are'} awaiting a follow-up`,
+    reason: 'Contacted about preventive service with no decision recorded yet.', action: { label: 'Follow up', to: '/service/proactive?status=Awaiting%20customer' } });
+  if (summary.amcExpiringSoon) items.push({ key: 'pro-amc', tone: 'info', category: 'Coverage', title: `${pluralize(summary.amcExpiringSoon, 'AMC renewal')} approaching`,
+    reason: 'Raise renewal with the customer during the next follow-up.', action: { label: 'View coverage', to: '/service/warranty?filter=Expiring%20Soon' } });
+  return items;
+}
+
 function locationOverview(engineers, tickets) {
   const rows = new Map();
   const row = name => { if (!rows.has(name)) rows.set(name, { name, engineers: 0, available: 0, active: 0, unassigned: 0 }); return rows.get(name); };
@@ -116,6 +133,7 @@ export function ServiceDashboard() {
   const user = readSessionUser();
   const state = useAsync(() => Promise.all([getServiceTickets(), getEngineers()]).then(([tickets, engineers]) => ({ tickets, engineers })), []);
   const activity = useAsync(() => getServiceActivity({ limit: 8, since: startOfToday() }), []);
+  const proactive = useAsync(() => getProactiveFollowUps(), []);
   if (state.loading && !state.data) return <ServiceShell title="Overview"><PageSkeleton kpis={5} /></ServiceShell>;
   if (state.error) return <ServiceShell title="Overview"><PageHeader title="Service operations" /><div className="card"><ErrorState title="Unable to load service operations" message={friendlyError(state.error)} onRetry={state.reload} /></div></ServiceShell>;
 
@@ -126,7 +144,8 @@ export function ServiceDashboard() {
   const escalated = active.filter(ticket => ticket.escalationStatus === 'Escalated').length;
   const unassigned = active.filter(ticket => !ticket.assignedEngineerId).length;
   const count = status => tickets.filter(ticket => ticket.status === status).length;
-  const attention = operationsAttention(tickets, engineers);
+  const proSummary = proactive.data?.summary;
+  const attention = [...operationsAttention(tickets, engineers), ...proactiveAttention(proSummary, proactive.data?.config)].sort((a, b) => toneRank[a.tone] - toneRank[b.tone]);
   const locations = locationOverview(engineers, tickets);
   const load = activeLoad(tickets);
   const workload = [...engineers].map(engineer => ({ engineer, active: load.get(String(engineer._id)) || 0 })).sort((a, b) => b.active - a.active || String(a.engineer.name).localeCompare(String(b.engineer.name)));
@@ -155,6 +174,7 @@ export function ServiceDashboard() {
           { label: 'SLA risk', value: risky.length, hint: breached ? `${breached} breached or escalated` : 'None breached', tone: breached ? 'critical' : risky.length ? 'warning' : undefined, to: '/service/escalation' },
           { label: 'Unassigned', value: unassigned, hint: `${pluralize(available, 'engineer')} available`, tone: unassigned ? 'warning' : undefined, to: '/service/tickets?status=Open&assignment=Unassigned' },
           { label: 'Waiting for parts', value: count('Waiting for Parts'), hint: 'Repairs paused', to: '/service/tickets?status=Waiting%20for%20Parts' },
+          { label: 'Proactive follow-ups', value: proSummary ? proSummary.needsAction : '—', hint: proactive.error ? 'Unavailable' : proSummary?.overdue ? `${proSummary.overdue} overdue` : 'Preventive service', tone: proSummary?.overdue ? 'warning' : undefined, to: '/service/proactive?status=Needs%20action' },
           { label: 'Completed today', value: activity.data ? activity.data.completedToday : '—', hint: activity.error ? 'Unavailable' : 'Since midnight', to: '/service/tickets?status=Completed' },
         ]} />
         <div className="cc-band-divider" />
@@ -193,6 +213,8 @@ export function ServiceDashboard() {
             <QuickActions actions={[
               { label: 'Assign tickets', hint: unassigned ? `${unassigned} waiting for an engineer` : 'Every active ticket is assigned', icon: UserCheck, to: '/service/tickets?status=Open&assignment=Unassigned', count: unassigned, tone: 'warning' },
               { label: 'SLA risks & escalations', hint: risky.length ? [`${risky.length} at risk`, escalated && `${escalated} escalated`].filter(Boolean).join(' · ') : 'Escalation matrix and rules', icon: ShieldAlert, to: '/service/escalation', count: risky.length, tone: breached ? 'critical' : 'warning' },
+              { label: 'Review service follow-ups', hint: proSummary ? (proSummary.needsAction ? `${pluralize(proSummary.needsAction, 'device')} need a follow-up` : 'No follow-ups due') : 'Proactive service', icon: CalendarClock, to: '/service/proactive?status=Needs%20action', count: proSummary?.needsAction, tone: proSummary?.overdue ? 'warning' : 'neutral' },
+              { label: 'View upcoming services', hint: proSummary ? `${proSummary.upcoming} in the next ${proactive.data.config.upcomingDays} days` : 'Service calendar', icon: CalendarDays, to: '/service/proactive?status=Upcoming' },
               { label: 'Enroll device', hint: 'Register a customer device', icon: ScanLine, to: '/service/device-enrollment' },
               { label: 'View engineers', hint: `${available} of ${pluralize(engineers.length, 'engineer')} available`, icon: UsersRound, to: '/service/engineers' },
               { label: 'View reports', hint: 'Volume, locations and issue types', icon: BarChart3, to: '/service/reports' },
