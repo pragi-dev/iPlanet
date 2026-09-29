@@ -3,6 +3,7 @@ export * from './overlay';
 export * from './format';
 export * from './insights';
 export * from './experience';
+export * from './dashboard';
 export { useAsync } from './useAsync';
 export { AppShell, AIAssistantContext, useAIAssistant, notifyNotificationsChanged } from './AppShell';
 export * from './ticket';

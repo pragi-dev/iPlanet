@@ -69,6 +69,49 @@ export function coverageExpiring(device) {
   return items;
 }
 
+// "45m", "1h 42m", "2d 3h", "41 days" — compact spans for SLA countdowns;
+// precision drops as the span grows.
+export function formatDuration(ms) {
+  const minutes = Math.max(1, Math.round(Math.abs(ms) / 60000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`;
+  return `${days} days`;
+}
+
+// Time left to the ticket's SLA target (from slaTargetAt). Null when no target is set.
+export function slaCountdown(ticket, now = Date.now()) {
+  const target = new Date(ticket?.slaTargetAt).getTime();
+  if (!ticket?.slaTargetAt || Number.isNaN(target)) return null;
+  const remaining = target - now;
+  return { overdue: remaining < 0, text: formatDuration(remaining) };
+}
+
+// The same issue type reported on several different devices at one location
+// inside the window. Returns [{ location, issueType, devices, tickets, since }].
+export function issueClusters(tickets, { windowDays = 90, minDevices = 2 } = {}) {
+  const since = Date.now() - windowDays * DAY;
+  const groups = new Map();
+  (tickets || []).forEach(ticket => {
+    const created = new Date(ticket.createdAt).getTime();
+    const location = ticket.location || ticket.deviceId?.location;
+    const deviceId = idOf(ticket.deviceId);
+    if (!location || !ticket.issueType || !deviceId || Number.isNaN(created) || created < since) return;
+    const key = `${location}::${ticket.issueType}`;
+    const group = groups.get(key) || { location, issueType: ticket.issueType, deviceIds: new Set(), tickets: [], since: created };
+    group.deviceIds.add(deviceId);
+    group.tickets.push(ticket);
+    group.since = Math.min(group.since, created);
+    groups.set(key, group);
+  });
+  return [...groups.values()]
+    .filter(group => group.deviceIds.size >= minDevices)
+    .map(({ deviceIds, ...group }) => ({ ...group, devices: deviceIds.size }))
+    .sort((a, b) => b.devices - a.devices || b.tickets.length - a.tickets.length);
+}
+
 export function pluralize(count, singular, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
 }

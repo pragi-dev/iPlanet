@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Building2, ChevronRight, ClipboardList, KeyRound, LogOut, Mail, MapPin, ScanLine, ShieldAlert, Ticket, UserCheck, UsersRound, Wrench } from 'lucide-react';
+import { BarChart3, Building2, ChevronRight, ClipboardList, KeyRound, LogOut, Mail, MapPin, ScanLine, ShieldAlert, Ticket, UserCheck, UsersRound, Wrench } from 'lucide-react';
 import { ServiceShell } from './components';
 import { engineerFilterOptions, filterEngineers } from './engineerFilters';
-import { getEngineers, getServiceCentres, getServiceDashboard, getServiceTickets } from './api';
+import { getEngineers, getServiceActivity, getServiceCentres, getServiceTickets } from './api';
 import {
-  AllClear, AttentionList, Avatar, Badge, Button, Card, Drawer, EmptyState, ErrorState, FilterBar, FilterSelect, InfoList, KPI, KPIGrid, PageHeader, PageSkeleton,
-  SearchInput, SectionHeader, TableCard, formatDateTime, formatRelative, friendlyError, greeting, idOf, isActiveTicket, pluralize, readSessionUser, recurringIssues,
-  riskLabel, riskTone, slaLabel, slaRisk, todayLabel, useAsync,
+  ActivityFeed, AttentionFeed, Avatar, Badge, Button, CalmState, Card, DashboardHeader, DashboardSection, Drawer, EmptyState, ErrorState, FilterBar, FilterSelect, InfoList, Insight, KPI, KPIGrid,
+  MetricSummary, PageHeader, PageSkeleton, QuickActions, SearchInput, Skeleton, StatusDistribution, TableCard, formatDateTime, formatRelative, friendlyError, greeting, idOf, isActiveTicket,
+  pluralize, readSessionUser, recurringIssues, riskLabel, riskTone, slaCountdown, slaLabel, slaRisk, suggestEngineer, todayLabel, useAsync,
 } from '../ui';
 
 export { ServiceShell };
@@ -17,120 +17,214 @@ const isActive = isActiveTicket;
 const engineerOf = ticket => idOf(ticket.assignedEngineerId);
 const toneRank = { critical: 0, warning: 1, info: 2, neutral: 3 };
 const companyOf = ticket => ticket.companyId?.name || ticket.customerId?.company || 'Corporate';
+const GROUP_AFTER = 2;
 
-// Highest-priority operational items, one row per ticket/device/engineer,
-// each with the action that moves it forward.
+// Active tickets per engineer, counted from the ticket list itself so
+// completed-but-not-closed work is not treated as open workload.
+function activeLoad(tickets) {
+  const load = new Map();
+  tickets.filter(isActive).forEach(ticket => { const id = engineerOf(ticket); if (id) load.set(id, (load.get(id) || 0) + 1); });
+  return load;
+}
+
+function slaMeta(ticket) {
+  const countdown = slaCountdown(ticket);
+  if (!countdown) return null;
+  return countdown.overdue ? `Target passed ${countdown.text} ago` : `Breach in ${countdown.text}`;
+}
+
+// Why a ticket is stuck, from its status and assignment.
+function ticketReason(ticket, engineers) {
+  const engineer = ticket.assignedEngineer || 'The engineer';
+  const escalation = ticket.escalationStatus === 'Escalated' ? `Escalated${ticket.escalationLevel ? ` to level ${ticket.escalationLevel}` : ''}${ticket.escalationReason ? ` — ${ticket.escalationReason}` : ''}. ` : '';
+  if (!ticket.assignedEngineerId) {
+    const suggestion = suggestEngineer(engineers, ticket);
+    return `${escalation}No engineer assigned.${suggestion ? ` ${suggestion.engineer.name} is available in ${suggestion.engineer.location}.` : ticket.location ? ` No engineer is available in ${ticket.location}.` : ''}`;
+  }
+  if (ticket.status === 'Engineer Assigned') return `${escalation}${engineer} has not accepted the ticket yet.`;
+  if (ticket.status === 'Engineer Accepted') return `${escalation}${engineer} accepted but has not started work.`;
+  if (ticket.status === 'Waiting for Parts') return `${escalation}Repair is paused while parts arrive.`;
+  return `${escalation}Repair in progress with ${engineer}.`;
+}
+
+// Operational problems that need the service team, most urgent first. Each
+// item says what is wrong, why, and the action that moves it forward.
 function operationsAttention(tickets, engineers) {
   const items = [];
   const listed = new Set();
+  const context = ticket => [companyOf(ticket), ticket.location, ticket.deviceId?.model].filter(Boolean).join(' · ');
   tickets.filter(slaRisk).sort((a, b) => new Date(a.slaTargetAt) - new Date(b.slaTargetAt)).forEach(ticket => {
     const risk = slaRisk(ticket);
     listed.add(ticket._id);
-    items.push({ key: `sla-${ticket._id}`, tone: riskTone(risk), kicker: riskLabel(risk), title: `${ticket.ticketId} · ${ticket.issueType || 'Service'}`,
-      detail: [companyOf(ticket), ticket.location, ticket.slaTargetAt ? `Target ${formatDateTime(ticket.slaTargetAt)}` : null, ticket.assignedEngineer || 'Unassigned'].filter(Boolean).join(' · '),
-      action: ticket.assignedEngineerId ? { label: 'Open ticket', to: `/service/tickets/${ticket._id}` } : { label: 'Assign engineer', to: `/service/tickets/${ticket._id}?assign=1` } });
+    const action = !ticket.assignedEngineerId ? { label: 'Assign engineer', to: `/service/tickets/${ticket._id}?assign=1` }
+      : risk === 'escalated' ? { label: 'Review escalation', to: `/service/tickets/${ticket._id}` }
+      : { label: 'Open ticket', to: `/service/tickets/${ticket._id}` };
+    items.push({ key: `sla-${ticket._id}`, tone: riskTone(risk), category: riskLabel(risk), meta: slaMeta(ticket), title: `${ticket.ticketId} · ${ticket.issueType || 'Service'}`, reason: ticketReason(ticket, engineers), context: context(ticket), action });
   });
-  tickets.filter(ticket => ticket.status === 'Open' && !ticket.assignedEngineerId && !listed.has(ticket._id)).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)).forEach(ticket => {
-    items.push({ key: `un-${ticket._id}`, tone: 'warning', kicker: 'Unassigned', title: `${ticket.ticketId} · ${ticket.issueType || 'Service'}`, detail: [companyOf(ticket), ticket.location, `raised ${formatRelative(ticket.createdAt)}`].filter(Boolean).join(' · '), action: { label: 'Assign engineer', to: `/service/tickets/${ticket._id}?assign=1` } });
+  tickets.filter(ticket => isActive(ticket) && !ticket.assignedEngineerId && !listed.has(ticket._id)).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)).forEach(ticket => {
+    listed.add(ticket._id);
+    items.push({ key: `un-${ticket._id}`, tone: 'warning', category: 'Unassigned', meta: `Raised ${formatRelative(ticket.createdAt)}`, title: `${ticket.ticketId} · ${ticket.issueType || 'Service'}`,
+      reason: ticketReason(ticket, engineers), context: context(ticket), action: { label: 'Assign engineer', to: `/service/tickets/${ticket._id}?assign=1` } });
   });
-  tickets.filter(ticket => ticket.status === 'Waiting for Parts' && !listed.has(ticket._id)).forEach(ticket => {
-    items.push({ key: `wp-${ticket._id}`, tone: 'info', kicker: 'Waiting for parts', title: `${ticket.ticketId} · ${ticket.issueType || 'Service'}`, detail: [companyOf(ticket), ticket.assignedEngineer, `paused ${formatRelative(ticket.updatedAt)}`].filter(Boolean).join(' · '), action: { label: 'Open ticket', to: `/service/tickets/${ticket._id}` } });
-  });
-  tickets.filter(ticket => ticket.status === 'Completed').forEach(ticket => {
-    items.push({ key: `done-${ticket._id}`, tone: 'info', kicker: 'Ready to close', title: `${ticket.ticketId} · ${ticket.issueType || 'Service'}`, detail: [companyOf(ticket), ticket.assignedEngineer, `completed ${formatRelative(ticket.updatedAt)}`].filter(Boolean).join(' · '), action: { label: 'Review & close', to: `/service/tickets/${ticket._id}` } });
-  });
+  const waiting = tickets.filter(ticket => ticket.status === 'Waiting for Parts' && !listed.has(ticket._id)).sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
+  if (waiting.length > GROUP_AFTER) items.push({ key: 'wp-group', tone: 'info', category: 'Waiting for parts', title: `${waiting.length} tickets are waiting for parts`,
+    reason: `Longest wait: ${waiting[0].ticketId}, paused ${formatRelative(waiting[0].updatedAt)}.`, action: { label: 'View tickets', to: '/service/tickets?status=Waiting%20for%20Parts' } });
+  else waiting.forEach(ticket => items.push({ key: `wp-${ticket._id}`, tone: 'info', category: 'Waiting for parts', meta: `Paused ${formatRelative(ticket.updatedAt)}`, title: `${ticket.ticketId} · ${ticket.issueType || 'Service'}`,
+    reason: `Repair is paused until parts arrive${ticket.assignedEngineer ? ` for ${ticket.assignedEngineer}` : ''}.`, context: context(ticket), action: { label: 'Open ticket', to: `/service/tickets/${ticket._id}` } }));
+  const completed = tickets.filter(ticket => ticket.status === 'Completed').sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
+  if (completed.length > GROUP_AFTER) items.push({ key: 'done-group', tone: 'info', category: 'Ready to close', title: `${completed.length} completed tickets are waiting to be closed`,
+    reason: `Engineers have finished these repairs. Oldest: ${completed[0].ticketId}, completed ${formatRelative(completed[0].updatedAt)}.`, action: { label: 'Review tickets', to: '/service/tickets?status=Completed' } });
+  else completed.forEach(ticket => items.push({ key: `done-${ticket._id}`, tone: 'info', category: 'Ready to close', meta: `Completed ${formatRelative(ticket.updatedAt)}`, title: `${ticket.ticketId} · ${ticket.issueType || 'Service'}`,
+    reason: `${ticket.assignedEngineer || 'The engineer'} finished the repair. Review and close the ticket.`, context: context(ticket), action: { label: 'Review & close', to: `/service/tickets/${ticket._id}` } }));
   recurringIssues(tickets).slice(0, 3).forEach(group => {
     const serial = group.device?.serialNumber;
-    items.push({ key: `rec-${group.deviceId}-${group.issueType}`, tone: 'warning', kicker: 'Recurring issue', title: [group.device?.model || 'Device', serial].filter(Boolean).join(' · '), detail: `${pluralize(group.count, `${group.issueType} request`)} in the last 90 days · ${companyOf(group.tickets[0])}`, action: { label: 'View tickets', to: `/service/tickets?search=${encodeURIComponent(serial || group.issueType)}` } });
+    items.push({ key: `rec-${group.deviceId}-${group.issueType}`, tone: 'warning', category: 'Recurring issue', meta: `Last reported ${formatRelative(new Date(group.lastAt))}`, title: [group.device?.model || 'Device', serial].filter(Boolean).join(' · '),
+      reason: `${pluralize(group.count, `${group.issueType.toLowerCase()} request`)} in the last 90 days. A repeat repair may need a deeper diagnosis.`, context: companyOf(group.tickets[0]),
+      action: { label: 'View tickets', to: `/service/tickets?search=${encodeURIComponent(serial || group.issueType)}` } });
   });
-  // Workload imbalance: an engineer carrying at least twice the team average (and 3+ tickets).
-  const loads = engineers.map(engineer => engineer.assignedTicketCount || 0);
-  const average = loads.length ? loads.reduce((sum, value) => sum + value, 0) / loads.length : 0;
-  engineers.filter(engineer => (engineer.assignedTicketCount || 0) >= 3 && (engineer.assignedTicketCount || 0) >= average * 2).forEach(engineer => {
-    items.push({ key: `load-${engineer._id}`, tone: 'warning', kicker: 'Workload', title: `${engineer.name} has ${engineer.assignedTicketCount} open tickets`, detail: `Team average ${average.toFixed(1)}${engineer.location ? ` · ${engineer.location}` : ''}`, action: { label: 'View engineer', to: `/service/engineers?engineer=${engineer._id}` } });
+  // Workload imbalance: an engineer carrying at least twice the team average (and 3+ active tickets).
+  const load = activeLoad(tickets);
+  const average = engineers.length ? [...load.values()].reduce((sum, value) => sum + value, 0) / engineers.length : 0;
+  engineers.filter(engineer => (load.get(String(engineer._id)) || 0) >= 3 && (load.get(String(engineer._id)) || 0) >= average * 2).forEach(engineer => {
+    const lighter = engineers.filter(other => other._id !== engineer._id && other.status === 'Available' && other.location === engineer.location).sort((a, b) => (load.get(String(a._id)) || 0) - (load.get(String(b._id)) || 0))[0];
+    items.push({ key: `load-${engineer._id}`, tone: 'warning', category: 'Engineer workload', title: `${engineer.name} has ${load.get(String(engineer._id))} active tickets`,
+      reason: `Team average is ${average.toFixed(1)}.${lighter ? ` ${lighter.name} in ${lighter.location} has ${pluralize(load.get(String(lighter._id)) || 0, 'active ticket')}.` : ''}`, context: engineer.location,
+      action: { label: 'View engineer', to: `/service/engineers?engineer=${engineer._id}` } });
   });
   return items.sort((a, b) => toneRank[a.tone] - toneRank[b.tone]);
 }
 
-// Engineers and open work grouped by service location.
-function capacityByLocation(engineers, tickets) {
+// Engineers and active work grouped by service location.
+function locationOverview(engineers, tickets) {
   const rows = new Map();
-  const row = name => { if (!rows.has(name)) rows.set(name, { name, engineers: [], openTickets: 0, unassigned: 0 }); return rows.get(name); };
-  engineers.forEach(engineer => row(engineer.location || 'No location').engineers.push(engineer));
-  tickets.filter(isActive).forEach(ticket => { const entry = row(ticket.location || 'No location'); entry.openTickets += 1; if (!ticket.assignedEngineerId) entry.unassigned += 1; });
-  return [...rows.values()].sort((a, b) => b.openTickets - a.openTickets || a.name.localeCompare(b.name));
+  const row = name => { if (!rows.has(name)) rows.set(name, { name, engineers: 0, available: 0, active: 0, unassigned: 0 }); return rows.get(name); };
+  engineers.forEach(engineer => { const entry = row(engineer.location || 'No location'); entry.engineers += 1; if (engineer.status === 'Available') entry.available += 1; });
+  tickets.filter(isActive).forEach(ticket => { const entry = row(ticket.location || 'No location'); entry.active += 1; if (!ticket.assignedEngineerId) entry.unassigned += 1; });
+  return [...rows.values()].sort((a, b) => b.active - a.active || a.name.localeCompare(b.name));
 }
 
-const ATTENTION_LIMIT = 8;
+function operationsSummary({ active, risky, breached, unassigned }) {
+  if (!active) return 'No active tickets right now. New requests will appear here as they arrive.';
+  const slaText = !risky ? null : breached === risky ? `${risky === active ? 'all' : risky} past SLA or escalated` : `${risky} at SLA risk${breached ? `, ${breached} already past SLA` : ''}`;
+  const risks = [slaText, unassigned && `${unassigned} waiting for an engineer`].filter(Boolean);
+  return <><strong>{pluralize(active, 'active ticket')}</strong>. {risks.length ? <>{risks.join(', ')}.</> : 'All are assigned and within SLA.'}</>;
+}
+
+const startOfToday = () => { const date = new Date(); date.setHours(0, 0, 0, 0); return date; };
 
 export function ServiceDashboard() {
   const user = readSessionUser();
-  const [showAll, setShowAll] = useState(false);
-  const state = useAsync(() => Promise.all([getServiceDashboard(), getServiceTickets(), getEngineers()]).then(([dashboard, tickets, engineers]) => ({ ...dashboard, tickets, engineers })), []);
-  if (state.loading && !state.data) return <ServiceShell title="Overview"><PageSkeleton kpis={4} /></ServiceShell>;
+  const state = useAsync(() => Promise.all([getServiceTickets(), getEngineers()]).then(([tickets, engineers]) => ({ tickets, engineers })), []);
+  const activity = useAsync(() => getServiceActivity({ limit: 8, since: startOfToday() }), []);
+  if (state.loading && !state.data) return <ServiceShell title="Overview"><PageSkeleton kpis={5} /></ServiceShell>;
   if (state.error) return <ServiceShell title="Overview"><PageHeader title="Service operations" /><div className="card"><ErrorState title="Unable to load service operations" message={friendlyError(state.error)} onRetry={state.reload} /></div></ServiceShell>;
 
   const { tickets, engineers } = state.data;
   const active = tickets.filter(isActive);
   const risky = active.filter(slaRisk);
-  const breached = risky.filter(ticket => ['breached', 'escalated'].includes(slaRisk(ticket))).length;
+  const breached = risky.filter(ticket => slaRisk(ticket) !== 'risk').length;
+  const escalated = active.filter(ticket => ticket.escalationStatus === 'Escalated').length;
   const unassigned = active.filter(ticket => !ticket.assignedEngineerId).length;
-  const waitingParts = active.filter(ticket => ticket.status === 'Waiting for Parts').length;
-  const inProgress = active.filter(ticket => ticket.status === 'In Progress').length;
+  const count = status => tickets.filter(ticket => ticket.status === status).length;
   const attention = operationsAttention(tickets, engineers);
-  const capacity = capacityByLocation(engineers, tickets);
+  const locations = locationOverview(engineers, tickets);
+  const load = activeLoad(tickets);
+  const workload = [...engineers].map(engineer => ({ engineer, active: load.get(String(engineer._id)) || 0 })).sort((a, b) => b.active - a.active || String(a.engineer.name).localeCompare(String(b.engineer.name)));
+  const maxLoad = Math.max(1, ...workload.map(row => row.active));
+  const flaggedEngineers = new Set(attention.filter(item => item.key.startsWith('load-')).map(item => item.key.slice(5)));
   const available = engineers.filter(engineer => engineer.status === 'Available').length;
-  const recentActivity = [...tickets].sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt)).slice(0, 7);
+  const firstName = (user.name || '').split(' ')[0];
+  const issueCounts = active.reduce((map, ticket) => (ticket.issueType ? map.set(ticket.issueType, (map.get(ticket.issueType) || 0) + 1) : map), new Map());
+  const [topIssue, topIssueCount] = [...issueCounts.entries()].sort((a, b) => b[1] - a[1])[0] || [];
+  const showIssueInsight = active.length >= 5 && topIssueCount >= 3 && topIssueCount / active.length >= 0.3;
+  const events = activity.data?.events || [];
+  const recentTickets = [...tickets].sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt)).slice(0, 8);
 
   return <ServiceShell title="Overview">
-    <div className="dashboard-intro">
-      <div className="page-header-text">
-        <p className="eyebrow">{greeting()}{user.name ? `, ${user.name.split(' ')[0]}` : ''} · {todayLabel()}</p>
-        <h1 className="page-title">Service operations</h1>
-        <p className="page-description">{risky.length ? `${pluralize(risky.length, 'ticket')} at SLA risk${unassigned ? ` and ${unassigned} waiting for an engineer` : ''}.` : unassigned ? `${pluralize(unassigned, 'ticket')} waiting for an engineer. No SLA risks.` : 'All active tickets are assigned and within SLA.'}</p>
-      </div>
-      <div className="page-actions"><Button icon={ScanLine} to="/service/device-enrollment">Enroll device</Button><Button variant="primary" icon={ClipboardList} to="/service/tickets">Open ticket queue</Button></div>
-    </div>
+    <div className="cc-page">
+      <DashboardHeader
+        eyebrow={`iPlanet Service · ${todayLabel()}`}
+        title={`${greeting()}, ${firstName || 'Service Team'}`}
+        summary={operationsSummary({ active: active.length, risky: risky.length, breached, unassigned })}
+        actions={<><Button icon={ScanLine} to="/service/device-enrollment">Enroll device</Button><Button variant="primary" icon={ClipboardList} to="/service/tickets">Open ticket queue</Button></>} />
 
-    <section className="ops-strip" aria-label="Operations summary">
-      <Link className="ops-stat" to="/service/tickets"><strong>{active.length}</strong><span>Active</span><small>{inProgress} in progress</small></Link>
-      <Link className={`ops-stat ${breached ? 'ops-stat-critical' : risky.length ? 'ops-stat-warning' : ''}`} to="/service/tickets?slaStatus=At%20Risk"><strong>{risky.length}</strong><span>SLA risk</span><small>{breached ? `${breached} breached or escalated` : 'None breached'}</small></Link>
-      <Link className={`ops-stat ${unassigned ? 'ops-stat-warning' : ''}`} to="/service/tickets?status=Open&assignment=Unassigned"><strong>{unassigned}</strong><span>Unassigned</span><small>{available} engineer{available === 1 ? '' : 's'} available</small></Link>
-      <Link className="ops-stat" to="/service/tickets?status=Waiting%20for%20Parts"><strong>{waitingParts}</strong><span>Waiting for parts</span><small>Repairs paused</small></Link>
-    </section>
-
-    <section className="page-section" aria-labelledby="ops-attention">
-      <SectionHeader id="ops-attention" title="Needs attention" description={attention.length ? `${pluralize(attention.length, 'item')}, most urgent first` : undefined} actions={attention.length > ATTENTION_LIMIT ? <Button size="sm" variant="ghost" onClick={() => setShowAll(value => !value)}>{showAll ? 'Show fewer' : `Show all ${attention.length}`}</Button> : null} />
-      <div className="card card-flush">
-        <AttentionList items={showAll ? attention : attention.slice(0, ATTENTION_LIMIT)} empty={<AllClear>No SLA risks, unassigned tickets or paused repairs right now.</AllClear>} />
-      </div>
-    </section>
-
-    <div className="grid-2">
-      <section className="page-section" aria-labelledby="ops-capacity">
-        <SectionHeader id="ops-capacity" title="Engineer capacity" description={`${available} of ${pluralize(engineers.length, 'engineer')} available`} actions={<Button size="sm" variant="ghost" to="/service/engineers">Engineers</Button>} />
-        <div className="card card-flush">
-          {capacity.length ? <ul className="capacity-list">{capacity.map(row => {
-            const free = row.engineers.filter(engineer => engineer.status === 'Available').length;
-            return <li className="capacity-row" key={row.name}>
-              <span className="capacity-name"><strong>{row.name}</strong><small>{row.engineers.length ? `${free} of ${pluralize(row.engineers.length, 'engineer')} available` : 'No engineers based here'}</small></span>
-              <span className="capacity-meter" role="img" aria-label={`${free} available, ${row.engineers.length - free} not available`}>{row.engineers.map(engineer => <i key={engineer._id} className={engineer.status === 'Available' ? 'on' : 'busy'} title={`${engineer.name} · ${engineer.status} · ${engineer.assignedTicketCount || 0} open`} />)}</span>
-              <span className="capacity-figure"><strong>{row.openTickets}</strong> active{row.unassigned ? <> · <strong>{row.unassigned}</strong> unassigned</> : ''}</span>
-            </li>;
-          })}</ul> : <EmptyState compact icon={UsersRound} title="No engineers on record" description="Engineers added to the service team will appear here with their location and availability." />}
+      <section className="cc-band" aria-label="Service operations">
+        <p className="cc-band-label">Service operations</p>
+        <MetricSummary size="lg" label="Operations summary" items={[
+          { label: 'Active', value: active.length, hint: `${count('In Progress')} in progress`, to: '/service/tickets' },
+          { label: 'SLA risk', value: risky.length, hint: breached ? `${breached} breached or escalated` : 'None breached', tone: breached ? 'critical' : risky.length ? 'warning' : undefined, to: '/service/escalation' },
+          { label: 'Unassigned', value: unassigned, hint: `${pluralize(available, 'engineer')} available`, tone: unassigned ? 'warning' : undefined, to: '/service/tickets?status=Open&assignment=Unassigned' },
+          { label: 'Waiting for parts', value: count('Waiting for Parts'), hint: 'Repairs paused', to: '/service/tickets?status=Waiting%20for%20Parts' },
+          { label: 'Completed today', value: activity.data ? activity.data.completedToday : '—', hint: activity.error ? 'Unavailable' : 'Since midnight', to: '/service/tickets?status=Completed' },
+        ]} />
+        <div className="cc-band-divider" />
+        <div className="stack-12">
+          <div className="cc-band-head"><p className="cc-band-label">Service status</p><span className="cc-band-note">{pluralize(active.length + count('Completed'), 'ticket')} not yet closed</span></div>
+          <StatusDistribution label="Tickets by status" segments={[
+            { label: 'Open', value: count('Open'), tone: 'neutral', to: '/service/tickets?status=Open' },
+            { label: 'Engineer assigned', value: count('Engineer Assigned'), tone: 'sky', to: '/service/tickets?status=Engineer%20Assigned' },
+            { label: 'Accepted', value: count('Engineer Accepted'), tone: 'indigo', to: '/service/tickets?status=Engineer%20Accepted' },
+            { label: 'In progress', value: count('In Progress'), tone: 'info', to: '/service/tickets?status=In%20Progress' },
+            { label: 'Waiting for parts', value: count('Waiting for Parts'), tone: 'warning', to: '/service/tickets?status=Waiting%20for%20Parts' },
+            { label: 'Completed', value: count('Completed'), tone: 'success', to: '/service/tickets?status=Completed' },
+          ]} />
         </div>
       </section>
 
-      <section className="page-section" aria-labelledby="ops-activity">
-        <SectionHeader id="ops-activity" title="Recent service activity" actions={<Button size="sm" variant="ghost" to="/service/tickets">View queue</Button>} />
-        <div className="card card-flush">
-          {recentActivity.length ? <ul className="activity-list">{recentActivity.map(ticket => <li key={ticket._id}><Link className="activity-item" to={`/service/tickets/${ticket._id}`}>
-            <span className="activity-title"><span className="mono">{ticket.ticketId}</span><span>{companyOf(ticket)}</span></span>
-            <span className="activity-sub">{[ticket.issueType, ticket.deviceId?.model, ticket.assignedEngineer || 'Unassigned'].filter(Boolean).join(' · ')}</span>
-            <span className="activity-side"><Badge dot>{ticket.status}</Badge><time dateTime={ticket.updatedAt}>{formatRelative(ticket.updatedAt || ticket.createdAt)}</time></span>
-          </Link></li>)}</ul> : <EmptyState compact icon={Ticket} title="No tickets yet" description="When a corporate customer raises a request, it will appear here." />}
+      <div className="cc-grid">
+        <div className="cc-main">
+          <DashboardSection className="cc-order-1" title="Needs attention" description={attention.length ? `${pluralize(attention.length, 'item')}, most urgent first` : undefined}>
+            <AttentionFeed items={attention} limit={6} empty={<CalmState title="Everything is on track.">No SLA risks, unassigned tickets, paused repairs or workload imbalances right now.</CalmState>} />
+          </DashboardSection>
+
+          <DashboardSection className="cc-order-3" title="Recent service activity" actions={<Button size="sm" variant="ghost" to="/service/tickets">View queue</Button>}>
+            {activity.loading && !activity.data ? <div className="cc-panel card-body stack-12"><Skeleton width="70%" /><Skeleton width="50%" /><Skeleton width="60%" /></div>
+              : activity.error ? <ActivityFeed items={recentTickets.map(ticket => ({ key: ticket._id, to: `/service/tickets/${ticket._id}`, title: <><span className="mono">{ticket.ticketId}</span><span>{companyOf(ticket)}</span></>,
+                subtitle: [ticket.issueType, ticket.assignedEngineer || 'Unassigned'].filter(Boolean).join(' · '), status: ticket.status, time: ticket.updatedAt || ticket.createdAt }))} />
+              : <ActivityFeed
+                items={events.map(event => ({ key: event._id, to: `/service/tickets/${event.ticketId._id}`, title: <><span className="mono">{event.ticketId.ticketId}</span><span>{event.status || 'Update'}</span></>,
+                  subtitle: [event.message, event.ticketId.companyId?.name].filter(Boolean).join(' · '), status: event.ticketId.status, time: event.timestamp }))}
+                empty={<div className="cc-panel"><EmptyState compact icon={Ticket} title="No service activity yet" description="Ticket updates from the service team will appear here as they happen." /></div>} />}
+          </DashboardSection>
         </div>
-      </section>
+
+        <div className="cc-aside">
+          <DashboardSection className="cc-order-2" title="Quick actions">
+            <QuickActions actions={[
+              { label: 'Assign tickets', hint: unassigned ? `${unassigned} waiting for an engineer` : 'Every active ticket is assigned', icon: UserCheck, to: '/service/tickets?status=Open&assignment=Unassigned', count: unassigned, tone: 'warning' },
+              { label: 'SLA risks & escalations', hint: risky.length ? [`${risky.length} at risk`, escalated && `${escalated} escalated`].filter(Boolean).join(' · ') : 'Escalation matrix and rules', icon: ShieldAlert, to: '/service/escalation', count: risky.length, tone: breached ? 'critical' : 'warning' },
+              { label: 'Enroll device', hint: 'Register a customer device', icon: ScanLine, to: '/service/device-enrollment' },
+              { label: 'View engineers', hint: `${available} of ${pluralize(engineers.length, 'engineer')} available`, icon: UsersRound, to: '/service/engineers' },
+              { label: 'View reports', hint: 'Volume, locations and issue types', icon: BarChart3, to: '/service/reports' },
+            ]} />
+          </DashboardSection>
+
+          <DashboardSection className="cc-order-4" title="Engineer workload" description="Active tickets per engineer" actions={<Button size="sm" variant="ghost" to="/service/engineers">View engineers</Button>}>
+            {workload.length ? <ul className="cc-list">{workload.slice(0, 6).map(({ engineer, active: count }) => <li key={engineer._id}>
+              <Link className="cc-list-row cc-list-row-link" to={`/service/engineers?engineer=${engineer._id}`}>
+                <span className="cc-list-name"><strong>{engineer.name}</strong><small>{[engineer.location, engineer.status].filter(Boolean).join(' · ')}</small></span>
+                <span className="cc-list-figure"><strong>{count}</strong> active</span>
+                <span className="cc-list-bar" aria-hidden="true"><i className={flaggedEngineers.has(String(engineer._id)) ? 'cc-bar-warning' : ''} style={{ width: `${(count / maxLoad) * 100}%` }} /></span>
+              </Link>
+            </li>)}</ul> : <p className="cc-list-empty">No engineers on record yet.</p>}
+          </DashboardSection>
+
+          <DashboardSection className="cc-order-5" title="Service locations" description="Active work and engineer availability">
+            {locations.length ? <ul className="cc-list">{locations.map(row => <li key={row.name}>
+              <Link className="cc-list-row cc-list-row-link" to={row.name === 'No location' ? '/service/tickets' : `/service/tickets?location=${encodeURIComponent(row.name)}`}>
+                <span className="cc-list-name"><strong>{row.name}</strong><small>{row.engineers ? `${row.available} of ${pluralize(row.engineers, 'engineer')} available` : 'No engineers based here'}</small></span>
+                <span className="cc-list-figure"><strong>{row.active}</strong> active{row.unassigned ? ` · ${row.unassigned} unassigned` : ''}</span>
+              </Link>
+            </li>)}</ul> : <p className="cc-list-empty">No locations with engineers or active tickets yet.</p>}
+          </DashboardSection>
+
+          {showIssueInsight && <DashboardSection className="cc-order-6" title="Insights">
+            <Insight eyebrow="Service pattern" title={`${topIssue} accounts for ${topIssueCount} of ${active.length} active tickets`} action={{ label: 'View these tickets', to: `/service/tickets?search=${encodeURIComponent(topIssue)}` }}>
+              The most common issue in the current queue. Check parts stock and engineer skills for it.
+            </Insight>
+          </DashboardSection>}
+        </div>
+      </div>
     </div>
   </ServiceShell>;
 }

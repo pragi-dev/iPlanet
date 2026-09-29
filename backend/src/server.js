@@ -812,6 +812,19 @@ app.post('/api/iplanet/tickets/:id/complete', ...serviceAuth, async (req, res) =
 app.post('/api/iplanet/tickets/:id/close', ...serviceAuth, async (req, res) => engineerAction(req, res, 'Closed', 'Ticket closed after service completion.', 'Ticket closed'));
 app.post('/api/iplanet/tickets/:id/update', ...serviceAuth, async (req, res) => engineerAction(req, res, req.body.status, req.body.note || 'Service update recorded.'));
 app.get('/api/iplanet/dashboard', ...serviceAuth, async (_, res) => { const tickets = await Ticket.find(); await Promise.all(tickets.map(ticket => evaluateEscalation(ticket, true))); const count = status => tickets.filter(ticket => ticket.status === status).length; res.json({ stats: { newRequests: count('Open'), unassigned: tickets.filter(ticket => !ticket.assignedEngineerId).length, assigned: count('Engineer Assigned') + count('Engineer Accepted'), inProgress: count('In Progress'), waitingParts: count('Waiting for Parts'), completed: count('Completed'), closed: count('Closed'), activeEscalations: tickets.filter(ticket => ticket.escalationStatus === 'Escalated').length, atRisk: tickets.filter(ticket => ticket.escalationStatus === 'At Risk').length, breached: tickets.filter(ticket => ticket.escalationStatus === 'SLA Breached').length }, volume: await ticketVolumeByMonth(), locations: await Ticket.aggregate([{ $group: { _id: '$location', value: { $sum: 1 } } }, { $project: { _id: 0, name: '$_id', value: 1 } }]) }); });
+// Latest ticket timeline events across all tickets, plus how many tickets were
+// completed since `since` (the client's local midnight, so "today" matches the
+// viewer's day rather than the server's time zone).
+app.get('/api/iplanet/activity', ...serviceAuth, async (req, res) => {
+  const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 8, 1), 50);
+  const requested = req.query.since ? new Date(req.query.since) : null;
+  const since = requested && !Number.isNaN(requested.getTime()) ? requested : new Date(new Date().setHours(0, 0, 0, 0));
+  const [events, completedTicketIds] = await Promise.all([
+    TicketTimeline.find().sort({ timestamp: -1 }).limit(limit).populate({ path: 'ticketId', select: 'ticketId issueType status location companyId deviceId', populate: [{ path: 'companyId', select: 'name' }, { path: 'deviceId', select: 'model serialNumber' }] }),
+    TicketTimeline.distinct('ticketId', { status: 'Completed', timestamp: { $gte: since } }),
+  ]);
+  res.json({ events: events.filter(event => event.ticketId), completedToday: completedTicketIds.length, since });
+});
 app.get('/api/iplanet/reports', ...serviceAuth, async (_, res) => { const tickets = await Ticket.find().populate('deviceId'); const group = key => Object.entries(tickets.reduce((result, ticket) => { const value = key === 'deviceType' ? ticket.deviceId?.deviceType : ticket[key]; result[value || 'Other'] = (result[value || 'Other'] || 0) + 1; return result; }, {})).map(([name, value]) => ({ name, value })); res.json({ total: tickets.length, open: tickets.filter(t => t.status === 'Open').length, completed: tickets.filter(t => t.status === 'Completed').length, closed: tickets.filter(t => t.status === 'Closed').length, averageClosureTat: '2.4 days', locations: group('location'), deviceTypes: group('deviceType'), issueTypes: group('issueType') }); });
 app.get('/api/iplanet/notifications', ...serviceAuth, async (req, res) => {
   const query = { user: req.user.id, portalRole: 'iplanet_service' };

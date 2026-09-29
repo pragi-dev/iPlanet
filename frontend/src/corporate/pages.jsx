@@ -4,57 +4,102 @@ import { ChevronLeft, FilePlus2, KeyRound, Laptop, LogOut, Search, ShieldCheck, 
 import { Shell } from './components';
 import { getCoverage, getDashboardStats, getDevice, getDevices, getMyReviews, getProfile, getTickets } from './api';
 import {
-  AllClear, AttentionList, Avatar, Badge, Button, DeviceIcon, DisclosureRow, EmptyState, ErrorState, FilterBar, FilterSelect, InfoList, Insight, JourneyTrack, NextAction,
-  PageHeader, PageSkeleton, RowAction, SearchInput, Section, SectionHeader, Skeleton, Surface, TableCard, coverageExpiring, daysUntil, formatDate, formatDateTime, formatRelative, friendlyError, greeting,
-  idOf, isActiveTicket, pluralize, readSessionUser, recurringIssues, riskLabel, riskTone, slaLabel, slaRisk, todayLabel, useAIAssistant, useAsync,
+  ActivityFeed, AttentionFeed, Avatar, Badge, Button, CalmState, DashboardHeader, DashboardSection, DeviceIcon, DisclosureRow, EmptyState, ErrorState, FilterBar, FilterSelect, HealthRing, InfoList, Insight, JourneyTrack,
+  MetricSummary, NextAction, PageHeader, PageSkeleton, QuickActions, RowAction, SearchInput, Section, Skeleton, Surface, TableCard, coverageExpiring, daysUntil, formatDate, formatDateTime, formatRelative, friendlyError, greeting,
+  idOf, isActiveTicket, issueClusters, pluralize, readSessionUser, recurringIssues, riskLabel, riskTone, slaCountdown, slaLabel, slaRisk, todayLabel, useAIAssistant, useAsync,
 } from '../ui';
 
 const ticketStatuses = ['Open', 'Engineer Assigned', 'Engineer Accepted', 'In Progress', 'Waiting for Parts', 'Completed', 'Closed'];
 const toneRank = { critical: 0, warning: 1, info: 2, neutral: 3 };
 
-function ActivityList({ tickets, base }) {
-  return <ul className="activity-list">
-    {tickets.map(ticket => <li key={ticket._id}>
-      <Link to={`${base}/${ticket._id}`} className="activity-item">
-        <span className="activity-title"><span className="mono">{ticket.ticketId}</span><span>{ticket.issueType || 'Service request'}</span></span>
-        <span className="activity-sub">{[ticket.deviceId?.model, ticket.deviceId?.serialNumber, ticket.location].filter(Boolean).join(' · ')}</span>
-        <span className="activity-side"><Badge dot>{ticket.status}</Badge><time dateTime={ticket.updatedAt || ticket.createdAt}>{formatRelative(ticket.updatedAt || ticket.createdAt)}</time></span>
-      </Link>
-    </li>)}
-  </ul>;
+// A device is healthy when it has no active service request, no recurring
+// issue (same issue type twice in 90 days) and no warranty/AMC expiring soon.
+// Every figure is a count of device records; nothing is scored or weighted.
+function fleetHealth({ devices, tickets }) {
+  const inServiceIds = new Set(tickets.filter(isActiveTicket).map(ticket => idOf(ticket.deviceId)));
+  const flaggedIds = new Set(recurringIssues(tickets).map(group => group.deviceId));
+  devices.forEach(device => { if (coverageExpiring(device).length) flaggedIds.add(String(device._id)); });
+  const inService = devices.filter(device => inServiceIds.has(String(device._id)));
+  const attention = devices.filter(device => !inServiceIds.has(String(device._id)) && flaggedIds.has(String(device._id)));
+  const unassigned = devices.filter(device => device.deviceAllocationStatus === 'Unassigned' && !inServiceIds.has(String(device._id)));
+  return {
+    total: devices.length,
+    healthy: devices.length - inService.length - attention.length,
+    inService: inService.length,
+    attention: attention.length,
+    unassigned: unassigned.length,
+    inUse: devices.length - inService.length - unassigned.length,
+  };
 }
 
-// Builds the "needs your attention" feed from live records. Each item names
-// the record it refers to and carries the single action that resolves it.
+// Why an at-risk request is at risk, in the customer's terms.
+function requestReason(ticket) {
+  if (ticket.escalationStatus === 'Escalated') return 'iPlanet has escalated this request to its service management team.';
+  if (!ticket.assignedEngineerId) return 'iPlanet has not assigned an engineer yet.';
+  if (ticket.status === 'Engineer Assigned') return `${ticket.assignedEngineer || 'The engineer'} has not accepted the request yet.`;
+  if (ticket.status === 'Engineer Accepted') return `${ticket.assignedEngineer || 'The engineer'} has accepted but not started work.`;
+  if (ticket.status === 'Waiting for Parts') return 'The repair is paused while replacement parts arrive.';
+  return `The repair is in progress with ${ticket.assignedEngineer || 'the assigned engineer'}.`;
+}
+
+function slaMeta(ticket) {
+  const countdown = slaCountdown(ticket);
+  if (!countdown) return null;
+  return countdown.overdue ? `Target passed ${countdown.text} ago` : `Target in ${countdown.text}`;
+}
+
+// Builds the "needs your attention" feed from live records. Each item says
+// what needs attention, why, and carries the one action that resolves it.
 function corporateAttention({ tickets, devices, reviewedIds }) {
   const items = [];
-  tickets.filter(slaRisk).forEach(ticket => {
+  tickets.filter(slaRisk).sort((a, b) => new Date(a.slaTargetAt) - new Date(b.slaTargetAt)).forEach(ticket => {
     const risk = slaRisk(ticket);
-    items.push({ key: `sla-${ticket._id}`, tone: riskTone(risk), kicker: riskLabel(risk), title: `${ticket.ticketId} · ${ticket.issueType || 'Service request'}`,
-      detail: [ticket.deviceId?.model, ticket.slaTargetAt ? `Target ${formatDateTime(ticket.slaTargetAt)}` : null, ticket.assignedEngineerId ? `Engineer ${ticket.assignedEngineer}` : 'Awaiting engineer'].filter(Boolean).join(' · '),
+    items.push({ key: `sla-${ticket._id}`, tone: riskTone(risk), category: riskLabel(risk), meta: slaMeta(ticket), title: `${ticket.ticketId} · ${ticket.issueType || 'Service request'}`,
+      reason: requestReason(ticket), context: [ticket.deviceId?.model, ticket.deviceId?.serialNumber, ticket.deviceId?.employeeName].filter(Boolean).join(' · '),
       action: { label: 'Track request', to: `/corporate/service-requests/${ticket._id}` } });
   });
   recurringIssues(tickets).forEach(group => {
-    items.push({ key: `rec-${group.deviceId}-${group.issueType}`, tone: 'warning', kicker: 'Recurring issue', title: group.device?.model || 'Device',
-      detail: `${pluralize(group.count, `${group.issueType} request`)} in the last 90 days${group.device?.serialNumber ? ` · ${group.device.serialNumber}` : ''}`,
-      action: { label: 'View device', to: `/corporate/devices/${group.deviceId}` } });
+    items.push({ key: `rec-${group.deviceId}-${group.issueType}`, tone: 'warning', category: 'Recurring issue', meta: `Last reported ${formatRelative(new Date(group.lastAt))}`,
+      title: [group.device?.model || 'Device', group.device?.employeeName].filter(Boolean).join(' · '),
+      reason: `${pluralize(group.count, `${group.issueType.toLowerCase()} request`)} in the last 90 days.`,
+      context: group.device?.serialNumber, action: { label: 'View device', to: `/corporate/devices/${group.deviceId}` } });
   });
   const expiring = devices.flatMap(device => coverageExpiring(device).map(item => ({ device, ...item }))).sort((a, b) => new Date(a.date) - new Date(b.date));
-  expiring.slice(0, 3).forEach(({ device, kind, date }) => {
+  const expiringDevices = new Set(expiring.map(item => String(item.device._id))).size;
+  if (expiringDevices === 1) {
+    const [{ device, kind, date }] = expiring;
     const days = daysUntil(date);
-    items.push({ key: `cov-${device._id}-${kind}`, tone: 'warning', kicker: `${kind} expiring`, title: device.model,
-      detail: [device.serialNumber, date ? `Ends ${formatDate(date)}${days !== null && days >= 0 && days <= 365 ? ` · in ${pluralize(days, 'day')}` : ''}` : 'Expiry date not on record', device.employeeName].filter(Boolean).join(' · '),
-      action: { label: 'View device', to: `/corporate/devices/${device._id}` } });
-  });
-  if (expiring.length > 3) items.push({ key: 'cov-more', tone: 'warning', kicker: 'Coverage expiring', title: `${pluralize(expiring.length - 3, 'more device')} with coverage expiring soon`, action: { label: 'View coverage', to: '/corporate/warranty?filter=Expiring%20Soon' } });
+    items.push({ key: `cov-${device._id}`, tone: 'warning', category: 'Coverage expiring', meta: days !== null && days >= 0 ? `In ${pluralize(days, 'day')}` : null, title: device.model,
+      reason: date ? `${kind} ends on ${formatDate(date)}. Renew to keep repairs and parts covered.` : `${kind} is expiring soon. Renew to keep repairs and parts covered.`,
+      context: [device.serialNumber, device.employeeName].filter(Boolean).join(' · '), action: { label: 'Review coverage', to: `/corporate/devices/${device._id}` } });
+  } else if (expiringDevices > 1) {
+    const [first] = expiring;
+    items.push({ key: 'cov-many', tone: 'warning', category: 'Coverage expiring', title: `${expiringDevices} devices`,
+      reason: `Warranty or AMC is expiring soon${first.date ? ` — the first ends on ${formatDate(first.date)} (${first.device.model})` : ''}.`,
+      action: { label: 'Review coverage', to: '/corporate/warranty?filter=Expiring%20Soon' } });
+  }
   const unassigned = devices.filter(device => device.deviceAllocationStatus === 'Unassigned');
-  if (unassigned.length) items.push({ key: 'unassigned', tone: 'info', kicker: 'Unassigned devices', title: unassigned.length === 1 ? `${unassigned[0].model} is ready to assign` : `${unassigned.length} devices are ready to assign`, detail: 'Assign them to employees so service requests can be traced to a user.', action: { label: unassigned.length === 1 ? 'Assign device' : 'Assign devices', to: '/corporate/unassigned-devices' } });
+  if (unassigned.length) items.push({ key: 'unassigned', tone: 'info', category: 'Unassigned devices',
+    title: unassigned.length === 1 ? `${unassigned[0].model} is not assigned to an employee` : `${unassigned.length} devices are not assigned to employees`,
+    reason: 'Assign them so service requests can be traced to the person using the device.',
+    context: unassigned.length > 1 ? unassigned.slice(0, 3).map(device => device.model).join(', ') + (unassigned.length > 3 ? ` and ${unassigned.length - 3} more` : '') : unassigned[0].serialNumber,
+    action: { label: unassigned.length === 1 ? 'Assign device' : 'Assign devices', to: '/corporate/unassigned-devices' } });
   if (reviewedIds) {
     const awaiting = tickets.filter(ticket => ticket.status === 'Closed' && !reviewedIds.has(String(ticket._id)));
-    if (awaiting.length === 1) items.push({ key: 'review', tone: 'info', kicker: 'Your feedback', title: `Rate the service for ${awaiting[0].ticketId}`, detail: [awaiting[0].issueType, awaiting[0].deviceId?.model].filter(Boolean).join(' · '), action: { label: 'Rate service', to: `/corporate/reviews/${awaiting[0]._id}` } });
-    if (awaiting.length > 1) items.push({ key: 'review', tone: 'info', kicker: 'Your feedback', title: `${awaiting.length} closed requests are awaiting your review`, action: { label: 'Rate service', to: '/corporate/reviews' } });
+    if (awaiting.length === 1) items.push({ key: 'review', tone: 'info', category: 'Your feedback', title: `${awaiting[0].ticketId} · ${awaiting[0].issueType || 'Service request'}`,
+      reason: 'This request is closed. Rate the service to let iPlanet know how it went.', context: awaiting[0].deviceId?.model, action: { label: 'Rate service', to: `/corporate/reviews/${awaiting[0]._id}` } });
+    if (awaiting.length > 1) items.push({ key: 'review', tone: 'info', category: 'Your feedback', title: `${awaiting.length} closed requests`,
+      reason: 'These requests are closed. Rate the service to let iPlanet know how it went.', action: { label: 'Rate service', to: '/corporate/reviews' } });
   }
   return items.sort((a, b) => toneRank[a.tone] - toneRank[b.tone]);
+}
+
+function fleetSummary(health, attentionCount, activeCount) {
+  if (!health.total) return 'No devices are registered for your organization yet.';
+  return <>
+    <strong>{health.healthy} of {pluralize(health.total, 'device')}</strong> {health.healthy === 1 ? 'is' : 'are'} healthy{activeCount ? `, with ${pluralize(activeCount, 'request')} in service` : ''}.{' '}
+    {attentionCount ? <><strong>{pluralize(attentionCount, 'item')}</strong> {attentionCount === 1 ? 'needs' : 'need'} your attention.</> : 'Nothing needs your attention.'}
+  </>;
 }
 
 export function Dashboard() {
@@ -62,97 +107,98 @@ export function Dashboard() {
   const ai = useAIAssistant();
   // Stats run first: that request re-evaluates SLA state server-side, so the
   // ticket list read afterwards reflects current escalation status.
-  const main = useAsync(() => getDashboardStats().then(stats => getTickets().then(tickets => ({ stats, tickets }))), []);
+  const main = useAsync(() => getDashboardStats().then(() => getTickets()), []);
   const coverage = useAsync(getCoverage, []);
   const reviews = useAsync(getMyReviews, []);
 
   if (main.loading && !main.data) return <Shell title="Overview"><PageSkeleton kpis={3} /></Shell>;
   if (main.error) return <Shell title="Overview"><PageHeader title="Overview" /><div className="card"><ErrorState title="Unable to load your service overview" message={friendlyError(main.error)} onRetry={main.reload} /></div></Shell>;
 
-  const { stats, tickets } = main.data;
+  const tickets = main.data;
   const firstName = (user.name || '').split(' ')[0];
   const devices = coverage.data?.devices || [];
   const summary = coverage.data?.summary || {};
+  const coverageReady = Boolean(coverage.data);
   const active = tickets.filter(isActiveTicket);
   const atRisk = active.filter(slaRisk);
-  const inServiceIds = new Set(active.map(ticket => idOf(ticket.deviceId)));
-  const inService = devices.filter(device => inServiceIds.has(String(device._id))).length;
-  const unassigned = devices.filter(device => device.deviceAllocationStatus === 'Unassigned' && !inServiceIds.has(String(device._id))).length;
-  const operating = Math.max(0, devices.length - inService - unassigned);
+  const health = fleetHealth({ devices, tickets });
   const reviewedIds = reviews.data ? new Set(reviews.data.map(review => idOf(review.ticketId))) : null;
-  const awaitingReview = reviewedIds ? tickets.filter(ticket => ticket.status === 'Closed' && !reviewedIds.has(String(ticket._id))).length : null;
-  const attention = corporateAttention({ tickets, devices, reviewedIds });
+  const attention = coverageReady ? corporateAttention({ tickets, devices, reviewedIds }) : [];
   const recent = [...tickets].sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt)).slice(0, 5);
-  const share = count => `${devices.length ? (count / devices.length) * 100 : 0}%`;
+  const [cluster] = issueClusters(tickets);
+  const ringTone = health.total && health.healthy / health.total < 0.6 ? 'warning' : 'success';
 
   return <Shell title="Overview">
-    <div className="dashboard-intro">
-      <div className="page-header-text">
-        <p className="eyebrow">{todayLabel()}</p>
-        <h1 className="page-title">{greeting()}{firstName ? `, ${firstName}` : ''}.</h1>
-        <p className="page-description">Your service overview{user.company ? ` for ${user.company}` : ''}.</p>
-      </div>
-      <Button variant="primary" icon={FilePlus2} to="/corporate/raise-request">Raise request</Button>
-    </div>
+    <div className="cc-page">
+      <DashboardHeader
+        eyebrow={todayLabel()}
+        title={`${greeting()}${firstName ? `, ${firstName}` : ''}`}
+        summary={coverageReady ? fleetSummary(health, attention.length, active.length) : `Your service overview${user.company ? ` for ${user.company}` : ''}.`}
+        actions={<Button variant="primary" icon={FilePlus2} to="/corporate/raise-request">Raise request</Button>} />
 
-    <section className="overview-hero" aria-label="Fleet status">
-      <div>
-        <p className="overview-label">Fleet status</p>
-        {coverage.loading && !coverage.data ? <div className="stack-12" style={{ marginTop: 12 }}><Skeleton width={180} height={52} /><Skeleton width="80%" /><Skeleton height={8} /></div>
+      <section className="cc-band" aria-label="Fleet health">
+        <div className="cc-band-head"><p className="cc-band-label">Fleet health</p>{user.company && <span className="cc-band-note">{user.company}</span>}</div>
+        {coverage.loading && !coverage.data ? <div className="cc-fleet"><Skeleton width={148} height={148} radius={74} /><div className="stack-12"><Skeleton width="50%" height={24} /><Skeleton width="80%" /><Skeleton height={48} /></div></div>
           : coverage.error ? <ErrorState compact title="Device status unavailable" message={friendlyError(coverage.error)} onRetry={coverage.reload} />
           : !devices.length ? <EmptyState compact icon={Laptop} title="No devices registered yet" description="Devices enrolled by iPlanet Service for your organization will appear here." />
-          : <>
-            <div className="overview-figure"><strong>{operating}</strong><span>of {pluralize(devices.length, 'device')} operating normally</span></div>
-            <p className="overview-caption">{inService ? `${pluralize(inService, 'device')} with iPlanet Service right now.` : 'No devices are currently in service.'}</p>
-            <div className="split-bar" role="img" aria-label={`${operating} operating normally, ${inService} in service, ${unassigned} unassigned`}>
-              <i className="tone-fill-success" style={{ width: share(operating) }} />
-              <i className="tone-fill-info" style={{ width: share(inService) }} />
-              <i className="tone-fill-neutral" style={{ width: share(unassigned) }} />
+          : <div className="cc-fleet">
+            <HealthRing value={health.healthy} total={health.total} label="healthy" tone={ringTone} />
+            <div className="cc-fleet-body">
+              <div>
+                <p className="cc-fleet-statement">{health.healthy === health.total ? 'Every device is healthy.' : `${health.healthy} of ${pluralize(health.total, 'device')} healthy`}</p>
+                <p className="cc-fleet-caption">Healthy means no open service request, no repeated issue in the last 90 days and no warranty or AMC expiring soon.</p>
+              </div>
+              <MetricSummary label="Device status" items={[
+                { label: 'Devices', value: health.total, to: '/corporate/devices' },
+                { label: 'In use', value: health.inUse, hint: 'Assigned, not in service' },
+                { label: 'In service', value: health.inService, hint: atRisk.length ? `${atRisk.length} at SLA risk` : 'With iPlanet now', tone: atRisk.length ? 'warning' : undefined, to: '/corporate/service-requests' },
+                { label: 'Need attention', value: health.attention, hint: 'Recurring issue or coverage', tone: health.attention ? 'warning' : undefined },
+                { label: 'Unassigned', value: health.unassigned, hint: 'No employee yet', to: health.unassigned ? '/corporate/unassigned-devices' : undefined },
+              ]} />
+              <p className="cc-coverage-line">
+                <Link to="/corporate/warranty?filter=Covered"><span>Covered</span><strong>{devices.filter(device => device.coverageStatus === 'Covered').length}</strong></Link>
+                <Link to="/corporate/warranty?filter=Expiring%20Soon"><span>Expiring soon</span><strong>{summary.expiringSoon ?? 0}</strong></Link>
+                <Link to="/corporate/warranty?filter=Expired"><span>Expired</span><strong>{summary.expired ?? 0}</strong></Link>
+              </p>
             </div>
-            <div className="split-legend" aria-hidden="true">
-              <span><i className="tone-fill-success" />Operating {operating}</span>
-              <span><i className="tone-fill-info" />In service {inService}</span>
-              <span><i className="tone-fill-neutral" />Unassigned {unassigned}</span>
-            </div>
-          </>}
-      </div>
-      <div>
-        <div className="stat-list">
-          <Link className={`stat-row ${atRisk.length ? 'stat-row-warning' : ''}`} to="/corporate/service-requests"><span>Active requests{atRisk.length ? <span className="stat-hint">{atRisk.length} need attention</span> : null}</span><strong>{active.length}</strong></Link>
-          <Link className="stat-row" to="/corporate/service-requests?status=Closed"><span>Resolved<span className="stat-hint">Completed or closed</span></span><strong>{(stats.completedTickets || 0) + (stats.closedTickets || 0)}</strong></Link>
-          <Link className={`stat-row ${summary.expiringSoon ? 'stat-row-warning' : ''}`} to="/corporate/warranty?filter=Expiring%20Soon"><span>Coverage expiring soon</span><strong>{coverage.data ? summary.expiringSoon : '—'}</strong></Link>
-          <Link className="stat-row" to="/corporate/warranty?filter=Expired"><span>Coverage expired</span><strong>{coverage.data ? summary.expired : '—'}</strong></Link>
-          {awaitingReview !== null && <Link className="stat-row" to="/corporate/reviews"><span>Awaiting your review</span><strong>{awaitingReview}</strong></Link>}
+          </div>}
+      </section>
+
+      <div className="cc-grid">
+        <div className="cc-main">
+          <DashboardSection className="cc-order-1" title="Needs your attention" description={attention.length ? `${pluralize(attention.length, 'item')}, most urgent first` : undefined}>
+            {!coverageReady && !coverage.error ? <div className="cc-panel card-body stack-12"><Skeleton width="60%" /><Skeleton width="40%" /></div>
+              : <AttentionFeed items={attention} limit={5} empty={<CalmState title="Everything is up to date.">Every active request is within its service targets and no device needs action.</CalmState>} />}
+          </DashboardSection>
+
+          <DashboardSection className="cc-order-3" title="Recent service" actions={tickets.length ? <Button variant="ghost" size="sm" to="/corporate/service-requests">View all</Button> : null}>
+            <ActivityFeed
+              items={recent.map(ticket => ({ key: ticket._id, to: `/corporate/service-requests/${ticket._id}`, title: <><span className="mono">{ticket.ticketId}</span><span>{ticket.issueType || 'Service request'}</span></>,
+                subtitle: [ticket.deviceId?.model, ticket.deviceId?.employeeName || ticket.deviceId?.serialNumber].filter(Boolean).join(' · '), status: ticket.status, time: ticket.updatedAt || ticket.createdAt }))}
+              empty={<div className="cc-panel"><EmptyState compact icon={Ticket} title="No service requests yet" description="When your organization raises a request, its progress will appear here." action={<Button size="sm" variant="primary" icon={FilePlus2} to="/corporate/raise-request">Raise service request</Button>} /></div>} />
+          </DashboardSection>
+        </div>
+
+        <div className="cc-aside">
+          <DashboardSection className="cc-order-2" title="Quick actions">
+            <QuickActions actions={[
+              { label: 'Raise service request', hint: 'Report an issue on any device', icon: FilePlus2, to: '/corporate/raise-request' },
+              { label: 'Find device', hint: devices.length ? `Search ${pluralize(devices.length, 'device')}` : 'Search by serial, model or employee', icon: Search, to: '/corporate/devices' },
+              { label: 'Check coverage', hint: summary.expiringSoon ? `${summary.expiringSoon} expiring soon` : 'Warranty and AMC status', icon: ShieldCheck, to: summary.expiringSoon ? '/corporate/warranty?filter=Expiring%20Soon' : '/corporate/warranty', count: summary.expiringSoon, tone: 'warning' },
+              { label: 'Track request', hint: active.length ? `${pluralize(active.length, 'request')} in progress` : 'No requests in progress', icon: Ticket, to: '/corporate/service-requests', count: active.length },
+              ai.available && { label: 'Ask AI', hint: 'Troubleshoot before raising a request', icon: Sparkles, onClick: ai.open },
+            ]} />
+          </DashboardSection>
+
+          {cluster && <DashboardSection className="cc-order-4" title="Insights">
+            <Insight eyebrow="Service pattern" title={`${cluster.devices} devices in ${cluster.location} reported ${cluster.issueType.toLowerCase()} issues`}
+              action={{ label: 'View these requests', to: `/corporate/service-requests?search=${encodeURIComponent(cluster.issueType)}` }}>
+              {pluralize(cluster.tickets.length, 'service request')} since {formatDate(cluster.since)}. A shared cause at this location may be worth checking.
+            </Insight>
+          </DashboardSection>}
         </div>
       </div>
-    </section>
-
-    <section className="page-section" aria-labelledby="attention">
-      <SectionHeader id="attention" title="Needs your attention" description={attention.length ? `${pluralize(attention.length, 'item')} to review` : undefined} />
-      <div className="card card-flush">
-        {coverage.loading && !coverage.data ? <div className="card-body stack-12"><Skeleton width="60%" /><Skeleton width="40%" /></div>
-          : <AttentionList items={attention} empty={<AllClear>Nothing needs your attention. Every active request is within its service targets.</AllClear>} />}
-      </div>
-    </section>
-
-    <section className="page-section" aria-labelledby="quick-actions">
-      <SectionHeader id="quick-actions" title="Quick actions" />
-      <div className="quick-links">
-        <Link className="quick-link" to="/corporate/raise-request"><FilePlus2 size={16} aria-hidden="true" />Raise request</Link>
-        <Link className="quick-link" to="/corporate/devices"><Search size={16} aria-hidden="true" />Find device</Link>
-        <Link className="quick-link" to="/corporate/warranty"><ShieldCheck size={16} aria-hidden="true" />Check coverage</Link>
-        <Link className="quick-link" to="/corporate/service-requests"><Ticket size={16} aria-hidden="true" />Track request</Link>
-        {ai.available && <button type="button" className="quick-link" onClick={ai.open}><Sparkles size={16} aria-hidden="true" />Ask AI</button>}
-      </div>
-    </section>
-
-    <section className="page-section" aria-labelledby="recent-activity">
-      <SectionHeader id="recent-activity" title="Recent service" actions={tickets.length ? <Button variant="ghost" size="sm" to="/corporate/service-requests">View all</Button> : null} />
-      <div className="card card-flush">
-        {recent.length ? <ActivityList tickets={recent} base="/corporate/service-requests" />
-          : <EmptyState compact icon={Ticket} title="No service requests yet" description="When your organization raises a request, its progress will appear here." action={<Button size="sm" variant="primary" icon={FilePlus2} to="/corporate/raise-request">Raise service request</Button>} />}
-      </div>
-    </section>
+    </div>
   </Shell>;
 }
 

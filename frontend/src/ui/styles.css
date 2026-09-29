@@ -550,8 +550,6 @@ img { max-width: 100%; display: block; }
 /* --------------------------------------------------------------------------
    Dashboard patterns
    -------------------------------------------------------------------------- */
-.dashboard-intro { display: flex; justify-content: space-between; align-items: flex-end; gap: var(--space-5); flex-wrap: wrap; padding-top: var(--space-2); }
-.dashboard-intro .page-title { font-size: 40px; }
 .quick-actions { display: grid; grid-template-columns: repeat(var(--qa-columns, 4), minmax(0, 1fr)); gap: var(--space-3); }
 .quick-action {
   display: grid; gap: var(--space-3); align-content: start; padding: var(--space-5); background: var(--color-surface); border-radius: var(--radius-lg);
@@ -1084,7 +1082,7 @@ button.chip:hover { background: var(--color-fill-strong); }
   .breadcrumb [aria-current='page'] { font-weight: 600; font-size: 15px; }
   .topbar-divider { display: none; }
   .content-inner { padding: var(--space-6) var(--space-4) 96px; gap: var(--space-6); }
-  .page-title, .dashboard-intro .page-title, .asset-hero .page-title { font-size: 30px; }
+  .page-title, .asset-hero .page-title { font-size: 30px; }
   .page-description { font-size: 16px; }
   .page-actions { width: 100%; }
   .page-actions .btn { flex: 1; }

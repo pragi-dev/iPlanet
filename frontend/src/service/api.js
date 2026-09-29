@@ -18,6 +18,7 @@ async function request(path, options = {}) {
 }
 export async function login(email, password) { return request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }); }
 export async function getServiceDashboard() { return request('/iplanet/dashboard'); }
+export async function getServiceActivity({ limit = 8, since } = {}) { const params = new URLSearchParams({ limit: String(limit), ...(since ? { since: new Date(since).toISOString() } : {}) }); return request(`/iplanet/activity?${params}`); }
 export async function getServiceTickets(filters = {}) { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value && value !== 'All')); return request(`/iplanet/tickets${params.toString() ? `?${params}` : ''}`); }
 export async function getServiceTicket(id) { return request(`/iplanet/tickets/${id}`); }
 export async function getServiceReviews(filters = {}) { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value && value !== 'All')); return request(`/service/reviews${params.toString() ? `?${params}` : ''}`); }
