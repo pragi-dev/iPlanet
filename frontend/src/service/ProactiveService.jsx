@@ -4,7 +4,7 @@ import { AlertTriangle, BellRing, CalendarCheck2, CalendarClock, CircleSlash, La
 import { ServiceShell } from './components';
 import { getProactiveFollowUp, getProactiveFollowUps, proactiveFollowUpAction, updateDeviceServicePlan } from './api';
 import {
-  Badge, Button, Drawer, EmptyState, ErrorState, Field, FilterBar, FilterSelect, InfoList, InlineAlert, PageHeader, ProactiveStatus, SearchInput, ServiceLifecycle,
+  Badge, Button, Drawer, EmptyState, ErrorState, Field, FilterSelect, InfoList, InlineAlert, PageHeader, ProactiveStatus, SearchInput, ServiceLifecycle,
   Skeleton, TableCard, dueLabel, formatDate, formatDateTime, friendlyError, pluralize, useAsync,
 } from '../ui';
 
@@ -81,8 +81,12 @@ export function ProactiveService() {
       error={state.error && friendlyError(state.error)}
       errorTitle="Unable to load proactive follow-ups"
       onRetry={state.reload}
-      toolbar={<FilterBar summary={data ? <span className="row">{state.loading && <span className="text-muted">Updating…</span>}{pluralize(data.items.length, 'device')}{active && <Button size="sm" variant="ghost" icon={X} onClick={clear}>Clear filters</Button>}</span> : null}>
-        <SearchInput value={searchText} onChange={value => { setSearchText(value); setParam({ search: value }); }} placeholder="Search device, serial, corporate, employee or location" label="Search follow-ups" />
+      toolbar={<div className="pro-toolbar">
+        <div className="pro-toolbar-top">
+        <SearchInput className="pro-search" value={searchText} onChange={value => { setSearchText(value); setParam({ search: value }); }} placeholder="Search device, serial, corporate, employee or location" label="Search follow-ups" />
+          {data && <span className="pro-toolbar-count">{state.loading && <span className="text-muted">Updating…</span>}{pluralize(data.items.length, 'device')}{active && <Button size="sm" variant="ghost" icon={X} onClick={clear}>Clear filters</Button>}</span>}
+        </div>
+        <div className="pro-filter-grid">
         {view === 'active' && <FilterSelect label="Status" value={filters.status} onChange={value => update('status', value)} options={STATUS_OPTIONS} allLabel="All statuses" />}
         <FilterSelect label="Corporate" value={filters.companyId} onChange={value => update('companyId', value)} options={facets.companies.map(company => ({ value: company._id, label: company.name }))} allLabel="All corporates" />
         <FilterSelect label="Service centre" value={filters.serviceCentreId} onChange={value => update('serviceCentreId', value)} options={facets.serviceCentres.map(centre => ({ value: centre._id, label: centre.name }))} allLabel="All service centres" />
@@ -91,21 +95,22 @@ export function ProactiveService() {
         <FilterSelect label="Device type" value={filters.deviceType} onChange={value => update('deviceType', value)} options={facets.deviceTypes} allLabel="All device types" />
         <FilterSelect label="Warranty" value={filters.warranty} onChange={value => update('warranty', value)} options={COVERAGE_OPTIONS} allLabel="Any warranty" />
         <FilterSelect label="AMC" value={filters.amc} onChange={value => update('amc', value)} options={COVERAGE_OPTIONS} allLabel="Any AMC" />
-      </FilterBar>}
+        </div>
+      </div>}
       isEmpty={!data?.items.length}
       empty={active ? <EmptyState icon={Search} title="No follow-ups match these filters" description="Try a different search term or clear the filters." action={<Button size="sm" onClick={clear}>Clear filters</Button>} />
         : <EmptyState icon={CalendarCheck2} title={view === 'completed' ? 'Nothing completed in the last 30 days' : "You're all caught up."} description={view === 'completed' ? 'Completed and declined follow-ups will be listed here.' : `Devices appear here ${data?.config?.upcomingDays || 30} days before their recommended service date.`} />}
     >
       <table className="table table-compact pro-table">
-        <thead><tr><th>Device</th><th>Corporate</th><th className="pro-col-optional">Location</th><th>Service due</th><th className="pro-col-optional">Coverage</th><th>Status</th><th className="pro-col-optional">Last contact</th><th><span className="sr-only">Action</span></th></tr></thead>
+        <thead><tr><th>Device</th><th>Corporate</th><th className="pro-col-optional">Location</th><th>Service due</th><th className="pro-col-optional">Coverage</th><th>Status</th><th className="pro-col-optional pro-col-wide">Last contact</th><th><span className="sr-only">Action</span></th></tr></thead>
         <tbody>{(data?.items || []).map(item => <tr key={item._id} className="row-clickable" onClick={event => { if (!event.target.closest('button, a')) setParam({ followUp: item._id }); }}>
           <td className="pro-cell-device"><span className="cell-primary">{item.device.model}</span><span className="cell-sub mono">{item.device.serialNumber}</span></td>
           <td data-label="Corporate">{item.company?.name || '—'}<span className="cell-sub">{item.device.employeeName || 'Unassigned'}</span></td>
-          <td className="pro-col-optional" data-label="Location">{item.device.location || '—'}<span className="cell-sub">{item.serviceCentre?.name || 'No service centre'}</span></td>
+          <td className="pro-col-optional pro-nowrap" data-label="Location">{item.device.location || '—'}<span className="cell-sub">{item.serviceCentre?.name || 'No service centre'}</span></td>
           <td data-label="Service due"><span className={`pro-due pro-due-${dueTone(item)}`}><strong>{dueLabel(item.daysUntil)}</strong><small>{formatDate(item.nextServiceDate)}</small></span></td>
           <td className="pro-col-optional" data-label="Coverage"><span className="pro-coverage"><span>Warranty · {item.coverage.warrantyStatus || '—'}</span><span>AMC · {item.coverage.amcStatus || '—'}</span></span></td>
           <td className="pro-cell-status"><ProactiveStatus status={item.status} /></td>
-          <td className="pro-col-optional pro-cell-wide" data-label="Last contact">{item.lastContact ? <>{item.lastContact.outcome}<span className="cell-sub">{formatDate(item.lastContact.at)}{item.lastContact.byName ? ` · ${item.lastContact.byName}` : ''}</span></> : <span className="text-muted">Not contacted</span>}</td>
+          <td className="pro-col-optional pro-col-wide pro-cell-wide" data-label="Last contact">{item.lastContact ? <>{item.lastContact.outcome}<span className="cell-sub">{formatDate(item.lastContact.at)}{item.lastContact.byName ? ` · ${item.lastContact.byName}` : ''}</span></> : <span className="text-muted">Not contacted</span>}</td>
           <td className="pro-cell-actions"><div className="pro-actions"><Button size="sm" variant={item.actionable ? "primary" : "secondary"} icon={item.actionable ? PhoneCall : undefined} onClick={() => setParam({ followUp: item._id })}>{item.actionable ? "Contact" : "Review"}</Button></div></td>
         </tr>)}</tbody>
       </table>

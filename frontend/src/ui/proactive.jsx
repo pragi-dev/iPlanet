@@ -21,7 +21,15 @@ export function dueLabel(daysUntil) {
   if (daysUntil === 0) return 'Today';
   if (daysUntil === 1) return 'Tomorrow';
   if (daysUntil === -1) return 'Yesterday';
-  return daysUntil > 0 ? `In ${daysUntil} days` : `${-daysUntil} days ago`;
+  const span = Math.abs(daysUntil);
+  // Long spans read better in months or years than as a raw day count.
+  let text = `${span} days`;
+  if (span >= 60) {
+    const months = Math.round(span / 30.44);
+    const years = Math.floor(months / 12);
+    text = years ? `${years} yr${years === 1 ? '' : 's'}${months % 12 ? ` ${months % 12} mo` : ''}` : `${months} months`;
+  }
+  return daysUntil > 0 ? `In ${text}` : `${text} ago`;
 }
 
 // How a corporate customer sees a recommendation's state.

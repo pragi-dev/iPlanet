@@ -13,7 +13,7 @@
 /* Summary chips that double as status filters */
 .pro-summary { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .pro-chip {
-  display: inline-flex; align-items: baseline; gap: 8px; height: 36px; padding: 0 14px; border: 1px solid var(--color-border); border-radius: var(--radius-pill);
+  display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px; line-height: 1; border: 1px solid var(--color-border); border-radius: var(--radius-pill);
   background: var(--color-surface); font-size: 14px; color: var(--color-text-secondary); transition: background-color 160ms var(--ease), border-color 160ms var(--ease), color 160ms var(--ease);
 }
 .pro-chip strong { font-size: 15px; font-weight: 600; color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
@@ -24,10 +24,19 @@
 .pro-chip-critical strong { color: var(--color-error-text); }
 .pro-chip-warning strong { color: var(--color-warning-text); }
 
+/* Toolbar: search + result count, then an even grid of filters */
+.pro-toolbar { display: grid; gap: var(--space-3); padding: var(--space-4) var(--space-6); border-bottom: 1px solid var(--color-divider); }
+.pro-toolbar-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.pro-toolbar .pro-search { flex: 1 1 320px; max-width: 480px; }
+.pro-toolbar-count { display: inline-flex; align-items: center; gap: var(--space-2); font-size: 13px; color: var(--color-text-secondary); white-space: nowrap; }
+.pro-filter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: var(--space-2); }
+.pro-filter-grid .filter-select, .pro-filter-grid .filter-select select { width: 100%; max-width: none; }
+
 /* Follow-up table; each row becomes a card on phones */
 .pro-table td { vertical-align: middle; }
 .pro-table tr.row-selected { background: var(--color-accent-soft); }
-.pro-due { display: grid; gap: 1px; }
+.pro-due { display: grid; gap: 1px; white-space: nowrap; }
+.pro-table .pro-nowrap, .pro-table .pro-cell-status { white-space: nowrap; }
 .pro-due strong { font-weight: 600; font-size: 14px; }
 .pro-due small { font-size: 12px; color: var(--color-text-tertiary); }
 .pro-due-critical strong { color: var(--color-error-text); }
@@ -57,10 +66,17 @@
 .pro-choice:has(input:checked) { border-color: var(--color-accent); background: var(--color-accent-soft); }
 .pro-choice input { accent-color: var(--color-accent); }
 
+/* The contact history is also in the detail panel, so it goes first on narrower screens. */
+@media (max-width: 1499px) {
+  .pro-table .pro-col-wide { display: none; }
+}
 @media (max-width: 1199px) {
   .pro-table .pro-col-optional { display: none; }
 }
 @media (max-width: 767px) {
+  .pro-toolbar { padding: var(--space-4); }
+  .pro-toolbar .pro-search { max-width: none; flex-basis: 100%; }
+  .pro-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .lifecycle-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: var(--space-5); }
   .lifecycle-arrow { display: none; }
   .pro-form-row, .pro-action-grid { grid-template-columns: minmax(0, 1fr); }
