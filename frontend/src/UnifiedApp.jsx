@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowRight, Building2, Check, Eye, EyeOff, Laptop, LockKeyhole, ShieldCheck, Sparkles, Wrench } from 'lucide-react';
+import { ArrowRight, Eye, EyeOff, Laptop, ShieldCheck, Sparkles, Wrench } from 'lucide-react';
 import { AICustomerSupportPanel } from './corporate/AICustomerSupportPanel';
 import { getDevice, getTicket, login } from './corporate/api';
 import { AIAssistantContext, InlineAlert } from './ui';
@@ -97,36 +97,23 @@ function Login() {
     { icon: Laptop, title: 'Run operations', text: 'Queues, engineers and reports for the service team.' },
   ];
   return <main className="login">
-    <header className="login-nav">
-      <div className="login-nav-inner">
-        <div className="login-nav-brand"><span className="brand-mark" aria-hidden="true">i</span><span>iPlanet</span></div>
-        <span className="login-nav-meta">Self-Care &amp; Service Operations</span>
-      </div>
-    </header>
-    <div className="login-backdrop" aria-hidden="true"><i /><i /><i /></div>
-    <div className="login-main">
-      <section className="login-intro">
-        <div className="login-hero">
-          <p className="login-eyebrow"><Sparkles size={14} aria-hidden="true" />iPlanet Self-care Portal</p>
-          <h1>Device care,<br /><span className="login-gradient">handled.</span></h1>
-          <p className="login-lede">Raise and track service, manage coverage, and run service operations — all from one place.</p>
-        </div>
+    <aside className="login-panel">
+      <div className="login-brand"><span className="login-brand-mark" aria-hidden="true">i</span><span><strong>iPlanet</strong> Self-care Portal</span></div>
+      <div className="login-panel-body">
+        <p className="login-eyebrow">Self-Care &amp; Service Operations</p>
+        <h1>Device care, handled.</h1>
+        <p className="login-lede">Raise and track service, manage coverage, and run service operations — all from one place.</p>
         <ul className="login-highlights">
           {highlights.map(({ icon: Icon, title, text }) => <li key={title}>
-            <span className="login-highlight-icon" aria-hidden="true"><Icon size={20} /></span>
+            <span className="login-highlight-icon" aria-hidden="true"><Icon size={18} /></span>
             <span className="login-highlight-text"><strong>{title}</strong><span>{text}</span></span>
           </li>)}
         </ul>
-        <p className="login-trust">
-          <span><LockKeyhole size={14} aria-hidden="true" />Encrypted sign-in</span>
-          <span><ShieldCheck size={14} aria-hidden="true" />Role-based access</span>
-          <span><Building2 size={14} aria-hidden="true" />Built for teams</span>
-        </p>
-      </section>
-      <div className="login-stage">
-      <div className="login-halo" aria-hidden="true" />
-      <div className="login-chip login-chip-top" aria-hidden="true"><span className="login-chip-icon login-chip-success"><Check size={14} strokeWidth={3} /></span><span><strong>Repair completed</strong><small>Ready for pickup</small></span></div>
-      <div className="login-chip login-chip-bottom" aria-hidden="true"><span className="login-chip-icon login-chip-info"><Wrench size={14} /></span><span><strong>Engineer assigned</strong><small>Work starts today</small></span></div>
+      </div>
+      <p className="login-panel-foot">Copyright © {new Date().getFullYear()} iPlanet. All rights reserved.</p>
+    </aside>
+
+    <section className="login-side">
       <form className="login-card" onSubmit={submit} noValidate>
         <div className="login-card-head">
           <h2>Sign in</h2>
@@ -134,8 +121,8 @@ function Login() {
         </div>
         <div className="login-segmented" role="group" aria-label="Workspace" data-active={profile}>
           <span className="login-segmented-thumb" aria-hidden="true" />
-          <button type="button" aria-pressed={profile === 'corporate'} onClick={() => selectProfile('corporate')}><Building2 size={15} aria-hidden="true" />Corporate Self-Care</button>
-          <button type="button" aria-pressed={profile === 'service'} onClick={() => selectProfile('service')}><Wrench size={15} aria-hidden="true" />iPlanet Service</button>
+          <button type="button" aria-pressed={profile === 'corporate'} onClick={() => selectProfile('corporate')}>Corporate Self-Care</button>
+          <button type="button" aria-pressed={profile === 'service'} onClick={() => selectProfile('service')}>iPlanet Service</button>
         </div>
         <div className="login-fields">
           <label className="login-float">
@@ -149,17 +136,11 @@ function Login() {
           </label>
         </div>
         {error && <InlineAlert title="Sign-in failed">{error}</InlineAlert>}
-        <button className="login-submit" type="submit" disabled={busy || !email || !password}>{busy ? <><span className="login-spinner" aria-hidden="true" />Signing in…</> : <>Continue<ArrowRight size={17} aria-hidden="true" /></>}</button>
-        <div className="login-note"><LockKeyhole size={13} aria-hidden="true" /><span>Demo password <strong>Demo@123</strong></span></div>
+        <button className="login-submit" type="submit" disabled={busy || !email || !password}>{busy ? <><span className="login-spinner" aria-hidden="true" />Signing in…</> : <>Sign in<ArrowRight size={17} aria-hidden="true" /></>}</button>
+        <p className="login-note"><span>Access is managed by your administrator.</span><span>Demo password <strong>Demo@123</strong></span></p>
       </form>
-      </div>
-    </div>
-    <footer className="login-foot">
-      <div className="login-foot-inner">
-        <span>Copyright © {new Date().getFullYear()} iPlanet. All rights reserved.</span>
-        <span>Corporate Self-Care · iPlanet Service</span>
-      </div>
-    </footer>
+      <p className="login-side-foot">Corporate Self-Care · iPlanet Service</p>
+    </section>
   </main>;
 }
 
