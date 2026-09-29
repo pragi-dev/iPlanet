@@ -7,8 +7,17 @@ export const mediaUrl = path => {
   const normalized = String(path).replace(/^\/+/, '');
   return `${API_ORIGIN || ''}/${normalized}`;
 };
+import { cachedGet, clearRequestCache, isCacheablePath } from '../ui/requestCache';
+
 const getToken = () => localStorage.getItem('iplanet_token');
-async function request(path, options = {}) { const token = getToken(); const response = await fetch(`${API}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers || {}) } }); if (!response.ok) { const body = await response.json().catch(() => ({})); const error = new Error(body.message || `Request failed (${response.status})`); error.status = response.status; error.path = path; throw error; } return response.json(); }
+function request(path, options = {}) {
+  const method = String(options.method || 'GET').toUpperCase();
+  if (method !== 'GET') { clearRequestCache(); return send(path, options); }
+  return isCacheablePath(path) ? cachedGet(`${getToken()}|${path}`, () => send(path, options)) : send(path, options);
+}
+// Wakes a sleeping API host (Render free tier) while the user is still on the sign-in form.
+export function warmUpApi() { fetch(`${API}/health`).catch(() => {}); }
+async function send(path, options = {}) { const token = getToken(); const response = await fetch(`${API}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers || {}) } }); if (!response.ok) { const body = await response.json().catch(() => ({})); const error = new Error(body.message || `Request failed (${response.status})`); error.status = response.status; error.path = path; throw error; } return response.json(); }
 export async function login(email, password) { return request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }); }
 export async function getDevices(search = '') { return request(`/devices${search ? `?search=${encodeURIComponent(search)}` : ''}`); }
 export async function getDevice(id) { return request(`/devices/${id}`); }
@@ -17,10 +26,9 @@ export async function getTicket(id) { return request(`/tickets/${id}`); }
 export async function submitReview(payload) { return request('/reviews', { method: 'POST', body: JSON.stringify(payload) }); }
 export async function getMyReviews() { return request('/reviews/my'); }
 export async function createTicket(payload) { return request('/tickets', { method: 'POST', body: JSON.stringify(payload) }); }
-export async function uploadImages(ticketId, files) { if (!files.length || String(ticketId).startsWith('ticket-')) return; const body = new FormData(); files.forEach(file => body.append('images', file)); const response = await fetch(`${API}/tickets/${ticketId}/images`, { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body }); if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.message || `Image upload failed (${response.status})`); } }
-export async function uploadAnnotatedImages(ticketId, files) { if (!files.length || String(ticketId).startsWith('ticket-')) return; const body = new FormData(); files.forEach(file => body.append('images', file)); const response = await fetch(`${API}/tickets/${ticketId}/annotated-images`, { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body }); if (!response.ok) throw new Error('Annotated image upload failed'); return response.json(); }
+export async function uploadImages(ticketId, files) { if (!files.length || String(ticketId).startsWith('ticket-')) return; clearRequestCache(); const body = new FormData(); files.forEach(file => body.append('images', file)); const response = await fetch(`${API}/tickets/${ticketId}/images`, { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body }); if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.message || `Image upload failed (${response.status})`); } }
+export async function uploadAnnotatedImages(ticketId, files) { if (!files.length || String(ticketId).startsWith('ticket-')) return; clearRequestCache(); const body = new FormData(); files.forEach(file => body.append('images', file)); const response = await fetch(`${API}/tickets/${ticketId}/annotated-images`, { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body }); if (!response.ok) throw new Error('Annotated image upload failed'); return response.json(); }
 export async function getDashboard() { const [stats, volume, locations] = await Promise.all([request('/dashboard/stats'), request('/dashboard/ticket-volume'), request('/dashboard/location-distribution')]); return { stats, volume, locations }; }
-// Stats also re-evaluates SLA escalation server-side before tickets are read.
 export async function getDashboardStats() { return request('/dashboard/stats'); }
 export async function getProfile() { return request('/profile'); }
 export async function getNotifications() { return request('/corporate/notifications'); }

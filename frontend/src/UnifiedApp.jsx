@@ -2,7 +2,8 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowRight, Eye, EyeOff, Laptop, ShieldCheck, Sparkles, Wrench } from 'lucide-react';
 import { AICustomerSupportPanel } from './corporate/AICustomerSupportPanel';
-import { getDevice, getTicket, login } from './corporate/api';
+import { getDevice, getTicket, login, warmUpApi } from './corporate/api';
+import { clearRequestCache } from './ui/requestCache';
 import { AIAssistantContext, InlineAlert } from './ui';
 
 // Pages load per route so each portal only downloads what it uses (charts,
@@ -75,13 +76,14 @@ function Login() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
-  useEffect(() => { document.title = 'Sign in · iPlanet Self-care Portal'; }, []);
+  useEffect(() => { document.title = 'Sign in · iPlanet Self-care Portal'; warmUpApi(); }, []);
   const submit = async event => {
     event.preventDefault();
     setError('');
     setBusy(true);
     try {
       const result = await login(email, password);
+      clearRequestCache();
       localStorage.setItem(TOKEN_KEY, result.token);
       localStorage.setItem(USER_KEY, JSON.stringify(result.user));
       navigate(result.user.role === 'iplanet_service' ? serviceHome : corporateHome, { replace: true });
@@ -150,9 +152,35 @@ function Login() {
   </main>;
 }
 
+// Re-checks the session on every visit to /login. Deciding this once when the
+// app mounted left a stale "signed in" route after sign-out, which rendered a
+// blank page until the browser was refreshed.
+function LoginRoute() {
+  return sessionIsValid() ? <RoleAlias corporate={corporateHome} service={serviceHome} /> : <Login />;
+}
+
+// Downloads the signed-in portal's page code in idle time so opening a page
+// doesn't wait for its chunk. Runs once per portal per session.
+const prefetchedPortals = new Set();
+const portalChunks = {
+  corporate_admin: [corporatePages, corporateExtras, reviewPages, () => import('./corporate/RequestEnhanced'), () => import('./corporate/TicketDetailEnhanced'), () => import('./corporate/CoverageEnhanced'), () => import('./corporate/ServiceRecommendations')],
+  iplanet_service: [servicePages, serviceExtras, internalReviews, () => import('./service/companyQueue'), () => import('./service/OperationalTicketDetail'), () => import('./service/ProactiveService'), () => import('./service/enrollment'), () => import('./service/coverage')],
+};
+function usePrefetchPortal(role) {
+  useEffect(() => {
+    if (!role || prefetchedPortals.has(role)) return undefined;
+    prefetchedPortals.add(role);
+    const run = () => portalChunks[role]?.forEach(load => { load().catch(() => {}); });
+    const idle = window.requestIdleCallback ? window.requestIdleCallback(run, { timeout: 3000 }) : window.setTimeout(run, 1500);
+    return () => (window.cancelIdleCallback ? window.cancelIdleCallback(idle) : window.clearTimeout(idle));
+  }, [role]);
+}
+
 function Protected({ role, children }) {
   const user = readUser();
-  if (!sessionIsValid()) return <Navigate to="/login" replace />;
+  const valid = sessionIsValid();
+  usePrefetchPortal(valid && user?.role === role ? role : null);
+  if (!valid) return <Navigate to="/login" replace />;
   if (user.role !== role) return <Navigate to={user.role === 'iplanet_service' ? serviceHome : corporateHome} replace />;
   return children;
 }
@@ -172,6 +200,7 @@ function RoleDetailAlias({ corporateBase, serviceBase }) {
 }
 
 function logout() {
+  clearRequestCache();
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
   localStorage.removeItem('iplanet_service_token');
@@ -249,7 +278,7 @@ export default function UnifiedApp() {
       <Suspense fallback={<RouteLoading />}>
       <Routes>
         <Route path="/" element={<Navigate to="/login" replace />} />
-        <Route path="/login" element={sessionIsValid() ? <RoleAlias corporate={corporateHome} service={serviceHome} /> : <Login />} />
+        <Route path="/login" element={<LoginRoute />} />
         {CorporateRoutes()}
         {ServiceRoutes()}
         <Route path="/dashboard" element={<RoleAlias corporate={corporateHome} service={serviceHome} />} />

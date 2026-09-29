@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Bell, CalendarClock, ChevronLeft, FilePlus2, KeyRound, Laptop, LogOut, Search, ShieldCheck, Sparkles, Ticket, UserRoundPlus } from 'lucide-react';
 import { Shell } from './components';
-import { getCoverage, getDashboardStats, getDevice, getDeviceServicePlan, getDevices, getMyReviews, getProfile, getServiceRecommendations, getTickets } from './api';
+import { getCoverage, getDevice, getDeviceServicePlan, getDevices, getMyReviews, getProfile, getServiceRecommendations, getTickets } from './api';
 import { NotRequiredDialog, ScheduleLaterDialog } from './ServiceRecommendations';
 import {
   ActivityFeed, AttentionFeed, Avatar, Badge, Button, CalmState, DashboardHeader, DashboardSection, DeviceIcon, DisclosureRow, EmptyState, ErrorState, FilterBar, FilterSelect, HealthRing, InfoList, Insight, JourneyTrack,
@@ -126,9 +126,8 @@ function fleetSummary(health, attentionCount, activeCount) {
 export function Dashboard() {
   const user = readSessionUser();
   const ai = useAIAssistant();
-  // Stats run first: that request re-evaluates SLA state server-side, so the
-  // ticket list read afterwards reflects current escalation status.
-  const main = useAsync(() => getDashboardStats().then(() => getTickets()), []);
+  // The ticket list re-evaluates SLA state server-side before it is returned.
+  const main = useAsync(getTickets, []);
   const coverage = useAsync(getCoverage, []);
   const reviews = useAsync(getMyReviews, []);
   const service = useAsync(getServiceRecommendations, []);

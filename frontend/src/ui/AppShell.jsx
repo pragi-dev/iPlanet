@@ -4,6 +4,7 @@ import { Bell, ChevronDown, ChevronRight, LogOut, Menu, Search, Sparkles, UserRo
 import { Avatar, IconButton } from './primitives';
 import { readSessionUser } from './format';
 import { CommandPalette } from './CommandPalette';
+import { clearRequestCache } from './requestCache';
 
 // Lets any part of the corporate portal open the AI Support drawer.
 export const AIAssistantContext = createContext({ available: false, open: () => {} });
@@ -53,6 +54,7 @@ function isMac() {
 
 function signOut(navigate) {
   commandIndexCache = { key: null, data: null, at: 0 };
+  clearRequestCache();
   localStorage.clear();
   navigate('/login', { replace: true });
 }

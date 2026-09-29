@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 
-const userSchema = new mongoose.Schema({ name: String, email: { type: String, unique: true }, password: String, role: { type: String, default: 'corporate_admin' }, company: String, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, phone: String });
+const userSchema = new mongoose.Schema({ name: String, email: { type: String, unique: true }, password: { type: String, select: false }, role: { type: String, default: 'corporate_admin' }, company: String, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, phone: String });
 const companySchema = new mongoose.Schema({ name: { type: String, unique: true }, companyId: { type: String, unique: true }, contactName: String, contactEmail: String, phone: String, location: String });
 const serviceCentreSchema = new mongoose.Schema({
   serviceCentreId: { type: String, unique: true, sparse: true },
@@ -76,6 +76,18 @@ const notificationSchema = new mongoose.Schema({ user: { type: mongoose.Schema.T
 const timelineSchema = new mongoose.Schema({ ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' }, status: String, message: String, note: String, updatedBy: String, userRole: String, timestamp: { type: Date, default: Date.now } });
 const callRecordSchema = new mongoose.Schema({ ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket', required: true }, agentUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, agentName: String, ticketNumber: String, customerName: String, customerPhone: String, outcome: { type: String, enum: ['Issue Resolved Remotely', 'Customer Needs Further Assistance', 'Engineer Visit Required', 'Customer Unavailable', 'Call Back Required'], default: 'Customer Unavailable' }, notes: String, callStatus: { type: String, default: 'Call Attempted' } }, { timestamps: true });
 const aiSupportSessionSchema = new mongoose.Schema({ ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' }, customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, preparedRequest: { type: Object }, sessionId: { type: String, unique: true, required: true }, issueContext: { type: Object, default: {} }, messages: [{ role: { type: String, enum: ['user', 'assistant'], required: true }, content: { type: String, required: true }, timestamp: { type: Date, default: Date.now } }], troubleshootingSteps: [{ step: String, outcome: String, timestamp: { type: Date, default: Date.now } }], customerResponses: [{ response: String, timestamp: { type: Date, default: Date.now } }], result: { type: String, default: 'In Progress' }, status: { type: String, default: 'In Progress' }, escalationStatus: { type: String, enum: ['Not Escalated', 'Recommended Service Assistance', 'Resolved'], default: 'Not Escalated' }, providerAvailable: { type: Boolean, default: false }, providerStatus: String, feedback: { promptedAt: Date, rating: { type: Number, min: 1, max: 5 }, comment: { type: String, trim: true, maxlength: 2000 }, submittedAt: Date } }, { timestamps: true });
+// Indexes for the queries every portal page runs (lists by company, status,
+// device, engineer, recipient and time).
+deviceSchema.index({ companyId: 1 });
+ticketSchema.index({ companyId: 1, createdAt: -1 });
+ticketSchema.index({ status: 1, createdAt: -1 });
+ticketSchema.index({ deviceId: 1, status: 1 });
+ticketSchema.index({ assignedEngineerId: 1, status: 1 });
+notificationSchema.index({ user: 1, createdAt: -1 });
+notificationSchema.index({ user: 1, read: 1 });
+timelineSchema.index({ ticketId: 1, timestamp: 1 });
+timelineSchema.index({ timestamp: -1 });
+timelineSchema.index({ status: 1, timestamp: -1 });
 export const User = mongoose.model('User', userSchema);
 export const Company = mongoose.model('Company', companySchema);
 export const ServiceCentre = mongoose.model('ServiceCentre', serviceCentreSchema);

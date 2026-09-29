@@ -8,7 +8,14 @@ export const mediaUrl = path => {
   return `${API_ORIGIN || ''}/${normalized}`;
 };
 const token = () => localStorage.getItem('iplanet_token') || localStorage.getItem('iplanet_service_token');
-async function request(path, options = {}) {
+import { cachedGet, clearRequestCache, isCacheablePath } from '../ui/requestCache';
+
+function request(path, options = {}) {
+  const method = String(options.method || 'GET').toUpperCase();
+  if (method !== 'GET') { clearRequestCache(); return send(path, options); }
+  return isCacheablePath(path) ? cachedGet(`${token()}|${path}`, () => send(path, options)) : send(path, options);
+}
+async function send(path, options = {}) {
   const response = await fetch(`${API}${path}`, { ...options, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}`, ...(options.headers || {}) } });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
