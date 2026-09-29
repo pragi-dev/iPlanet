@@ -126,10 +126,10 @@ export function DeviceEnrollment() {
       <div className="wizard-main">
         {step === 0 && <Card className="wizard-card" title="Identify device" description="Scan the barcode or QR code, or type the serial number.">
           <form className="stack-16" onSubmit={event => { event.preventDefault(); void lookup(serial); }}>
-            <div className="lookup-row">
-              <Field label="Serial number" error={error || undefined}>{props => <div className="lookup-input"><Search size={17} aria-hidden="true" /><input {...props} className="mono-input" value={serial} onChange={event => setSerial(event.target.value)} placeholder="Enter device serial number" autoComplete="off" data-autofocus /></div>}</Field>
+            <Field label="Serial number" error={error || undefined}>{props => <div className="lookup-control">
+              <div className="lookup-input"><Search size={17} aria-hidden="true" /><input {...props} className="mono-input" value={serial} onChange={event => setSerial(event.target.value)} placeholder="Enter device serial number" autoComplete="off" data-autofocus /></div>
               <Button icon={Camera} className="btn-lg" onClick={() => setScanOpen(true)}>Scan barcode / QR</Button>
-            </div>
+            </div>}</Field>
             <div className="form-actions" style={{ justifyContent: 'flex-start' }}><Button variant="primary" type="submit" icon={Search} disabled={looking || !serial.trim()}>{looking ? 'Looking up…' : 'Look up device'}</Button></div>
           </form>
           {masters.length > 0 && <div style={{ marginTop: 20 }}>

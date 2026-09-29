@@ -1,9 +1,9 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowRight, LockKeyhole, Mail, Sparkles } from 'lucide-react';
+import { ArrowRight, Building2, Eye, EyeOff, Laptop, LockKeyhole, ShieldCheck, Sparkles, Wrench } from 'lucide-react';
 import { AICustomerSupportPanel } from './corporate/AICustomerSupportPanel';
 import { getDevice, getTicket, login } from './corporate/api';
-import { AIAssistantContext, Field, InlineAlert } from './ui';
+import { AIAssistantContext, InlineAlert } from './ui';
 
 // Pages load per route so each portal only downloads what it uses (charts,
 // enrollment and review tooling stay out of the initial bundle).
@@ -90,30 +90,64 @@ function Login() {
     }
   };
   const selectProfile = nextProfile => { setProfile(nextProfile); setEmail(profiles[nextProfile].email); setError(''); };
+  const [showPassword, setShowPassword] = useState(false);
+  const highlights = [
+    { icon: Wrench, title: 'Raise & track service', text: 'Log a repair in seconds and follow it to resolution.' },
+    { icon: ShieldCheck, title: 'Manage coverage', text: 'See warranty and coverage status across every device.' },
+    { icon: Laptop, title: 'Run operations', text: 'Queues, engineers and reports for the service team.' },
+  ];
   return <main className="login">
-    <header className="login-top">
-      <div className="brand"><span className="brand-mark" aria-hidden="true">i</span><span className="brand-text"><strong>iPlanet Self-care Portal</strong><small>Self-Care &amp; Service Operations</small></span></div>
+    <header className="login-nav">
+      <div className="login-nav-inner">
+        <div className="login-nav-brand"><span className="brand-mark" aria-hidden="true">i</span><span>iPlanet</span></div>
+        <span className="login-nav-meta">Self-Care &amp; Service Operations</span>
+      </div>
     </header>
     <div className="login-main">
-      <div>
-        <div className="login-hero">
-          <h1>Device care, handled.</h1>
-          <p>Raise and track service, manage coverage, and run service operations from one place.</p>
+      <section className="login-hero">
+        <p className="login-eyebrow">iPlanet Self-care Portal</p>
+        <h1>Device care,<br /><span className="login-gradient">handled.</span></h1>
+        <p className="login-lede">Raise and track service, manage coverage, and run service operations — all from one place.</p>
+      </section>
+      <form className="login-card" onSubmit={submit} noValidate>
+        <div className="login-card-head">
+          <h2>Sign in</h2>
+          <p>{profile === 'corporate' ? 'Access your organisation’s devices and service requests.' : 'Access the iPlanet service operations console.'}</p>
         </div>
-      <form className="login-form" onSubmit={submit} noValidate style={{ margin: '0 auto' }}>
-        <div className="segmented" role="group" aria-label="Workspace">
-          <button type="button" aria-pressed={profile === 'corporate'} onClick={() => selectProfile('corporate')}>Corporate Self-Care</button>
-          <button type="button" aria-pressed={profile === 'service'} onClick={() => selectProfile('service')}>iPlanet Service</button>
+        <div className="login-segmented" role="group" aria-label="Workspace" data-active={profile}>
+          <span className="login-segmented-thumb" aria-hidden="true" />
+          <button type="button" aria-pressed={profile === 'corporate'} onClick={() => selectProfile('corporate')}><Building2 size={15} aria-hidden="true" />Corporate Self-Care</button>
+          <button type="button" aria-pressed={profile === 'service'} onClick={() => selectProfile('service')}><Wrench size={15} aria-hidden="true" />iPlanet Service</button>
         </div>
-        <Field label="Email address">{props => <div className="input-with-icon"><Mail size={17} aria-hidden="true" /><input {...props} type="email" autoComplete="username" value={email} onChange={event => setEmail(event.target.value)} required /></div>}</Field>
-        <Field label="Password">{props => <div className="input-with-icon"><LockKeyhole size={17} aria-hidden="true" /><input {...props} type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} required /></div>}</Field>
+        <div className="login-fields">
+          <label className="login-float">
+            <input type="email" autoComplete="username" placeholder=" " value={email} onChange={event => setEmail(event.target.value)} required />
+            <span>Email address</span>
+          </label>
+          <label className="login-float">
+            <input type={showPassword ? 'text' : 'password'} autoComplete="current-password" placeholder=" " value={password} onChange={event => setPassword(event.target.value)} required />
+            <span>Password</span>
+            <button type="button" className="login-reveal" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword}>{showPassword ? <EyeOff size={17} aria-hidden="true" /> : <Eye size={17} aria-hidden="true" />}</button>
+          </label>
+        </div>
         {error && <InlineAlert title="Sign-in failed">{error}</InlineAlert>}
-        <button className="btn btn-primary btn-lg btn-block" type="submit" disabled={busy || !email || !password}>{busy ? 'Signing in…' : <>Sign in<ArrowRight size={16} aria-hidden="true" /></>}</button>
-        <div className="login-note"><span>Demo password</span><strong className="mono">Demo@123</strong></div>
+        <button className="login-submit" type="submit" disabled={busy || !email || !password}>{busy ? <><span className="login-spinner" aria-hidden="true" />Signing in…</> : <>Continue<ArrowRight size={17} aria-hidden="true" /></>}</button>
+        <div className="login-note"><LockKeyhole size={13} aria-hidden="true" /><span>Demo password <strong>Demo@123</strong></span></div>
       </form>
-      </div>
+      <ul className="login-highlights">
+        {highlights.map(({ icon: Icon, title, text }) => <li key={title}>
+          <span className="login-highlight-icon" aria-hidden="true"><Icon size={20} /></span>
+          <strong>{title}</strong>
+          <span>{text}</span>
+        </li>)}
+      </ul>
     </div>
-    <footer className="login-foot">iPlanet Self-care Portal · Corporate Self-Care and iPlanet Service</footer>
+    <footer className="login-foot">
+      <div className="login-foot-inner">
+        <span>Copyright © {new Date().getFullYear()} iPlanet. All rights reserved.</span>
+        <span>Corporate Self-Care · iPlanet Service</span>
+      </div>
+    </footer>
   </main>;
 }
 

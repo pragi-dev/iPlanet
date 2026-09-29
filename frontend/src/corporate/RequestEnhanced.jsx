@@ -183,12 +183,12 @@ export function RequestEnhanced() {
           {step === 0 && (loadError ? <ErrorState compact title="Unable to load your devices" message={friendlyError(loadError)} onRetry={loadDevices} />
             : !devices ? <div className="stack-12"><Skeleton height={46} /><Skeleton height={80} /></div>
             : <div className="stack-24">
-              <div className="lookup-row">
-                <Field label="Serial number" hint="You can also search by model, asset ID or employee." error={touched && !form.deviceId ? 'Select a device to continue.' : undefined}>
-                  {props => <div className="lookup-input"><Search size={17} aria-hidden="true" /><input {...props} className="mono-input" value={serial} onChange={event => lookup(event.target.value)} placeholder="e.g. C02ZK3C1ABCD" autoComplete="off" data-autofocus /></div>}
-                </Field>
-                <Button icon={Camera} className="btn-lg" onClick={() => setScanOpen(true)}>Scan</Button>
-              </div>
+              <Field label="Serial number" hint="You can also search by model, asset ID or employee." error={touched && !form.deviceId ? 'Select a device to continue.' : undefined}>
+                {props => <div className="lookup-control">
+                  <div className="lookup-input"><Search size={17} aria-hidden="true" /><input {...props} className="mono-input" value={serial} onChange={event => lookup(event.target.value)} placeholder="e.g. C02ZK3C1ABCD" autoComplete="off" data-autofocus /></div>
+                  <Button icon={Camera} className="btn-lg" onClick={() => setScanOpen(true)}>Scan</Button>
+                </div>}
+              </Field>
               {device ? <div className="stack-16">
                 <div className="device-card">
                   <span className="device-card-icon"><DeviceIcon type={device.deviceType} model={device.model} /></span>
