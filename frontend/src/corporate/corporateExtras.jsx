@@ -48,7 +48,7 @@ export function UnassignedDevices() {
   const [selected, setSelected] = useState(null);
   const [search, setSearch] = useState('');
   const [assigned, setAssigned] = useState(null);
-  const devices = (state.data?.devices || []).filter(device => JSON.stringify(device).toLowerCase().includes(search.toLowerCase()));
+  const devices = (state.data?.devices || []).filter(device => [device.model, device.serialNumber, device.assetId].some(value => String(value || '').toLowerCase().includes(search.trim().toLowerCase())));
   return <Shell title="Unassigned Devices">
     <PageHeader title="Unassigned Devices" description="Devices registered to your organization that are ready to be assigned to an employee." />
     {assigned && <InlineAlert tone="success" title={`${assigned.model} assigned to ${assigned.employee}`} action={<Button size="sm" variant="ghost" onClick={() => setAssigned(null)}>Dismiss</Button>} />}

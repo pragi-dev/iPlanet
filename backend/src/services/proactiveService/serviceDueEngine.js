@@ -95,6 +95,13 @@ export function createProactiveEngine({ notifyUsers, config = proactiveConfig, c
     const result = await ServiceFollowUp.updateOne({ _id: followUpId, notifiedStates: { $ne: key } }, { $addToSet: { notifiedStates: key } });
     return result.modifiedCount === 1;
   }
+  // Releasing a claim after a failed send lets the next run retry it instead of losing it.
+  const release = (followUpId, key) => ServiceFollowUp.updateOne({ _id: followUpId }, { $pull: { notifiedStates: key } });
+  async function notifyOnce(followUpId, key, send) {
+    if (!await claim(followUpId, key)) return;
+    try { await send(); }
+    catch (error) { await release(followUpId, key).catch(() => {}); console.error(`[Proactive] Notification ${key} failed: ${error.message}`); }
+  }
   const serviceRecipients = async centreId => User.find({ role: 'iplanet_service', ...(centreId ? { $or: [{ serviceCentreId: centreId }, { serviceCentreId: null }] } : {}) });
   const corporateRecipients = companyId => (companyId ? User.find({ role: 'corporate_admin', companyId }) : []);
   const label = item => [item.device.model, item.company?.name].filter(Boolean).join(' · ');
@@ -106,34 +113,44 @@ export function createProactiveEngine({ notifyUsers, config = proactiveConfig, c
       const companyId = item.company?._id || null;
       const serviceRoute = { type: 'PROACTIVE_SERVICE', route: `/service/proactive?followUp=${followUp._id}` };
       const corporateRoute = { type: 'SERVICE_RECOMMENDATION', route: `/corporate/service-recommendations?followUp=${followUp._id}` };
-      if (followUp.stage === 'Open' && ['Due', 'Overdue'].includes(item.timing) && await claim(followUp._id, `service:${item.timing}`)) {
-        await notifyUsers({ users: await serviceRecipients(centreId), company: companyId, device, serviceCentreId: centreId, type: 'PROACTIVE_SERVICE_DUE', priority: item.timing === 'Overdue' ? 'high' : 'normal',
+      if (followUp.stage === 'Open' && ['Due', 'Overdue'].includes(item.timing)) {
+        await notifyOnce(followUp._id, `service:${item.timing}`, async () => notifyUsers({ users: await serviceRecipients(centreId), company: companyId, device, serviceCentreId: centreId, type: 'PROACTIVE_SERVICE_DUE', priority: item.timing === 'Overdue' ? 'high' : 'normal',
           title: item.timing === 'Overdue' ? 'Preventive service overdue' : 'Preventive service due',
-          message: `${label(item)} ${item.timing === 'Overdue' ? 'is overdue' : 'is due'} for preventive service (recommended ${item.nextServiceDate}).`, action: serviceRoute });
+          message: `${label(item)} ${item.timing === 'Overdue' ? 'is overdue' : 'is due'} for preventive service (recommended ${item.nextServiceDate}).`, action: serviceRoute }));
       }
-      if (followUp.stage === 'Open' && item.timing === 'Upcoming' && await claim(followUp._id, 'service:Upcoming')) upcoming.push(item);
-      if (['Open', 'Contacted'].includes(followUp.stage) && ['Upcoming', 'Due', 'Overdue'].includes(item.timing) && await claim(followUp._id, 'corporate:recommended')) {
-        await notifyUsers({ users: await corporateRecipients(companyId), company: companyId, device, type: 'SERVICE_RECOMMENDED',
-          title: 'Service recommended', message: `Your ${item.device.model} (${item.device.serialNumber}) may be due for preventive service. Recommended date: ${item.nextServiceDate}.`, action: corporateRoute });
+      if (followUp.stage === 'Open' && item.timing === 'Upcoming' && await claim(followUp._id, 'service:Upcoming')) upcoming.push({ item, followUp });
+      if (['Open', 'Contacted'].includes(followUp.stage) && ['Upcoming', 'Due', 'Overdue'].includes(item.timing)) {
+        await notifyOnce(followUp._id, 'corporate:recommended', async () => notifyUsers({ users: await corporateRecipients(companyId), company: companyId, device, type: 'SERVICE_RECOMMENDED',
+          title: 'Service recommended', message: `Your ${item.device.model} (${item.device.serialNumber}) may be due for preventive service. Recommended date: ${item.nextServiceDate}.`, action: corporateRoute }));
       }
-      if (followUp.stage === 'Remind Later' && item.status === 'Reminder Due' && await claim(followUp._id, `reminder:${followUp.followUpDate}`)) {
-        await notifyUsers({ users: await serviceRecipients(centreId), company: companyId, device, serviceCentreId: centreId, type: 'PROACTIVE_SERVICE_REMINDER',
-          title: 'Service follow-up is due', message: `Follow up with ${item.company?.name || 'the customer'} about preventive service for ${item.device.model} (${item.device.serialNumber}).`, action: serviceRoute });
-        if (followUp.followUpSetBy === 'corporate_admin') await notifyUsers({ users: await corporateRecipients(companyId), company: companyId, device, type: 'SERVICE_RECOMMENDED',
-          title: 'Service follow-up is due', message: `You asked to be reminded about preventive service for your ${item.device.model}. You can request service now.`, action: corporateRoute });
+      if (followUp.stage === 'Remind Later' && item.status === 'Reminder Due') {
+        await notifyOnce(followUp._id, `reminder:${followUp.followUpDate}`, async () => {
+          await notifyUsers({ users: await serviceRecipients(centreId), company: companyId, device, serviceCentreId: centreId, type: 'PROACTIVE_SERVICE_REMINDER',
+            title: 'Service follow-up is due', message: `Follow up with ${item.company?.name || 'the customer'} about preventive service for ${item.device.model} (${item.device.serialNumber}).`, action: serviceRoute });
+          if (followUp.followUpSetBy === 'corporate_admin') await notifyUsers({ users: await corporateRecipients(companyId), company: companyId, device, type: 'SERVICE_RECOMMENDED',
+            title: 'Service follow-up is due', message: `You asked to be reminded about preventive service for your ${item.device.model}. You can request service now.`, action: corporateRoute });
+        });
       }
     }
     // Upcoming devices go out as one digest per audience instead of one per device.
     if (upcoming.length) {
-      const unscoped = await User.find({ role: 'iplanet_service', serviceCentreId: null });
-      await notifyUsers({ users: unscoped, type: 'PROACTIVE_SERVICE_DIGEST', title: 'Proactive service follow-ups',
-        message: `${upcoming.length} device${upcoming.length === 1 ? '' : 's'} ${upcoming.length === 1 ? 'requires' : 'require'} proactive service follow-up.`, action: { type: 'PROACTIVE_SERVICE', route: '/service/proactive?status=Upcoming' } });
-      const byCentre = new Map();
-      upcoming.filter(item => item.serviceCentre).forEach(item => byCentre.set(item.serviceCentre._id, [...(byCentre.get(item.serviceCentre._id) || []), item]));
-      for (const [centreId, items] of byCentre) {
-        await notifyUsers({ users: await User.find({ role: 'iplanet_service', serviceCentreId: centreId }), serviceCentreId: centreId, type: 'PROACTIVE_SERVICE_DIGEST', title: 'Proactive service follow-ups',
-          message: `${items.length} device${items.length === 1 ? '' : 's'} ${items.length === 1 ? 'requires' : 'require'} proactive service follow-up.`, action: { type: 'PROACTIVE_SERVICE', route: '/service/proactive?status=Upcoming' } });
+      try { await sendUpcomingDigests(upcoming.map(entry => entry.item)); }
+      catch (error) {
+        await Promise.all(upcoming.map(({ followUp }) => release(followUp._id, 'service:Upcoming'))).catch(() => {});
+        console.error(`[Proactive] Upcoming digest failed: ${error.message}`);
       }
+    }
+  }
+
+  async function sendUpcomingDigests(upcoming) {
+    const unscoped = await User.find({ role: 'iplanet_service', serviceCentreId: null });
+    await notifyUsers({ users: unscoped, type: 'PROACTIVE_SERVICE_DIGEST', title: 'Proactive service follow-ups',
+      message: `${upcoming.length} device${upcoming.length === 1 ? '' : 's'} ${upcoming.length === 1 ? 'requires' : 'require'} proactive service follow-up.`, action: { type: 'PROACTIVE_SERVICE', route: '/service/proactive?status=Upcoming' } });
+    const byCentre = new Map();
+    upcoming.filter(item => item.serviceCentre).forEach(item => byCentre.set(item.serviceCentre._id, [...(byCentre.get(item.serviceCentre._id) || []), item]));
+    for (const [centreId, items] of byCentre) {
+      await notifyUsers({ users: await User.find({ role: 'iplanet_service', serviceCentreId: centreId }), serviceCentreId: centreId, type: 'PROACTIVE_SERVICE_DIGEST', title: 'Proactive service follow-ups',
+        message: `${items.length} device${items.length === 1 ? '' : 's'} ${items.length === 1 ? 'requires' : 'require'} proactive service follow-up.`, action: { type: 'PROACTIVE_SERVICE', route: '/service/proactive?status=Upcoming' } });
     }
   }
 
@@ -149,7 +166,8 @@ export function createProactiveEngine({ notifyUsers, config = proactiveConfig, c
     const [devices, centres, activeTickets, active] = await Promise.all([
       Device.find({ deviceStatus: { $ne: 'Retired' }, ...deviceFilter }).populate('companyId', 'name location'),
       ServiceCentre.find({ status: 'Active' }),
-      Ticket.find({ status: { $in: ACTIVE_TICKET_STATUSES }, deviceId: { $ne: null } }).select('ticketId status deviceId serviceFollowUpId createdAt'),
+      // Buyback and e-waste requests are not a service of the device, so they don't move a cycle to In Service.
+      Ticket.find({ status: { $in: ACTIVE_TICKET_STATUSES }, deviceId: { $ne: null }, category: { $nin: NON_SERVICE_CATEGORIES } }).select('ticketId status deviceId serviceFollowUpId createdAt'),
       ServiceFollowUp.find({ stage: { $in: ACTIVE_STAGES }, ...(deviceFilter._id ? { deviceId: deviceFilter._id } : {}) }),
     ]);
     const ticketByDevice = new Map();
@@ -179,8 +197,19 @@ export function createProactiveEngine({ notifyUsers, config = proactiveConfig, c
           { $setOnInsert: { deviceId: device._id, dueDate, companyId: device.companyId?._id || device.companyId || null, serviceCentreId: centre?._id || null, intervalMonths: plan.intervalMonths, basis: plan.basis, stage: 'Open' } },
           { upsert: true, new: true, setDefaultsOnInsert: true },
         );
-        // A cycle that was already closed (completed / not required) is never reopened.
+        // A superseded cycle whose date applies again (the plan change was undone) is reopened;
+        // a cycle that was actually closed (completed / not required) never is.
+        if (found.stage === 'Superseded') {
+          found.stage = 'Open';
+          found.closedAt = undefined;
+          await found.save();
+        }
         followUp = ACTIVE_STAGES.includes(found.stage) ? found : null;
+      }
+      // Keep the stored centre in step with the device, so list and detail agree on who owns it.
+      if (followUp && centre && idString(followUp.serviceCentreId) !== String(centre._id)) {
+        followUp.serviceCentreId = centre._id;
+        await followUp.save();
       }
       if (followUp && activeTicket && ACTIONABLE_BY_TEAM.includes(followUp.stage)) {
         followUp.stage = 'In Service';
@@ -329,9 +358,14 @@ export function createProactiveEngine({ notifyUsers, config = proactiveConfig, c
     followUp.stage = 'Not Required';
     followUp.notRequiredReason = reason;
     followUp.closedAt = clock();
-    device.nextServiceDate = utcDate(addMonths(due, months));
+    // An overdue cycle can be a few intervals behind; the next date must still be in the future,
+    // or the next scan would immediately open (and notify about) another overdue cycle.
+    const current = today(clock(), config.timeZone);
+    let next = addMonths(due, months);
+    for (let guard = 0; daysBetween(current, next) <= 0 && guard < 240; guard += 1) next = addMonths(next, months);
+    device.nextServiceDate = utcDate(next);
     await Promise.all([followUp.save(), device.save()]);
-    return { nextServiceDate: isoDay(addMonths(due, months)) };
+    return { nextServiceDate: isoDay(next) };
   }
 
   async function notifyCorporateScheduled(followUp, device) {
@@ -436,8 +470,13 @@ export function createProactiveEngine({ notifyUsers, config = proactiveConfig, c
   // calculated from it, and any open cycle for the device is closed.
   async function onTicketCompleted(ticket) {
     const deviceId = idString(ticket.deviceId);
-    // Buyback and e-waste requests end the device's use; they are not a service of it.
-    if (!deviceId || NON_SERVICE_CATEGORIES.includes(ticket.category)) return;
+    if (!deviceId) return;
+    // Buyback and e-waste requests end the device's use; they are not a service of it. A cycle
+    // that was linked to one goes back to Open instead of staying In Service with no ticket.
+    if (NON_SERVICE_CATEGORIES.includes(ticket.category)) {
+      await ServiceFollowUp.updateMany({ deviceId, ticketId: ticket._id, stage: 'In Service' }, { $set: { stage: 'Open' }, $unset: { ticketId: '' } });
+      return;
+    }
     const now = clock();
     const completedOn = today(now, config.timeZone);
     await Device.updateOne({ _id: deviceId }, { $set: { lastServiceDate: utcDate(completedOn) }, $unset: { nextServiceDate: '' } });
@@ -461,9 +500,12 @@ export function createProactiveEngine({ notifyUsers, config = proactiveConfig, c
   }
 
   // Service-side plan edits: interval, installation date or an explicit next date.
-  async function updatePlan(deviceId, body = {}) {
+  // scope: { serviceCentreId } for centre-bound service users, who may only edit their centre's devices.
+  async function updatePlan(deviceId, body = {}, scope = {}) {
+    if (!/^[a-f0-9]{24}$/i.test(String(deviceId))) throw new ProactiveServiceError(404, 'Device not found');
     const device = await Device.findById(deviceId);
     if (!device) throw new ProactiveServiceError(404, 'Device not found');
+    if (scope.serviceCentreId && idString(centreFor(device, await ServiceCentre.find({ status: 'Active' }))) !== String(scope.serviceCentreId)) throw new ProactiveServiceError(404, 'Device not found');
     if (body.serviceIntervalMonths !== undefined) {
       const months = Number(body.serviceIntervalMonths);
       if (!Number.isInteger(months) || months < 1 || months > 60) throw new ProactiveServiceError(400, 'Service interval must be between 1 and 60 months.');

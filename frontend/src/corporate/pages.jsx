@@ -443,7 +443,7 @@ export function Tickets() {
   const [search, setSearch] = useState(params.get('search') || '');
   useEffect(() => { setFilter(params.get('status') || 'All'); setSla(params.get('sla') || 'All'); }, [params]);
   const tickets = state.data || [];
-  const visible = useMemo(() => tickets.filter(ticket => (filter === 'All' || ticket.status === filter) && (sla === 'All' || slaLabel(ticket) === sla || ticket.escalationStatus === sla) && JSON.stringify(ticket).toLowerCase().includes(search.toLowerCase())), [tickets, filter, sla, search]);
+  const visible = useMemo(() => tickets.filter(ticket => (filter === 'All' || ticket.status === filter) && (sla === 'All' || slaLabel(ticket) === sla || ticket.escalationStatus === sla) && [ticket.ticketId, ticket.deviceId?.model, ticket.deviceId?.serialNumber, ticket.deviceId?.assetId, ticket.issueType, ticket.category].some(value => String(value || '').toLowerCase().includes(search.trim().toLowerCase()))), [tickets, filter, sla, search]);
   const filtered = filter !== 'All' || sla !== 'All' || search;
 
   return <Shell title="Service Requests">

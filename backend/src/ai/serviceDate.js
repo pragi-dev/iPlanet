@@ -17,10 +17,17 @@ export function resolveServiceDateIntent(intent, now = new Date()) {
   if (/\btomorrow\b/.test(lower)) return { date: addDays(today, 1), ambiguous: false };
   if (/\b(next week|this week)\b/.test(lower)) return { date: null, ambiguous: true };
   const weekdays = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-  const weekday = weekdays.find(day => new RegExp(`\\b(?:next\\s+)?${day}\\b`).test(lower));
+  // "since Monday" / "last Friday" describe when a fault started, not when service is wanted.
+  const pastWeekday = day => new RegExp(`\\b(?:since|last|from|past|previous)\\s+(?:\\w+\\s+)?${day}\\b|\\b${day}\\s+(?:onwards|ago)\\b`).test(lower);
+  const weekday = weekdays.find(day => new RegExp(`\\b(?:next\\s+)?${day}\\b`).test(lower) && !pastWeekday(day));
   if (weekday) { const current = new Date(`${today}T12:00:00Z`).getUTCDay(); let offset = (weekdays.indexOf(weekday) - current + 7) % 7; if (offset === 0) offset = 7; return { date: addDays(today, offset), ambiguous: false }; }
   const explicit = raw.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
-  if (explicit && validDate(explicit[0]) && explicit[0] >= today) return { date: explicit[0], ambiguous: false };
+  // A past or impossible date is reported as ambiguous so the customer is asked again,
+  // rather than silently falling back to today.
+  if (explicit) return validDate(explicit[0]) && explicit[0] >= today ? { date: explicit[0], ambiguous: false } : { date: null, ambiguous: true };
+  // Numeric dates are read day-first (dd/mm/yyyy), as written in India.
+  const numeric = raw.match(/\b(\d{1,2})[/.](\d{1,2})[/.](\d{4})\b/);
+  if (numeric) { const candidate = iso({ year: Number(numeric[3]), month: Number(numeric[2]), day: Number(numeric[1]) }); return validDate(candidate) && candidate >= today ? { date: candidate, ambiguous: false } : { date: null, ambiguous: true }; }
   const named = raw.match(/\b(?:on\s+)?(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?\b/i) || raw.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(january|february|march|april|may|june|july|august|september|october|november|december)(?:\s+(\d{4}))?\b/i);
   if (named) { const monthName = Number.isNaN(Number(named[1])) ? named[1] : named[2]; const day = Number(Number.isNaN(Number(named[1])) ? named[2] : named[1]); const specifiedYear = Number(named[3] || 0); const month = ['january','february','march','april','may','june','july','august','september','october','november','december'].indexOf(monthName.toLowerCase()) + 1; let year = specifiedYear || Number(today.slice(0, 4)); let candidate = iso({ year, month, day }); if (!validDate(candidate)) return { date: null, ambiguous: true }; if (!specifiedYear && candidate < today) { year += 1; candidate = iso({ year, month, day }); } return { date: candidate >= today ? candidate : null, ambiguous: candidate < today }; }
   return { date: null, ambiguous: false };

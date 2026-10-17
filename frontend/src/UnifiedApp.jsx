@@ -196,7 +196,8 @@ function RoleDetailAlias({ corporateBase, serviceBase }) {
   const { id } = useParams();
   const user = readUser();
   if (!sessionIsValid()) return <Navigate to="/login" replace />;
-  return <Navigate to={`${user?.role === 'iplanet_service' ? serviceBase : corporateBase}/${id}`} replace />;
+  if (user?.role === 'iplanet_service') return <Navigate to={serviceBase ? `${serviceBase}/${id}` : serviceHome} replace />;
+  return <Navigate to={`${corporateBase}/${id}`} replace />;
 }
 
 function logout() {
@@ -283,7 +284,7 @@ export default function UnifiedApp() {
         {ServiceRoutes()}
         <Route path="/dashboard" element={<RoleAlias corporate={corporateHome} service={serviceHome} />} />
         <Route path="/devices" element={<RoleAlias corporate="/corporate/devices" service={serviceHome} />} />
-        <Route path="/devices/:id" element={<RoleDetailAlias corporateBase="/corporate/devices" serviceBase="/service/tickets" />} />
+        <Route path="/devices/:id" element={<RoleDetailAlias corporateBase="/corporate/devices" serviceBase={null} />} />
         <Route path="/unassigned-devices" element={<RoleAlias corporate="/corporate/unassigned-devices" service={serviceHome} />} />
         <Route path="/request" element={<RoleAlias corporate="/corporate/raise-request" service={serviceHome} />} />
         <Route path="/coverage" element={<RoleAlias corporate="/corporate/warranty" service="/service/warranty" />} />

@@ -7,9 +7,11 @@ import mongoose from 'mongoose';
 import multer from 'multer';
 import path from 'node:path';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Review, Notification, EscalationRule, CallRecord, AITroubleshootingSession, ServiceFollowUp, GoogleBusinessIntegration, GoogleBusinessLocationMapping, GoogleBusinessNotificationReceipt } from './models.js';
-import { auth, allowRoles } from './middleware.js';
+import { auth, allowRoles, jwtSecret } from './middleware.js';
+import { hashPassword, verifyPassword, needsRehash } from './passwords.js';
 import { createAiSupportRouter } from './routes/aiSupport.js';
 import { createGoogleBusinessRouter } from './routes/googleBusiness.js';
 import { getGoogleBusinessOauthConfig, validateGoogleBusinessOauthConfig } from './integrations/googleBusinessProfile/googleBusinessProfileAuth.js';
@@ -69,7 +71,14 @@ app.use('/uploads', express.static(uploadDir));
 app.use('/api/ai', auth, createAiSupportRouter());
 app.get('/api/health', (_, res) => res.json({ success: true, message: 'API is running' }));
 app.use('/api/google-business', createGoogleBusinessRouter({ store: createMongoGoogleBusinessStore({ GoogleBusinessIntegration, GoogleBusinessLocationMapping, GoogleBusinessNotificationReceipt, ServiceCentre, User, Notification }), auth, allowRoles }));
-const ticketId = () => `TKT-2026-${String(Date.now()).slice(-5)}`;
+// Six random digits under the current year; createTicketWithUniqueId retries on the rare collision.
+const ticketId = () => `TKT-${new Date().getFullYear()}-${crypto.randomInt(100000, 1000000)}`;
+async function createTicketWithUniqueId(fields) {
+  for (let attempt = 1; ; attempt += 1) {
+    try { return await Ticket.create({ ...fields, ticketId: ticketId() }); }
+    catch (error) { if (error?.code !== 11000 || !error.keyPattern?.ticketId || attempt >= 5) throw error; }
+  }
+}
 const serviceAuth = [auth, allowRoles('iplanet_service')];
 // Notification centres show the most recent items; older ones stay in the database.
 const NOTIFICATION_LIST_LIMIT = 100;
@@ -140,7 +149,7 @@ function extractAiRequest(reply = '') {
   try {
     const data = JSON.parse(match[1]);
     const categories = ['Service', 'Health Camp', 'Buyback', 'E-Waste'];
-    if (!categories.includes(data.category) || !data.description?.trim()) throw new Error('Invalid AI request data');
+    if (!categories.includes(data.category) || !data.description?.trim()) throw Object.assign(new Error('Invalid AI request data'), { status: 422 });
     return { reply: String(reply).slice(0, match.index).trim(), requestData: data };
   } catch { return { reply: String(reply).replace(match[0], '').trim(), requestData: null }; }
 }
@@ -158,7 +167,10 @@ async function findAuthorizedDeviceBySerial(serialNumber, companyId) {
 }
 function serialMention(message = '') {
   // A serial is intentionally only a candidate. It is always checked against the caller's company inventory.
-  return String(message).split(/\s+/).find(value => /^[A-Za-z0-9-]{6,}$/.test(value) && /[0-9-]/.test(value)) || null;
+  // Serials are written in capitals and mix letters with digits, which rules out ordinary words
+  // ("built-in"), dates, phone numbers and model names such as "iPhone15".
+  return String(message).split(/\s+/).map(value => value.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, ''))
+    .find(value => /^[A-Z0-9-]{6,20}$/.test(value) && /[A-Z]/.test(value) && /[0-9]/.test(value)) || null;
 }
 async function authoritativeServiceLocation(device) {
   if (device?.location?.trim()) return device.location.trim();
@@ -181,6 +193,9 @@ async function validatedRequestDraft(state, device) {
     employee: { name: device.employeeName, id: device.employeeId, department: device.department }
   };
 }
+// "Service Recommended" is also the iPhone/Mac battery-condition wording; that is a fault report, not a schedule question.
+const BATTERY_SERVICE_STATUS = /\b(battery|condition|health)\b[^.?!]*\bservice recommended\b|\bservice recommended\b[^.?!]*\bbattery\b/i;
+const isProactiveServiceQuestion = message => PROACTIVE_SERVICE_QUESTION.test(message) && !BATTERY_SERVICE_STATUS.test(message);
 const PROACTIVE_SERVICE_QUESTION = /\b(service recommended|recommended service|preventive|preventative|maintenance|service (?:is )?due|due for (?:a )?service|next service|service reminder|routine service|periodic service)\b/i;
 // Date-only strings are calendar days; stored dates are shown in the business time zone.
 const displayDay = value => {
@@ -246,27 +261,67 @@ function activeEscalationRules() {
   return escalationRuleCache.rules;
 }
 const clearEscalationRuleCache = () => { escalationRuleCache = { at: 0, rules: null }; };
-async function evaluateEscalation(ticket, createEvents = false) { if (!ticket.slaTargetAt || ['Completed', 'Closed'].includes(ticket.status)) return ticket; const now = Date.now(); const target = new Date(ticket.slaTargetAt).getTime(); const created = new Date(ticket.createdAt).getTime(); const elapsedPercent = Math.min(100, Math.max(0, ((now - created) / (target - created)) * 100)); const rules = (await activeEscalationRules()).filter(rule => rule.priority === 'All' || rule.priority === ticket.priority); const breachRule = rules.find(rule => ['SLA Breached', 'Critical SLA Breach', 'High Priority SLA Breach'].includes(rule.trigger) && elapsedPercent >= rule.slaThreshold); const riskRule = rules.find(rule => ['SLA Approaching', 'SLA At Risk'].includes(rule.trigger) && elapsedPercent >= rule.slaThreshold); const nextStatus = breachRule ? 'SLA Breached' : riskRule ? 'At Risk' : 'Healthy'; if (nextStatus === 'Healthy' || ['SLA Breached', 'Escalated'].includes(ticket.escalationStatus) && nextStatus !== 'SLA Breached') return ticket; const rule = breachRule || riskRule; const level = rule?.level || (nextStatus === 'SLA Breached' && ticket.priority === 'Critical' ? 3 : nextStatus === 'SLA Breached' ? 2 : 1); const reason = nextStatus === 'SLA Breached' ? 'Resolution SLA exceeded' : 'Resolution SLA approaching'; const changed = ticket.slaStatus !== nextStatus || ticket.escalationStatus !== (nextStatus === 'Healthy' ? 'Not Escalated' : nextStatus); ticket.slaStatus = nextStatus; ticket.escalationStatus = nextStatus === 'Healthy' ? 'Not Escalated' : nextStatus; ticket.escalationLevel = level; ticket.escalationReason = reason; ticket.escalatedAt = ticket.escalatedAt || new Date(); if (ticket.isModified()) await ticket.save(); if (changed && createEvents) { await TicketTimeline.create({ ticketId: ticket._id, status: nextStatus, message: `${reason}. Escalated to Level ${level}.`, updatedBy: 'SLA Monitor', userRole: 'iplanet_service' }); const users = await serviceUsers(); await notifyUsers({ users, company: ticket.companyId, ticket, type: 'SLA_ESCALATION', title: nextStatus === 'SLA Breached' ? 'SLA breached' : 'SLA approaching', message: `Ticket ${ticket.ticketId} is ${nextStatus.toLowerCase()}. ${reason}.` }); const admins = await User.find({ role: 'corporate_admin', companyId: ticket.companyId }); await notifyUsers({ users: admins, company: ticket.companyId, ticket, type: 'SLA_ESCALATION', title: `SLA update for ${ticket.ticketId}`, message: `${ticket.ticketId} is ${nextStatus.toLowerCase()}. ${reason}.` }); } return ticket; }
+const BREACH_TRIGGERS = ['SLA Breached', 'Critical SLA Breach', 'High Priority SLA Breach'];
+const RISK_TRIGGERS = ['SLA Approaching', 'SLA At Risk'];
+// Of the rules a ticket has reached, the one with the highest escalation level wins, so a
+// generic "All priorities" rule can never downgrade a Critical ticket's escalation.
+const strongestRule = (rules, triggers, elapsedPercent) => rules.filter(rule => triggers.includes(rule.trigger) && elapsedPercent >= rule.slaThreshold).sort((a, b) => b.level - a.level || b.slaThreshold - a.slaThreshold)[0];
+async function evaluateEscalation(ticket, createEvents = false) {
+  if (!ticket.slaTargetAt || ['Completed', 'Closed'].includes(ticket.status)) return ticket;
+  const now = Date.now();
+  const target = new Date(ticket.slaTargetAt).getTime();
+  const created = new Date(ticket.createdAt).getTime();
+  const elapsedPercent = Math.min(100, Math.max(0, ((now - created) / (target - created)) * 100));
+  const rules = (await activeEscalationRules()).filter(rule => rule.priority === 'All' || rule.priority === ticket.priority);
+  const breachRule = strongestRule(rules, BREACH_TRIGGERS, elapsedPercent);
+  const riskRule = strongestRule(rules, RISK_TRIGGERS, elapsedPercent);
+  const nextStatus = breachRule ? 'SLA Breached' : riskRule ? 'At Risk' : 'Healthy';
+  if (nextStatus === 'Healthy' || ['SLA Breached', 'Escalated'].includes(ticket.escalationStatus) && nextStatus !== 'SLA Breached') return ticket;
+  const rule = breachRule || riskRule;
+  const ruleLevel = rule?.level || (nextStatus === 'SLA Breached' && ticket.priority === 'Critical' ? 3 : nextStatus === 'SLA Breached' ? 2 : 1);
+  const level = Math.max(ruleLevel, ticket.escalationLevel || 0);
+  // Level 2+ breaches are handed to service management, which the dashboards count as escalations.
+  const nextEscalation = nextStatus === 'SLA Breached' && level >= 2 ? 'Escalated' : nextStatus;
+  const reason = nextStatus !== 'SLA Breached' ? 'Resolution SLA approaching' : now >= target ? 'Resolution SLA exceeded' : 'Escalation threshold reached before the SLA deadline';
+  const update = { slaStatus: nextStatus, escalationStatus: nextEscalation, escalationLevel: level, escalationReason: reason, escalatedAt: ticket.escalatedAt || new Date() };
+  if (Object.entries(update).every(([key, value]) => key === 'escalatedAt' ? Boolean(ticket.escalatedAt) : ticket[key] === value)) return ticket;
+  const changed = ticket.slaStatus !== nextStatus || ticket.escalationStatus !== nextEscalation;
+  // Several requests can evaluate the same ticket at once (dashboard + list, two users). The write is
+  // conditional on the state this request read, so only the request whose write lands emits events.
+  const result = await Ticket.updateOne({ _id: ticket._id, slaStatus: ticket.slaStatus ?? null, escalationStatus: ticket.escalationStatus ?? null, escalationLevel: ticket.escalationLevel ?? null }, { $set: update });
+  if (typeof ticket.set === 'function') ticket.set(update); else Object.assign(ticket, update);
+  if (changed && createEvents && result.modifiedCount === 1) {
+    await TicketTimeline.create({ ticketId: ticket._id, status: nextStatus, message: `${reason}. Escalated to Level ${level}.`, updatedBy: 'SLA Monitor', userRole: 'iplanet_service' });
+    const users = await serviceUsers();
+    await notifyUsers({ users, company: ticket.companyId, serviceCentreId: ticket.serviceCentreId, ticket, type: 'SLA_ESCALATION', title: nextStatus === 'SLA Breached' ? 'SLA breached' : 'SLA approaching', message: `Ticket ${ticket.ticketId} is ${nextStatus.toLowerCase()}. ${reason}.` });
+    const admins = await User.find({ role: 'corporate_admin', companyId: ticket.companyId });
+    await notifyUsers({ users: admins, company: ticket.companyId, ticket, type: 'SLA_ESCALATION', title: `SLA update for ${ticket.ticketId}`, message: `${ticket.ticketId} is ${nextStatus.toLowerCase()}. ${reason}.` });
+  }
+  return ticket;
+}
 
 app.post('/api/auth/login', async (req, res) => {
   // The password is excluded from every other query (select: false), so it is requested explicitly here.
-  const user = await User.findOne({ email: req.body.email }).select('+password');
-  if (!user || user.password !== req.body.password) return res.status(401).json({ message: 'Invalid demo credentials' });
-  const token = jwt.sign({ id: user._id, email: user.email, role: user.role, companyId: user.companyId, serviceCentreId: user.serviceCentreId }, process.env.JWT_SECRET || 'local-demo-secret', { expiresIn: '8h' });
+  // Only plain strings are accepted, so query operators such as {"$gt": ""} can't select an arbitrary account.
+  const { email, password } = req.body || {};
+  if (typeof email !== 'string' || typeof password !== 'string' || !email || !password) return res.status(400).json({ message: 'Email and password are required' });
+  const user = await User.findOne({ email: email.trim() }).select('+password');
+  if (!user || !verifyPassword(password, user.password)) return res.status(401).json({ message: 'Invalid demo credentials' });
+  if (needsRehash(user.password)) await User.updateOne({ _id: user._id }, { password: hashPassword(password) });
+  const token = jwt.sign({ id: user._id, name: user.name, email: user.email, role: user.role, companyId: user.companyId, serviceCentreId: user.serviceCentreId }, jwtSecret(), { expiresIn: '8h' });
   res.json({ token, user: { id: user._id, name: user.name, email: user.email, role: user.role, company: user.company, companyId: user.companyId, serviceCentreId: user.serviceCentreId } });
 });
 
 const corporateCompany = req => req.user.role === 'corporate_admin' ? { companyId: new mongoose.Types.ObjectId(req.user.companyId) } : {};
-app.get('/api/devices', auth, allowRoles('corporate_admin'), async (req, res) => { const query = { ...corporateCompany(req), ...(req.query.search ? { $or: ['assetId', 'serialNumber', 'model', 'employeeName', 'location'].map(field => ({ [field]: { $regex: req.query.search, $options: 'i' } })) } : {}) }; res.json(await Device.find(query).populate('companyId').sort({ assetId: 1 })); });
+app.get('/api/devices', auth, allowRoles('corporate_admin'), async (req, res) => { const query = { ...corporateCompany(req), ...(req.query.search ? { $or: ['assetId', 'serialNumber', 'model', 'employeeName', 'location'].map(field => ({ [field]: { $regex: escapeRegex(String(req.query.search)), $options: 'i' } })) } : {}) }; res.json(await Device.find(query).populate('companyId').sort({ assetId: 1 })); });
 app.get('/api/devices/serial/:serialNumber', auth, allowRoles('corporate_admin'), async (req, res) => { const device = await Device.findOne({ serialNumber: req.params.serialNumber, ...corporateCompany(req) }); if (!device) return res.status(404).json({ message: 'No device found for that serial number' }); res.json(device); });
 app.get('/api/devices/:id', auth, allowRoles('corporate_admin'), async (req, res) => { const device = await Device.findOne({ _id: req.params.id, ...corporateCompany(req) }); if (!device) return res.status(404).json({ message: 'Device not found' }); res.json(device); });
 app.get('/api/tickets', auth, allowRoles('corporate_admin'), async (req, res) => { const query = { companyId: req.user.companyId, ...(req.query.status && req.query.status !== 'All' ? { status: req.query.status } : {}) }; const tickets = await Ticket.find(query).populate('deviceId').populate('companyId', 'name companyId location').populate('assignedEngineerId', 'name employeeId phone email location status').sort({ createdAt: -1 }); await Promise.all(tickets.map(ticket => evaluateEscalation(ticket, true))); res.json(tickets); });
 app.get('/api/tickets/:id', auth, allowRoles('corporate_admin'), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }).populate('deviceId').populate('companyId').populate('serviceCentreId').populate('assignedEngineerId').populate('customerId'); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); await evaluateEscalation(ticket, true); const [timeline, callHistory, aiSupport, review] = await Promise.all([TicketTimeline.find({ ticketId: ticket._id }).sort({ timestamp: 1 }), CallRecord.find({ ticketId: ticket._id }).sort({ createdAt: -1 }), AITroubleshootingSession.find({ ticketId: ticket._id }).sort({ createdAt: -1 }), Review.findOne({ ticketId: ticket._id })]); const reviewSubmitted = Boolean(review); const reviewEligible = ticket.status === 'Closed' && !reviewSubmitted; res.json({ ticket, reviewEligible, reviewSubmitted, reviewId: review?._id || null, escalation: { status: ticket.escalationStatus, level: ticket.escalationLevel, reason: ticket.escalationReason, responseTarget: ticket.responseTarget, resolutionTarget: ticket.resolutionTarget, slaTargetAt: ticket.slaTargetAt }, escalationContact: escalationContacts[ticket.escalationLevel] || null, timeline, callHistory, aiSupport }); });
-app.post('/api/tickets', auth, allowRoles('corporate_admin'), async (req, res) => { const device = await Device.findOne({ _id: req.body.deviceId, companyId: req.user.companyId }); if (!device) return res.status(400).json({ message: 'Valid company device selection is required' }); let followUp = null; try { followUp = await proactiveEngine.validateTicketLink(req.body.serviceFollowUpId, { companyId: req.user.companyId, deviceId: device._id }); } catch (error) { return res.status(error.status || 400).json({ message: error.message }); } const requestFields = Object.fromEntries(TICKET_REQUEST_FIELDS.filter(field => req.body[field] !== undefined).map(field => [field, req.body[field]])); const createdAt = new Date(); const ticket = await Ticket.create({ ...requestFields, ticketId: ticketId(), serviceFollowUpId: followUp?._id, ...(followUp?.serviceCentreId ? { serviceCentreId: followUp.serviceCentreId } : {}), customerId: req.user.id, companyId: req.user.companyId, deviceId: device._id, status: 'Open', images: [], originalImages: [], annotatedImages: [], responseTarget: '4 business hours', resolutionTarget: `${targetHours(req.body.priority)} hours`, slaTargetAt: new Date(createdAt.getTime() + targetHours(req.body.priority) * 3600000), slaStatus: 'Healthy', escalationStatus: 'Not Escalated' }); await TicketTimeline.create({ ticketId: ticket._id, status: 'Open', message: followUp ? 'Service request created by Corporate Admin from a preventive service recommendation.' : 'Service request created by Corporate Admin.', updatedBy: 'Corporate Portal', userRole: 'corporate_admin' }); if (followUp) await proactiveEngine.linkTicket(followUp, ticket, req.user); const users = await serviceUsers(); await notifyUsers({ users, company: ticket.companyId, ticket, device, type: 'NEW_SERVICE_REQUEST', title: 'New service request', message: `${ticket.ticketId} was raised for ${device.model}.` }); res.status(201).json(await ticket.populate('deviceId')); });
-app.post('/api/tickets/:id/images', auth, allowRoles('corporate_admin'), upload.array('images', 5), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); const paths = req.files.map(file => `/uploads/${file.filename}`); ticket.images.push(...paths); ticket.originalImages.push(...paths); await ticket.save(); res.json(ticket); });
-app.post('/api/tickets/:id/annotated-images', auth, allowRoles('corporate_admin'), upload.array('images', 5), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); const paths = req.files.map(file => `/uploads/${file.filename}`); ticket.images.push(...paths); ticket.annotatedImages.push(...paths); await ticket.save(); res.json(ticket); });
-app.get('/api/tickets/:id/calls', auth, async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }).populate('customerId'); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); res.json(await CallRecord.find({ ticketId: ticket._id }).sort({ createdAt: -1 })); });
-app.post('/api/tickets/:id/calls', auth, async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }).populate('customerId'); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); const customerPhone = req.body.customerPhone || ticket.customerId?.phone || ticket.companyId?.phone || ''; const record = await CallRecord.create({ ticketId: ticket._id, agentUserId: req.user.id, agentName: req.user.name || 'Service Agent', ticketNumber: ticket.ticketId, customerName: ticket.customerId?.name || ticket.customerId?.company || 'Customer', customerPhone, outcome: req.body.outcome || 'Customer Unavailable', notes: req.body.notes || '', callStatus: req.body.callStatus || 'Call Attempted' }); await TicketTimeline.create({ ticketId: ticket._id, status: 'Call Update', message: `${record.outcome}${record.notes ? `: ${record.notes}` : ''}`, updatedBy: record.agentName, userRole: req.user.role, timestamp: new Date() }); res.status(201).json(record); });
+app.post('/api/tickets', auth, allowRoles('corporate_admin'), async (req, res) => { const device = await Device.findOne({ _id: req.body.deviceId, companyId: req.user.companyId }); if (!device) return res.status(400).json({ message: 'Valid company device selection is required' }); let followUp = null; try { followUp = await proactiveEngine.validateTicketLink(req.body.serviceFollowUpId, { companyId: req.user.companyId, deviceId: device._id }); } catch (error) { return res.status(error.status || 400).json({ message: error.message }); } const requestFields = Object.fromEntries(TICKET_REQUEST_FIELDS.filter(field => req.body[field] !== undefined).map(field => [field, req.body[field]])); const createdAt = new Date(); const ticket = await createTicketWithUniqueId({ ...requestFields, serviceFollowUpId: followUp?._id, ...(followUp?.serviceCentreId ? { serviceCentreId: followUp.serviceCentreId } : {}), customerId: req.user.id, companyId: req.user.companyId, deviceId: device._id, status: 'Open', images: [], originalImages: [], annotatedImages: [], responseTarget: '4 business hours', resolutionTarget: `${targetHours(req.body.priority)} hours`, slaTargetAt: new Date(createdAt.getTime() + targetHours(req.body.priority) * 3600000), slaStatus: 'Healthy', escalationStatus: 'Not Escalated' }); await TicketTimeline.create({ ticketId: ticket._id, status: 'Open', message: followUp ? 'Service request created by Corporate Admin from a preventive service recommendation.' : 'Service request created by Corporate Admin.', updatedBy: 'Corporate Portal', userRole: 'corporate_admin' }); if (followUp) await proactiveEngine.linkTicket(followUp, ticket, req.user); const users = await serviceUsers(); await notifyUsers({ users, company: ticket.companyId, ticket, device, type: 'NEW_SERVICE_REQUEST', title: 'New service request', message: `${ticket.ticketId} was raised for ${device.model}.` }); res.status(201).json(await ticket.populate('deviceId')); });
+app.post('/api/tickets/:id/images', auth, allowRoles('corporate_admin'), upload.array('images', 5), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); if (!req.files?.length) return res.status(400).json({ message: 'Attach at least one image.' }); const paths = req.files.map(file => `/uploads/${file.filename}`); ticket.images.push(...paths); ticket.originalImages.push(...paths); await ticket.save(); res.json(ticket); });
+app.post('/api/tickets/:id/annotated-images', auth, allowRoles('corporate_admin'), upload.array('images', 5), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); if (!req.files?.length) return res.status(400).json({ message: 'Attach at least one image.' }); const paths = req.files.map(file => `/uploads/${file.filename}`); ticket.images.push(...paths); ticket.annotatedImages.push(...paths); await ticket.save(); res.json(ticket); });
+app.get('/api/tickets/:id/calls', auth, allowRoles('corporate_admin'), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }).populate('customerId'); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); res.json(await CallRecord.find({ ticketId: ticket._id }).sort({ createdAt: -1 })); });
 app.get('/api/tickets/:id/ai-support', auth, async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }).populate('deviceId'); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); const session = await AITroubleshootingSession.findOne({ ticketId: ticket._id }).sort({ createdAt: -1 }); res.json({ session, sessionId: session?._id || null, hasAttempted: !!session }); });
 app.post('/api/tickets/:id/ai-support', auth, async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }).populate('deviceId'); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); const session = await buildAiSession(ticket, await AITroubleshootingSession.findOne({ ticketId: ticket._id }).sort({ createdAt: -1 })); const previousSteps = session.troubleshootingSteps.map(step => step.step);
   if (req.body.customerResponse) {
@@ -303,6 +358,8 @@ app.post('/api/ai/support/chat', auth, async (req, res) => {
   if (trimmedMessage.length > 4000) return res.status(400).json({ message: 'Message must be 4000 characters or fewer.' });
   if (req.user.role !== 'corporate_admin') return res.status(403).json({ message: 'This account is not allowed to access AI support.' });
 
+  if (ticketId && !mongoose.isValidObjectId(ticketId)) return res.status(404).json({ message: 'Ticket not found' });
+  if (deviceId && !mongoose.isValidObjectId(deviceId)) return res.status(404).json({ message: 'Device not found' });
   const ticket = ticketId ? await Ticket.findOne({ _id: ticketId, companyId: req.user.companyId }).populate('deviceId') : null;
   if (ticketId && !ticket) return res.status(404).json({ message: 'Ticket not found' });
   const suppliedSerial = !ticket && !deviceId ? serialMention(trimmedMessage) : null;
@@ -313,7 +370,8 @@ app.post('/api/ai/support/chat', auth, async (req, res) => {
   // chat. Never query MongoDB with an undefined session ID: it can otherwise
   // match legacy documents and resume a later state such as device collection.
   const session = ticketId
-    ? (conversationId ? await AITroubleshootingSession.findOne({ _id: conversationId, ticketId: ticket._id }) : await AITroubleshootingSession.findOne({ ticketId: ticket._id }).sort({ createdAt: -1 }))
+    // The client sends back the conversationId it was given, which is the session's sessionId string.
+    ? (conversationId ? await AITroubleshootingSession.findOne({ sessionId: String(conversationId), ticketId: ticket._id }) : await AITroubleshootingSession.findOne({ ticketId: ticket._id }).sort({ createdAt: -1 }))
     : (conversationId ? await AITroubleshootingSession.findOne({ sessionId: conversationId, customerId: req.user.id }) : null);
 
   const activeSession = session || await buildAiSession(ticket || { ticketId: 'Unknown', deviceId: device || {} }, null);
@@ -337,7 +395,7 @@ app.post('/api/ai/support/chat', auth, async (req, res) => {
     // Preventive-service questions are answered from the proactive-service
     // engine, the same source the portals use. The reply can only offer to
     // open a pre-filled Raise Request; it never creates a ticket itself.
-    if (PROACTIVE_SERVICE_QUESTION.test(trimmedMessage)) {
+    if (isProactiveServiceQuestion(trimmedMessage)) {
       const scope = { companyId: req.user.companyId };
       const { items } = await proactiveEngine.list({ scope });
       // Without a named device, only list recommendations the customer can still act on.
@@ -370,7 +428,8 @@ app.post('/api/ai/support/chat', auth, async (req, res) => {
         category: previous.category || understanding.category || 'Service',
         issueType: previous.issueType || understanding.issueType || null,
         description: previous.description || understanding.description || null,
-        preferredServiceDate: previous.preferredServiceDate || resolveServiceDateIntent(understanding.preferredServiceDateIntent || trimmedMessage).date || null,
+        // A date the customer gives now replaces an earlier one ("make it Thursday instead").
+        preferredServiceDate: resolveServiceDateIntent(understanding.preferredServiceDateIntent || trimmedMessage).date || previous.preferredServiceDate || null,
         symptoms: [...new Set([...(previous.symptoms || []), ...(understanding.symptoms || [])])]
       };
       if (device) state.deviceId = String(device._id);
@@ -518,14 +577,18 @@ app.get('/api/ai/support/request-data/:conversationId', auth, async (req, res) =
   return res.json({ requestData: normalizeAiRequest(session.preparedRequest, device) });
 });
 app.get('/api/dashboard/stats', auth, allowRoles('corporate_admin'), async (req, res) => { const [totalDevices, tickets, warrantyDevices, amcDevices] = await Promise.all([Device.countDocuments(corporateCompany(req)), Ticket.find(corporateCompany(req)), Device.countDocuments({ ...corporateCompany(req), warrantyStatus: 'Active' }), Device.countDocuments({ ...corporateCompany(req), amcStatus: 'Active' })]); await Promise.all(tickets.map(ticket => evaluateEscalation(ticket, true))); res.json({ totalDevices, openTickets: tickets.filter(t => t.status === 'Open').length, inProgress: tickets.filter(t => t.status === 'In Progress').length, completedTickets: tickets.filter(t => t.status === 'Completed').length, closedTickets: tickets.filter(t => t.status === 'Closed').length, activeEscalations: tickets.filter(t => t.escalationStatus === 'Escalated').length, atRiskTickets: tickets.filter(t => t.escalationStatus === 'At Risk').length, breachedTickets: tickets.filter(t => t.escalationStatus === 'SLA Breached').length, warrantyDevices, amcDevices }); });
-async function ticketVolumeByMonth() {
-  const rows = await Ticket.aggregate([{ $group: { _id: { $month: '$createdAt' }, tickets: { $sum: 1 } } }, { $sort: { '_id': 1 } }]);
+// Tickets per month of the current year, counted in India time so a ticket raised
+// just after midnight IST on the 1st lands in the right month.
+async function ticketVolumeByMonth(match = {}) {
+  const timezone = 'Asia/Kolkata';
+  const year = Number(new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric' }).format(new Date()));
+  const rows = await Ticket.aggregate([{ $match: match }, { $project: { year: { $year: { date: '$createdAt', timezone } }, month: { $month: { date: '$createdAt', timezone } } } }, { $match: { year } }, { $group: { _id: '$month', tickets: { $sum: 1 } } }, { $sort: { _id: 1 } }]);
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   return months.map((month, index) => ({ month, tickets: rows.find(row => row._id === index + 1)?.tickets || 0 }));
 }
-app.get('/api/dashboard/ticket-volume', auth, async (_, res) => res.json(await ticketVolumeByMonth()));
+app.get('/api/dashboard/ticket-volume', auth, async (req, res) => res.json(await ticketVolumeByMonth(corporateCompany(req))));
 app.get('/api/dashboard/location-distribution', auth, allowRoles('corporate_admin'), async (req, res) => res.json(await Device.aggregate([{ $match: corporateCompany(req) }, { $group: { _id: '$location', value: { $sum: 1 } } }, { $project: { _id: 0, name: '$_id', value: 1 } }])));
-app.get('/api/profile', auth, allowRoles('corporate_admin'), async (req, res) => { const user = await User.findById(req.user.id).populate('companyId').select('-password'); const numberOfDevices = await Device.countDocuments(corporateCompany(req)); res.json({ ...user.toObject(), primaryLocation: user.companyId?.location || 'Chennai', numberOfDevices }); });
+app.get('/api/profile', auth, allowRoles('corporate_admin'), async (req, res) => { const user = await User.findById(req.user.id).populate('companyId').select('-password'); if (!user) return res.status(404).json({ message: 'Profile not found' }); const numberOfDevices = await Device.countDocuments(corporateCompany(req)); res.json({ ...user.toObject(), primaryLocation: user.companyId?.location || 'Chennai', numberOfDevices }); });
 app.get('/api/corporate/notifications', auth, allowRoles('corporate_admin'), async (req, res) => res.json(await Notification.find({ user: req.user.id, company: req.user.companyId }).populate('ticket', 'ticketId status issueType').populate('device', 'model serialNumber').sort({ createdAt: -1 }).limit(NOTIFICATION_LIST_LIMIT).lean()));
 app.get('/api/corporate/notifications/unread-count', auth, allowRoles('corporate_admin'), async (req, res) => res.json({ count: await Notification.countDocuments({ user: req.user.id, company: req.user.companyId, read: false }) }));
 app.patch('/api/corporate/notifications/:id/read', auth, allowRoles('corporate_admin'), async (req, res) => { const notification = await Notification.findOneAndUpdate({ _id: req.params.id, user: req.user.id, company: req.user.companyId }, { read: true }, { new: true }); if (!notification) return res.status(404).json({ message: 'Notification not found' }); res.json(notification); });
@@ -583,7 +646,8 @@ app.get('/api/iplanet/tickets', ...serviceAuth, async (req, res) => {
   for (const field of ['status', 'priority', 'location', 'companyId', 'slaStatus', 'escalationStatus']) if (req.query[field] && req.query[field] !== 'All') query[field] = req.query[field];
   if (req.query.assignment === 'Unassigned') query.assignedEngineerId = null;
   if (req.query.assignment === 'Assigned') query.assignedEngineerId = { $ne: null };
-  if (req.query.date) query.createdAt = { $gte: new Date(req.query.date), $lt: new Date(new Date(req.query.date).getTime() + 86400000) };
+  // A YYYY-MM-DD filter means that calendar day in India, not UTC midnight to midnight.
+  if (req.query.date) { const start = new Date(/^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? `${req.query.date}T00:00:00+05:30` : req.query.date); if (!Number.isNaN(start.getTime())) query.createdAt = { $gte: start, $lt: new Date(start.getTime() + 86400000) }; }
   const tickets = await Ticket.find(query).populate('customerId').populate('companyId').populate('deviceId').populate('assignedEngineerId').sort({ createdAt: -1 });
   const search = req.query.search?.toLowerCase();
   await Promise.all(tickets.map(ticket => evaluateEscalation(ticket, true)));
@@ -594,7 +658,7 @@ app.get('/api/iplanet/companies', ...serviceAuth, async (_, res) => res.json(awa
 app.post('/api/iplanet/companies', ...serviceAuth, async (req, res) => { const { name, location, contactName, contactEmail, phone } = req.body; if (!name?.trim() || !location?.trim()) return res.status(400).json({ message: 'Corporate name and location are required' }); try { const company = await Company.create({ name: name.trim(), location: location.trim(), contactName, contactEmail, phone, companyId: `CO-${Date.now()}` }); res.status(201).json(company); } catch (error) { if (error.code === 11000) return res.status(409).json({ message: 'A Corporate with that name already exists' }); throw error; } });
 app.get('/api/iplanet/service-centres', ...serviceAuth, async (_, res) => res.json(await ServiceCentre.find({ status: 'Active' }).sort({ name: 1 })));
 app.post('/api/iplanet/service-centres', ...serviceAuth, async (req, res) => { const { name, location, address, city, state, contactNumber, email, status, serviceCentreId } = req.body; if (!name?.trim() || !location?.trim()) return res.status(400).json({ message: 'Service Centre name and location are required' }); try { res.status(201).json(await ServiceCentre.create({ serviceCentreId: serviceCentreId || undefined, name: name.trim(), location: location.trim(), address, city, state, contactNumber, email, status: status || 'Active' })); } catch (error) { if (error.code === 11000) return res.status(409).json({ message: 'A Service Centre with that name already exists' }); throw error; } });
-app.get('/api/iplanet/engineers', ...serviceAuth, async (_, res) => { const engineers = await Engineer.find().populate('userId', 'name email role phone'); const tickets = await Ticket.find({ assignedEngineerId: { $ne: null }, status: { $nin: ['Closed'] } }).select('assignedEngineerId').lean(); res.json(engineers.map(engineer => ({ ...engineer.toObject(), assignedTicketCount: tickets.filter(ticket => String(ticket.assignedEngineerId) === String(engineer._id)).length }))); });
+app.get('/api/iplanet/engineers', ...serviceAuth, async (_, res) => { const engineers = await Engineer.find().populate('userId', 'name email role phone'); const tickets = await Ticket.find({ assignedEngineerId: { $ne: null }, status: { $nin: ['Completed', 'Closed'] } }).select('assignedEngineerId').lean(); res.json(engineers.map(engineer => ({ ...engineer.toObject(), assignedTicketCount: tickets.filter(ticket => String(ticket.assignedEngineerId) === String(engineer._id)).length }))); });
 app.post('/api/iplanet/tickets/:id/assign', ...serviceAuth, async (req, res) => { const ticket = await serviceTicket(req.params.id); const engineer = await Engineer.findById(req.body.engineerId); if (!ticket || !engineer) return res.status(404).json({ message: 'Ticket or engineer not found' }); if (!['Open', 'Engineer Assigned'].includes(ticket.status)) return res.status(409).json({ message: `Cannot assign an engineer to a ${ticket.status} ticket` }); ticket.assignedEngineer = engineer.name; ticket.assignedEngineerId = engineer._id; ticket.assignedAt = new Date(); await addTimeline(ticket, 'Engineer Assigned', `${engineer.name} assigned to the service request.`, req.user); await notifyTicketUpdate(ticket, ticket.deviceId, 'ENGINEER_ASSIGNED', 'Engineer assigned', `Engineer ${engineer.name} was assigned to ${ticket.ticketId}.`); res.json(await serviceTicket(ticket._id)); });
 app.get('/api/iplanet/tickets/:id/calls', ...serviceAuth, async (req, res) => { const ticket = await serviceTicket(req.params.id); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); res.json(await CallRecord.find({ ticketId: ticket._id }).sort({ createdAt: -1 })); });
 app.post('/api/iplanet/tickets/:id/calls', ...serviceAuth, async (req, res) => { const ticket = await serviceTicket(req.params.id); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); const customerPhone = req.body.customerPhone || ticket.customerId?.phone || ticket.companyId?.phone || ''; const record = await CallRecord.create({ ticketId: ticket._id, agentUserId: req.user.id, agentName: req.user.name || 'Service Agent', ticketNumber: ticket.ticketId, customerName: ticket.customerId?.name || ticket.companyId?.name || 'Customer', customerPhone, outcome: req.body.outcome || 'Customer Unavailable', notes: req.body.notes || '', callStatus: req.body.callStatus || 'Call Attempted' }); await TicketTimeline.create({ ticketId: ticket._id, status: 'Call Update', message: `${record.outcome}${record.notes ? `: ${record.notes}` : ''}`, updatedBy: record.agentName, userRole: req.user.role, timestamp: new Date() }); res.status(201).json(record); });
@@ -666,7 +730,7 @@ app.post('/api/iplanet/proactive-service/followups/:id/:action', ...serviceAuth,
   if (!SERVICE_FOLLOW_UP_ACTIONS.includes(req.params.action)) return res.status(404).json({ message: 'Unknown action' });
   res.json(await proactiveEngine.serviceAction(req.params.id, req.params.action, req.body, req.user, serviceScope(req)));
 }));
-app.patch('/api/iplanet/devices/:id/service-plan', ...serviceAuth, proactiveRoute(async (req, res) => res.json(await proactiveEngine.updatePlan(req.params.id, req.body))));
+app.patch('/api/iplanet/devices/:id/service-plan', ...serviceAuth, proactiveRoute(async (req, res) => res.json(await proactiveEngine.updatePlan(req.params.id, req.body, serviceScope(req)))));
 app.get('/api/iplanet/proactive-service/scheduler', ...serviceAuth, (_, res) => res.json(proactiveScheduler.status()));
 app.post('/api/iplanet/proactive-service/run', ...serviceAuth, proactiveRoute(async (_, res) => res.json(await proactiveScheduler.run('manual'))));
 // External cron trigger. Disabled unless PROACTIVE_SERVICE_CRON_SECRET is set.
@@ -698,24 +762,24 @@ app.get('/api/corporate/devices/:id/service-plan', auth, allowRoles('corporate_a
 app.get('/api/iplanet/reports', ...serviceAuth, async (_, res) => { const tickets = await Ticket.find().populate('deviceId'); const group = key => Object.entries(tickets.reduce((result, ticket) => { const value = key === 'deviceType' ? ticket.deviceId?.deviceType : ticket[key]; result[value || 'Other'] = (result[value || 'Other'] || 0) + 1; return result; }, {})).map(([name, value]) => ({ name, value })); res.json({ total: tickets.length, open: tickets.filter(t => t.status === 'Open').length, completed: tickets.filter(t => t.status === 'Completed').length, closed: tickets.filter(t => t.status === 'Closed').length, averageClosureTat: '2.4 days', locations: group('location'), deviceTypes: group('deviceType'), issueTypes: group('issueType') }); });
 app.get('/api/iplanet/notifications', ...serviceAuth, async (req, res) => {
   const query = { user: req.user.id, portalRole: 'iplanet_service' };
-  if (req.user.serviceCentreId) query.serviceCentreId = req.user.serviceCentreId;
+  if (req.user.serviceCentreId) query.serviceCentreId = { $in: [req.user.serviceCentreId, null] };
   res.json(await Notification.find(query).populate('ticket', 'ticketId status issueType').populate('device', 'model serialNumber').sort({ createdAt: -1 }).limit(NOTIFICATION_LIST_LIMIT).lean());
 });
 app.get('/api/iplanet/notifications/unread-count', ...serviceAuth, async (req, res) => {
   const query = { user: req.user.id, portalRole: 'iplanet_service', read: false };
-  if (req.user.serviceCentreId) query.serviceCentreId = req.user.serviceCentreId;
+  if (req.user.serviceCentreId) query.serviceCentreId = { $in: [req.user.serviceCentreId, null] };
   res.json({ count: await Notification.countDocuments(query) });
 });
 app.patch('/api/iplanet/notifications/:id/read', ...serviceAuth, async (req, res) => {
   const query = { _id: req.params.id, user: req.user.id, portalRole: 'iplanet_service' };
-  if (req.user.serviceCentreId) query.serviceCentreId = req.user.serviceCentreId;
+  if (req.user.serviceCentreId) query.serviceCentreId = { $in: [req.user.serviceCentreId, null] };
   const notification = await Notification.findOneAndUpdate(query, { read: true }, { new: true });
   if (!notification) return res.status(404).json({ message: 'Notification not found' });
   res.json(notification);
 });
 app.patch('/api/iplanet/notifications/read-all', ...serviceAuth, async (req, res) => {
   const query = { user: req.user.id, portalRole: 'iplanet_service', read: false };
-  if (req.user.serviceCentreId) query.serviceCentreId = req.user.serviceCentreId;
+  if (req.user.serviceCentreId) query.serviceCentreId = { $in: [req.user.serviceCentreId, null] };
   await Notification.updateMany(query, { read: true });
   res.json({ ok: true });
 });
@@ -723,15 +787,29 @@ app.get('/api/escalation-matrix', auth, async (_, res) => res.json(Object.values
 app.get('/api/iplanet/escalation-rules', ...serviceAuth, async (_, res) => res.json(await EscalationRule.find().sort({ level: 1, slaThreshold: 1 })));
 app.post('/api/iplanet/escalation-rules', ...serviceAuth, async (req, res) => { const { name, level, trigger, priority, slaThreshold, action, isActive } = req.body; if (!name?.trim() || !level || !trigger || !action?.trim() || !Number.isFinite(Number(slaThreshold)) || Number(slaThreshold) < 0 || Number(slaThreshold) > 100) return res.status(400).json({ message: 'Rule name, level, trigger, valid SLA threshold, and action are required' }); const rule = await EscalationRule.create({ name: name.trim(), level: Number(level), trigger, priority: priority || 'All', slaThreshold: Number(slaThreshold), action: action.trim(), isActive: isActive !== false }); clearEscalationRuleCache(); res.status(201).json(rule); });
 app.patch('/api/iplanet/escalation-rules/:id', ...serviceAuth, async (req, res) => { const rule = await EscalationRule.findByIdAndUpdate(req.params.id, { ...req.body, ...(req.body.slaThreshold !== undefined ? { slaThreshold: Number(req.body.slaThreshold) } : {}) }, { new: true, runValidators: true }); if (!rule) return res.status(404).json({ message: 'Escalation rule not found' }); clearEscalationRuleCache(); res.json(rule); });
-app.get('/api/coverage', auth, async (req, res) => { const query = req.user.role === 'corporate_admin' ? { companyId: req.user.companyId } : {}; const devices = await Device.find(query).populate('companyId').sort({ model: 1 }); const covered = devices.map(device => ({ ...device.toObject(), coverageStatus: device.warrantyStatus === 'Active' || device.amcStatus === 'Active' ? 'Covered' : 'Not Covered', entitlements: device.warrantyStatus === 'Active' || device.amcStatus === 'Active' ? ['Repair', 'Parts Replacement', 'Remote Support'] : [] })); res.json({ summary: { total: covered.length, warrantyActive: covered.filter(device => device.warrantyStatus === 'Active').length, amcActive: covered.filter(device => device.amcStatus === 'Active').length, expiringSoon: covered.filter(device => device.warrantyStatus === 'Expiring Soon' || device.amcStatus === 'Expiring Soon').length, expired: covered.filter(device => device.warrantyStatus === 'Expired' || device.amcStatus === 'Expired').length }, devices: covered }); });
+// A warranty or AMC that is still valid but expiring soon still covers the device.
+const isCovered = device => ['Active', 'Expiring Soon'].includes(device.warrantyStatus) || ['Active', 'Expiring Soon'].includes(device.amcStatus);
+app.get('/api/coverage', auth, async (req, res) => { const query = req.user.role === 'corporate_admin' ? { companyId: req.user.companyId } : {}; const devices = await Device.find(query).populate('companyId').sort({ model: 1 }); const covered = devices.map(device => ({ ...device.toObject(), coverageStatus: isCovered(device) ? 'Covered' : 'Not Covered', entitlements: isCovered(device) ? ['Repair', 'Parts Replacement', 'Remote Support'] : [] })); res.json({ summary: { total: covered.length, warrantyActive: covered.filter(device => device.warrantyStatus === 'Active').length, amcActive: covered.filter(device => device.amcStatus === 'Active').length, expiringSoon: covered.filter(device => device.warrantyStatus === 'Expiring Soon' || device.amcStatus === 'Expiring Soon').length, expired: covered.filter(device => device.warrantyStatus === 'Expired' || device.amcStatus === 'Expired').length }, devices: covered }); });
 app.get('/api/tickets/:id/escalation', auth, async (req, res) => { if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ message: 'Ticket not found' }); const ticket = await Ticket.findOne({ _id: req.params.id, ...(req.user.role === 'corporate_admin' ? { companyId: req.user.companyId } : {}) }); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); await evaluateEscalation(ticket, true); res.json({ escalation: { status: ticket.escalationStatus, level: ticket.escalationLevel, reason: ticket.escalationReason, escalatedAt: ticket.escalatedAt, slaStatus: ticket.slaStatus, responseTarget: ticket.responseTarget, resolutionTarget: ticket.resolutionTarget, slaTargetAt: ticket.slaTargetAt }, escalationContact: escalationContacts[ticket.escalationLevel] || null, history: await TicketTimeline.find({ ticketId: ticket._id, status: { $in: ['At Risk', 'SLA Breached', 'Escalated'] } }).sort({ timestamp: 1 }) }); });
 app.get('/api/iplanet/device-master', ...serviceAuth, async (_, res) => res.json(await DeviceMaster.find().sort({ serialNumber: 1 })));
 app.get('/api/iplanet/device-master/:serialNumber', ...serviceAuth, async (req, res) => { const device = await DeviceMaster.findOne({ serialNumber: req.params.serialNumber }); if (!device) return res.status(404).json({ message: 'Device not found. Please verify the serial number.' }); res.json(device); });
-app.post('/api/iplanet/devices/enroll', ...serviceAuth, async (req, res) => { const master = await DeviceMaster.findOne({ serialNumber: req.body.serialNumber }); const selectedEntityType = req.body.selectedEntityType; const selectedEntityId = req.body.selectedEntityId; const company = selectedEntityType === 'corporate' ? await Company.findById(selectedEntityId) : null; const centre = selectedEntityType === 'service_centre' ? await ServiceCentre.findById(selectedEntityId) : null; if (!master) return res.status(404).json({ message: 'Device not found. Please verify the serial number.' }); if (!['corporate', 'service_centre'].includes(selectedEntityType) || !selectedEntityId || (!company && !centre)) return res.status(400).json({ message: 'Select a valid Corporate or Service Centre' }); let device = await Device.findOne({ serialNumber: master.serialNumber }); const values = { selectedEntityId, selectedEntityType, ...(company ? { companyId: company._id, location: company.location } : { location: centre.location }), employeeName: null, employeeId: null, department: null, deviceAllocationStatus: 'Unassigned' }; if (device) { Object.assign(device, values); await device.save(); } else { device = await Device.create({ serialNumber: master.serialNumber, deviceType: master.deviceType, model: master.model, assetId: master.assetId, purchaseDate: master.purchaseDate, warrantyStatus: master.warrantyStatus, warrantyExpiry: master.warrantyExpiry, amcStatus: master.amcStatus, amcExpiry: master.amcExpiry, ...values, deviceStatus: 'In Use' }); } const admins = company ? await User.find({ role: 'corporate_admin', companyId: company._id }) : []; await Notification.insertMany(admins.map(admin => ({ user: admin._id, company: company._id, type: 'NEW_DEVICE', title: 'New Device Added', message: `A new ${device.model} has been added to your organization.`, device: device._id, read: false }))); res.status(201).json(await device.populate('companyId')); });
+app.post('/api/iplanet/devices/enroll', ...serviceAuth, async (req, res) => { const master = await DeviceMaster.findOne({ serialNumber: req.body.serialNumber }); const selectedEntityType = req.body.selectedEntityType; const selectedEntityId = req.body.selectedEntityId; const company = selectedEntityType === 'corporate' ? await Company.findById(selectedEntityId) : null; const centre = selectedEntityType === 'service_centre' ? await ServiceCentre.findById(selectedEntityId) : null; if (!master) return res.status(404).json({ message: 'Device not found. Please verify the serial number.' }); if (!['corporate', 'service_centre'].includes(selectedEntityType) || !selectedEntityId || (!company && !centre)) return res.status(400).json({ message: 'Select a valid Corporate or Service Centre' }); let device = await Device.findOne({ serialNumber: master.serialNumber }); const values = { selectedEntityId, selectedEntityType, ...(company ? { companyId: company._id, location: company.location } : { companyId: null, location: centre.location }), employeeName: null, employeeId: null, department: null, deviceAllocationStatus: 'Unassigned' }; if (device) { Object.assign(device, values); await device.save(); } else { device = await Device.create({ serialNumber: master.serialNumber, deviceType: master.deviceType, model: master.model, assetId: master.assetId, purchaseDate: master.purchaseDate, warrantyStatus: master.warrantyStatus, warrantyExpiry: master.warrantyExpiry, amcStatus: master.amcStatus, amcExpiry: master.amcExpiry, ...values, deviceStatus: 'In Use' }); } const admins = company ? await User.find({ role: 'corporate_admin', companyId: company._id }) : []; await Notification.insertMany(admins.map(admin => ({ user: admin._id, company: company._id, type: 'NEW_DEVICE', title: 'New Device Added', message: `A new ${device.model} has been added to your organization.`, device: device._id, read: false }))); res.status(201).json(await device.populate('companyId')); });
 // This must remain after every API route, including the review routes above.
 // Returning JSON keeps clients from mistaking an unmounted endpoint for a ticket error.
 app.use('/api', (req, res) => res.status(404).json({ message: `API endpoint not found: ${req.method} ${req.originalUrl}` }));
-app.use((error, _, res, __) => res.status(400).json({ message: error.message || 'Request failed' }));
+// Client mistakes get a specific 4xx; anything else is a server fault, logged here and
+// answered with a generic message so database and stack details never reach the browser.
+app.use((error, req, res, _next) => {
+  if (error instanceof multer.MulterError) return res.status(400).json({ message: error.code === 'LIMIT_FILE_SIZE' ? 'Each image must be 5 MB or smaller.' : error.code === 'LIMIT_UNEXPECTED_FILE' ? 'Attach up to 5 images.' : 'The upload could not be processed.' });
+  if (error instanceof mongoose.Error.CastError) return res.status(404).json({ message: 'Record not found' });
+  if (error instanceof mongoose.Error.ValidationError) return res.status(400).json({ message: Object.values(error.errors).map(item => item.message).join(' ') || 'Invalid data' });
+  if (error?.code === 11000) return res.status(409).json({ message: 'A record with these details already exists' });
+  if (/not allowed by CORS/.test(error?.message || '')) return res.status(403).json({ message: 'Origin not allowed' });
+  const status = Number(error?.status || error?.statusCode);
+  if (status >= 400 && status < 500) return res.status(status).json({ message: error.expose === false ? 'Invalid request' : error.message || 'Invalid request' });
+  console.error(`[API ERROR] ${req.method} ${req.originalUrl}: ${error?.name || 'Error'} ${error?.message || ''}`);
+  return res.status(500).json({ message: 'Something went wrong. Please try again.' });
+});
 const port = process.env.PORT || 5000;
 async function ensureEscalationRules() { const defaults = [{ name: 'SLA Approaching', level: 1, trigger: 'SLA Approaching', priority: 'All', slaThreshold: 80, action: 'Notify Service Coordinator' }, { name: 'SLA Breach', level: 2, trigger: 'SLA Breached', priority: 'All', slaThreshold: 100, action: 'Escalate to Service Manager' }, { name: 'Critical SLA Breach', level: 3, trigger: 'Critical SLA Breach', priority: 'Critical', slaThreshold: 100, action: 'Escalate to Regional Operations Manager' }]; if (await EscalationRule.countDocuments() === 0) await EscalationRule.insertMany(defaults); }
 async function ensureServiceCentres() { if (await ServiceCentre.countDocuments() === 0) await ServiceCentre.insertMany(['Chennai', 'Coimbatore', 'Bengaluru', 'Madurai'].map(location => ({ name: `${location} Service Centre`, location, status: 'Active' }))); }
@@ -803,12 +881,12 @@ async function ensureDemoAccounts() {
   if (!company) company = await Company.create({ name: 'Demo Corporation', companyId: 'CO-003', contactName: 'Corporate Admin', contactEmail: 'admin@corporate.local', phone: '+91 90000 00000', location: 'Chennai' });
   await User.findOneAndUpdate(
     { email: 'admin@corporate.local' },
-    { $setOnInsert: { name: 'Corporate Admin', email: 'admin@corporate.local', password: 'Demo@123', role: 'corporate_admin', company: company.name, companyId: company._id, phone: company.phone } },
+    { $setOnInsert: { name: 'Corporate Admin', email: 'admin@corporate.local', password: hashPassword('Demo@123'), role: 'corporate_admin', company: company.name, companyId: company._id, phone: company.phone } },
     { upsert: true, new: true }
   );
   await User.findOneAndUpdate(
     { email: 'service@iplanet.local' },
-    { $setOnInsert: { name: 'iPlanet Service', email: 'service@iplanet.local', password: 'Demo@123', role: 'iplanet_service', company: 'iPlanet Service Desk', phone: '+91 90000 00002' } },
+    { $setOnInsert: { name: 'iPlanet Service', email: 'service@iplanet.local', password: hashPassword('Demo@123'), role: 'iplanet_service', company: 'iPlanet Service Desk', phone: '+91 90000 00002' } },
     { upsert: true, new: true }
   );
 }

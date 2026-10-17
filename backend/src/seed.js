@@ -2,8 +2,9 @@ import 'dotenv/config';
 import mongoose from 'mongoose';
 import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Notification, EscalationRule, CallRecord, AITroubleshootingSession, ServiceFollowUp } from './models.js';
 import { demoEnrollmentDevices } from './demoData.js';
+import { hashPassword } from './passwords.js';
 
-const password = 'Demo@123';
+const DEMO_PASSWORD = 'Demo@123';
 if (process.argv[2] !== '--reset-demo') throw new Error('Refusing to clear MongoDB. Run `npm run seed:demo` to reset the demo dataset explicitly.');
 const locations = ['Chennai', 'Coimbatore', 'Bengaluru', 'Madurai'];
 const companyDefinitions = [
@@ -99,9 +100,9 @@ await Promise.all([User.deleteMany({}), Company.deleteMany({}), ServiceCentre.de
 const companies = await Company.insertMany(companyDefinitions);
 const serviceCentres = await ServiceCentre.insertMany(serviceCentreDefinitions);
 const users = [];
-for (const [name, email, companyIndex, phone] of corporateUsers) users.push(await User.create({ name, email, password, role: 'corporate_admin', company: companies[companyIndex].name, companyId: companies[companyIndex]._id, phone }));
-const serviceUser = await User.create({ name: 'Neha Menon', email: 'service@iplanet.local', password, role: 'iplanet_service', company: 'iPlanet Service Desk', phone: '+91 98410 22000' });
-const engineerUsers = await User.insertMany(engineerDefinitions.map(([name, email, employeeId, location, status, phone]) => ({ name, email, password, role: 'iplanet_service', company: 'iPlanet Service Desk', phone })));
+for (const [name, email, companyIndex, phone] of corporateUsers) users.push(await User.create({ name, email, password: hashPassword(DEMO_PASSWORD), role: 'corporate_admin', company: companies[companyIndex].name, companyId: companies[companyIndex]._id, phone }));
+const serviceUser = await User.create({ name: 'Neha Menon', email: 'service@iplanet.local', password: hashPassword(DEMO_PASSWORD), role: 'iplanet_service', company: 'iPlanet Service Desk', phone: '+91 98410 22000' });
+const engineerUsers = await User.insertMany(engineerDefinitions.map(([name, email, employeeId, location, status, phone]) => ({ name, email, password: hashPassword(DEMO_PASSWORD), role: 'iplanet_service', company: 'iPlanet Service Desk', phone })));
 const engineers = await Engineer.insertMany(engineerDefinitions.map(([name, email, employeeId, location, status, phone], index) => ({ name, employeeId, email, phone, location, status, userId: engineerUsers[index]._id })));
 
 const devices = await Device.insertMany(deviceDefinitions.map(([assetId, serialNumber, model, deviceType, companyIndex, employeeName, employeeId, department, location, warrantyStatus, amcStatus, allocation, deviceStatus], index) => ({ assetId, serialNumber, deviceType, model, companyId: companies[companyIndex]._id, selectedEntityId: companies[companyIndex]._id, selectedEntityType: 'corporate', employeeName, employeeId, department, location, purchaseDate: dateY(2024 + (index % 2), 1 + (index % 12), 5 + (index % 20)), warrantyStatus, warrantyExpiry: warrantyStatus === 'Active' ? daysFromNow(200 + index * 20) : warrantyStatus === 'Expiring Soon' ? daysFromNow(20 + index) : daysFromNow(-100 - index * 10), amcStatus, amcExpiry: amcStatus === 'Active' ? daysFromNow(300 + index * 15) : amcStatus === 'Expiring Soon' ? daysFromNow(25 + index) : daysFromNow(-60 - index * 10), deviceStatus, deviceAllocationStatus: allocation, lastServiceDate: lastServiceFor(serviceDueOffsets[index % serviceDueOffsets.length])})));
@@ -124,12 +125,14 @@ await TicketTimeline.insertMany(timelineEvents);
 
 const notificationRows = [];
 for (const [index, ticket] of tickets.entries()) {
-  const corporateUser = users[index % users.length];
+  // Notify a user of the ticket's own company, never another company's admin.
+  const companyUsers = users.filter(user => String(user.companyId) === String(ticket.companyId));
+  const corporateUser = companyUsers[index % companyUsers.length];
   notificationRows.push({ user: corporateUser._id, company: ticket.companyId, portalRole: 'corporate_admin', type: index % 3 === 0 ? 'TICKET_STATUS_UPDATED' : 'NEW_SERVICE_REQUEST', title: index % 3 === 0 ? 'Ticket status updated' : 'Service request created', message: `${ticket.ticketId} for ${ticket.deviceId ? deviceDefinitions[ticket.deviceId ? deviceDefinitions.findIndex(item => item[1] === devices.find(device => device._id.equals(ticket.deviceId)).serialNumber) : 0]?.[2] || 'Apple device' : 'Apple device'} is now ${ticket.status}.`, ticket: ticket._id, device: ticket.deviceId, read: index % 4 === 0 });
   notificationRows.push({ user: serviceUser._id, company: ticket.companyId, portalRole: 'iplanet_service', type: ticket.slaStatus === 'SLA Breached' ? 'SLA_BREACHED' : 'NEW_SERVICE_REQUEST', title: ticket.slaStatus === 'SLA Breached' ? 'SLA breached' : 'New ticket received', message: `${ticket.ticketId} requires service desk attention at ${ticket.location}.`, ticket: ticket._id, device: ticket.deviceId, read: index % 5 === 0 });
 }
 await Notification.insertMany(notificationRows);
-await CallRecord.insertMany(tickets.slice(0, 6).map((ticket, index) => ({ ticketId: ticket._id, agentUserId: serviceUser._id, agentName: serviceUser.name, ticketNumber: ticket.ticketId, customerName: users[index % users.length].name, customerPhone: users[index % users.length].phone, outcome: ['Customer Needs Further Assistance', 'Engineer Visit Required', 'Issue Resolved Remotely'][index % 3], notes: 'Client demonstration call record.', callStatus: index % 2 ? 'Call Completed' : 'Call Attempted' })));
+await CallRecord.insertMany(tickets.slice(0, 6).map((ticket, index) => ({ ticketId: ticket._id, agentUserId: serviceUser._id, agentName: serviceUser.name, ticketNumber: ticket.ticketId, customerName: users.find(user => String(user._id) === String(ticket.customerId))?.name, customerPhone: users.find(user => String(user._id) === String(ticket.customerId))?.phone, outcome: ['Customer Needs Further Assistance', 'Engineer Visit Required', 'Issue Resolved Remotely'][index % 3], notes: 'Client demonstration call record.', callStatus: index % 2 ? 'Call Completed' : 'Call Attempted' })));
 await EscalationRule.insertMany([
   { name: 'Critical priority breach', level: 3, trigger: 'Critical SLA Breach', priority: 'Critical', slaThreshold: 80, action: 'Escalate to Regional Operations Manager' },
   { name: 'High priority breach', level: 2, trigger: 'High Priority SLA Breach', priority: 'High', slaThreshold: 90, action: 'Escalate to Service Manager' },

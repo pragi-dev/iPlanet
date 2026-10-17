@@ -16,8 +16,12 @@ export const notifyNotificationsChanged = () => window.dispatchEvent(new Event(N
 function useUnreadCount(fetchUnread) {
   const location = useLocation();
   const [count, setCount] = useState(0);
+  // Refreshes come from navigation, a timer and notification events; only the newest
+  // response may update the badge, and a failed request keeps the last known count.
+  const latest = useRef(0);
   const refresh = useCallback(() => {
-    fetchUnread().then(result => setCount(Number(result?.count) || 0)).catch(() => setCount(0));
+    const request = ++latest.current;
+    fetchUnread().then(result => { if (request === latest.current) setCount(Number(result?.count) || 0); }).catch(() => {});
   }, [fetchUnread]);
   useEffect(() => { refresh(); }, [refresh, location.pathname]);
   useEffect(() => {
@@ -33,7 +37,12 @@ function useUnreadCount(fetchUnread) {
 const INDEX_TTL = 60000;
 let commandIndexCache = { key: null, data: null, at: 0 };
 
-function useCommandIndex(portalKey, load) {
+// The index holds the signed-in user's records, so it is keyed by session as well as
+// portal: whichever way someone signs out, the next user never sees it.
+const sessionKey = () => localStorage.getItem('iplanet_token') || localStorage.getItem('iplanet_service_token') || '';
+
+function useCommandIndex(portal, load) {
+  const portalKey = `${portal}|${sessionKey()}`;
   const [state, setState] = useState(() => (commandIndexCache.key === portalKey ? { data: commandIndexCache.data, error: null, loading: false } : { data: null, error: null, loading: false }));
   const loadRef = useRef(load);
   loadRef.current = load;

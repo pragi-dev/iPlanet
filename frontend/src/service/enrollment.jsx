@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Building2, Camera, CheckCircle2, Plus, ScanLine, Search, Warehouse } from 'lucide-react';
 import { ServiceShell } from './components';
 import { createCompany, createServiceCentre, enrollDevice, getCompanies, getDeviceMaster, getDeviceMasters, getServiceCentres } from './api';
@@ -75,16 +75,20 @@ export function DeviceEnrollment() {
   };
   useEffect(() => { void loadEntries(); getDeviceMasters().then(setMasters).catch(() => setMasters([])); }, []);
 
+  // Only the latest lookup may set the device, so a slow earlier lookup can't show
+  // (and let the user enroll) a different serial from the one in the field.
+  const lookupId = useRef(0);
   const lookup = useCallback(async value => {
     const term = String(value).trim();
+    const request = ++lookupId.current;
     setSerial(term);
     setError('');
     setDevice(null);
     if (!term) { setError('Enter a serial number.'); return; }
     setLooking(true);
-    try { setDevice(await getDeviceMaster(term)); setStep(1); }
-    catch (lookupError) { setError(friendlyError(lookupError, 'Device not found. Please verify the serial number.')); }
-    finally { setLooking(false); }
+    try { const found = await getDeviceMaster(term); if (request === lookupId.current) { setDevice(found); setStep(1); } }
+    catch (lookupError) { if (request === lookupId.current) setError(friendlyError(lookupError, 'Device not found. Please verify the serial number.')); }
+    finally { if (request === lookupId.current) setLooking(false); }
   }, []);
   const detected = useCallback(value => { setScanOpen(false); void lookup(value); }, [lookup]);
   const closeScanner = useCallback(() => setScanOpen(false), []);

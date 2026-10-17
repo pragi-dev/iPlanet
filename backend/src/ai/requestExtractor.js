@@ -29,7 +29,9 @@ function fallback(message) {
   else if (/damage|crack|broken/.test(lower)) issueType = 'Physical Damage';
   const workflowSignal = /smoke|burning smell|swollen battery|sparks|catching fire/.test(lower) ? 'unsafe'
     : /send an engineer|raise (a )?service request|need someone to repair/.test(lower) ? 'explicit_service'
-    : /still|didn.t work|doesn.t work|same issue|nothing changed|not fixed|not resolved|tried everything|இன்னும்\s*(வேலை\s*செய்யல|வேலை\s*செய்யவில்லை|இருக்கு)|சரியாகவில்லை/.test(lower) ? 'failed'
+    // Negated outcomes ("not working now", "unresolved") are checked here, before the
+    // "resolved" phrases below, which would otherwise match inside them.
+    : /still|didn.t work|doesn.t work|same issue|nothing changed|not fixed|not resolved|tried everything|\bnot (?:working|fixed|resolved)\b|\b(?:isn.t|is not|hasn.t|has not|wasn.t|was not) (?:been )?(?:working|fixed|resolved)\b|\bunresolved\b|\bnever worked\b|இன்னும்\s*(வேலை\s*செய்யல|வேலை\s*செய்யவில்லை|இருக்கு)|சரியாகவில்லை/.test(lower) ? 'failed'
     // A bare "ok"/"okay" is ambiguous ("okay, I will try that"), so it is left to the model classifier.
     : /^(yes|yep|yeah|fixed)\.?$|works now|working now|fixed it|problem solved|resolved|சரி\s*ஆயிடுச்சு|வேலை\s*செய்கிறது|சரியாகிவிட்டது/.test(lower) ? 'resolved'
     : 'unknown';

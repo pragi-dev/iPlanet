@@ -8,6 +8,7 @@ export const mediaUrl = path => {
   return `${API_ORIGIN || ''}/${normalized}`;
 };
 import { cachedGet, clearRequestCache, isCacheablePath } from '../ui/requestCache';
+import { endExpiredSession, isExpiredSessionResponse } from '../ui/session';
 
 const getToken = () => localStorage.getItem('iplanet_token');
 function request(path, options = {}) {
@@ -17,7 +18,7 @@ function request(path, options = {}) {
 }
 // Wakes a sleeping API host (Render free tier) while the user is still on the sign-in form.
 export function warmUpApi() { fetch(`${API}/health`).catch(() => {}); }
-async function send(path, options = {}) { const token = getToken(); const response = await fetch(`${API}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers || {}) } }); if (!response.ok) { const body = await response.json().catch(() => ({})); const error = new Error(body.message || `Request failed (${response.status})`); error.status = response.status; error.path = path; throw error; } return response.json(); }
+async function send(path, options = {}) { const token = getToken(); const response = await fetch(`${API}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers || {}) } }); if (!response.ok) { if (isExpiredSessionResponse(response.status, path, Boolean(token))) endExpiredSession(); const body = await response.json().catch(() => ({})); const error = new Error(body.message || `Request failed (${response.status})`); error.status = response.status; error.path = path; throw error; } return response.json(); }
 export async function login(email, password) { return request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }); }
 export async function getDevices(search = '') { return request(`/devices${search ? `?search=${encodeURIComponent(search)}` : ''}`); }
 export async function getDevice(id) { return request(`/devices/${id}`); }
@@ -37,7 +38,6 @@ export async function markNotificationRead(id) { return request(`/corporate/noti
 export async function markAllNotificationsRead() { return request('/corporate/notifications/read-all', { method: 'PATCH', body: JSON.stringify({}) }); }
 export async function assignDeviceToEmployee(id, payload) { return request(`/corporate/devices/${id}/assign`, { method: 'PATCH', body: JSON.stringify(payload) }); }
 export async function getTicketCalls(ticketId) { return request(`/tickets/${ticketId}/calls`); }
-export async function saveTicketCall(ticketId, payload) { return request(`/tickets/${ticketId}/calls`, { method: 'POST', body: JSON.stringify(payload) }); }
 export async function getTicketAITroubleshooting(ticketId) { return request(`/tickets/${ticketId}/ai-support`); }
 export async function startTicketAITroubleshooting(ticketId, payload) { return request(`/tickets/${ticketId}/ai-support`, { method: 'POST', body: JSON.stringify(payload) }); }
 export async function sendAiSupportMessage(ticketId, payload) { return request('/ai/support/chat', { method: 'POST', body: JSON.stringify({ ...payload, ticketId }) }); }

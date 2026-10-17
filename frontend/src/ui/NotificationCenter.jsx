@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, Check, CheckCheck, ChevronRight, Laptop, MessageSquareText, ShieldAlert, Star, Ticket, UserCheck } from 'lucide-react';
 import { Badge, Button, EmptyState, ErrorState, IconButton, PageHeader, Tabs, TableSkeleton } from './primitives';
@@ -29,7 +29,22 @@ export function NotificationCenter({ load, markRead, markAllRead, resolveRoute, 
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('all');
 
-  const refresh = ({ silent = false } = {}) => load().then(result => { setItems(result); setError(null); }).catch(loadError => { if (!silent) setError(friendlyError(loadError, 'Unable to load notifications.')); });
+  // Bumped by every local change. A poll that started before the change would bring back
+  // the old read state, so its result is dropped; the next poll picks up the new state.
+  const version = useRef(0);
+  const lastUnread = useRef(null);
+  const refresh = ({ silent = false } = {}) => {
+    const startedAt = version.current;
+    return load().then(result => {
+      if (startedAt !== version.current) return;
+      setItems(result);
+      setError(null);
+      // Keep the sidebar badge in step with what polling found.
+      const unread = result.filter(item => !item.read).length;
+      if (lastUnread.current !== null && unread !== lastUnread.current) notifyNotificationsChanged();
+      lastUnread.current = unread;
+    }).catch(loadError => { if (!silent) setError(friendlyError(loadError, 'Unable to load notifications.')); });
+  };
 
   useEffect(() => {
     void refresh();
@@ -46,6 +61,7 @@ export function NotificationCenter({ load, markRead, markAllRead, resolveRoute, 
     if (item.read) return;
     try {
       await markRead(item._id);
+      version.current += 1;
       setItems(current => current.map(entry => entry._id === item._id ? { ...entry, read: true } : entry));
       notifyNotificationsChanged();
     } catch (readError) { setError(friendlyError(readError, 'Unable to update this notification.')); }
@@ -53,6 +69,7 @@ export function NotificationCenter({ load, markRead, markAllRead, resolveRoute, 
   const readAll = async () => {
     try {
       await markAllRead();
+      version.current += 1;
       setItems(current => current.map(item => ({ ...item, read: true })));
       notifyNotificationsChanged();
     } catch (readError) { setError(friendlyError(readError, 'Unable to mark notifications as read.')); }
@@ -64,7 +81,7 @@ export function NotificationCenter({ load, markRead, markAllRead, resolveRoute, 
   };
 
   return <>
-    <PageHeader title="Notifications" description={description} actions={<Button icon={CheckCheck} onClick={readAll} disabled={!unreadCount}>Mark all as read</Button>} />
+    <PageHeader title="Notifications" description={description} actions={<Button icon={CheckCheck} onClick={readAll} disabled={!items?.length}>Mark all as read</Button>} />
     <Tabs label="Notification filter" value={filter} onChange={setFilter} tabs={[{ value: 'all', label: 'All', count: items?.length ?? undefined }, { value: 'unread', label: 'Unread', count: items ? unreadCount : undefined }]} />
     {error && !items ? <div className="card"><ErrorState title="Unable to load notifications" message={error} onRetry={refresh} /></div>
       : !items ? <div className="card"><TableSkeleton rows={5} columns={3} /></div>

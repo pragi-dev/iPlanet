@@ -9,6 +9,7 @@ export const mediaUrl = path => {
 };
 const token = () => localStorage.getItem('iplanet_token') || localStorage.getItem('iplanet_service_token');
 import { cachedGet, clearRequestCache, isCacheablePath } from '../ui/requestCache';
+import { endExpiredSession, isExpiredSessionResponse } from '../ui/session';
 
 function request(path, options = {}) {
   const method = String(options.method || 'GET').toUpperCase();
@@ -18,6 +19,7 @@ function request(path, options = {}) {
 async function send(path, options = {}) {
   const response = await fetch(`${API}${path}`, { ...options, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}`, ...(options.headers || {}) } });
   if (!response.ok) {
+    if (isExpiredSessionResponse(response.status, path, Boolean(token()))) endExpiredSession();
     const body = await response.json().catch(() => ({}));
     const error = new Error(body.message || `Request failed (${response.status})`);
     error.status = response.status;

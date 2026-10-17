@@ -320,7 +320,7 @@ export function Engineers() {
 
 function sessionExpiry() {
   try {
-    const payload = JSON.parse(atob(localStorage.getItem('iplanet_token').split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    const payload = JSON.parse(atob((localStorage.getItem('iplanet_token') || localStorage.getItem('iplanet_service_token')).split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
     return payload.exp ? new Date(payload.exp * 1000) : null;
   } catch { return null; }
 }

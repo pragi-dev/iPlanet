@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Camera, CheckCircle2, FilePlus2, HeartPulse, ImagePlus, Pencil, Recycle, RefreshCcw, Search, Trash2, Wrench, BadgeIndianRupee } from 'lucide-react';
 import { Shell } from './components';
 import { createTicket, getAiPreparedRequest, getDevices, getServiceRecommendation, getTickets, uploadAnnotatedImages, uploadImages } from './api';
@@ -26,6 +26,19 @@ function todayInIndia() {
 }
 
 const annotatedName = file => `annotated-${file.name}`;
+// The server accepts up to 5 photos of 5 MB each per upload.
+const MAX_PHOTOS = 5;
+const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
+// Phone cameras name every capture "image.jpg". Photos are matched to their annotations by
+// name, so a repeated name gets a numbered suffix instead of being dropped.
+function withUniqueName(file, takenNames) {
+  if (!takenNames.has(file.name)) return file;
+  const dot = file.name.lastIndexOf('.');
+  const [base, ext] = dot > 0 ? [file.name.slice(0, dot), file.name.slice(dot)] : [file.name, ''];
+  let index = 2;
+  while (takenNames.has(`${base}-${index}${ext}`)) index += 1;
+  return new File([file], `${base}-${index}${ext}`, { type: file.type, lastModified: file.lastModified });
+}
 
 // Starting text for a request raised from a preventive-service recommendation.
 // The customer can edit all of it before submitting.
@@ -59,6 +72,7 @@ function PhotoCard({ file, annotation, onAnnotate, onRemove }) {
 
 export function RequestEnhanced() {
   const route = useLocation();
+  const navigate = useNavigate();
   const ai = useAIAssistant();
   const presetDevice = new URLSearchParams(route.search).get('device');
   const followUpId = new URLSearchParams(route.search).get('serviceFollowUp');
@@ -94,7 +108,7 @@ export function RequestEnhanced() {
     if (!match) return;
     setDevice(match);
     setSerial(match.serialNumber);
-    setForm(current => ({ ...current, ...aiRequest, deviceId: match._id, preferredServiceDate: aiRequest.preferredServiceDate || '' }));
+    setForm(current => ({ ...current, ...aiRequest, deviceId: match._id, preferredServiceDate: aiRequest.preferredServiceDate || '', location: locations.includes(aiRequest.location) ? aiRequest.location : current.location }));
     setStep(1);
   }, [aiRequest, devices]);
   useEffect(() => {
@@ -141,7 +155,24 @@ export function RequestEnhanced() {
     return devices.filter(item => [item.serialNumber, item.model, item.assetId, item.employeeName].some(value => String(value || '').toLowerCase().includes(term))).slice(0, 6);
   }, [devices, serial, device]);
 
-  const chooseFiles = event => { const next = [...event.target.files]; setFiles(current => [...current, ...next.filter(file => !current.some(item => item.name === file.name))]); event.target.value = ''; };
+  const chooseFiles = event => {
+    const chosen = [...event.target.files];
+    event.target.value = '';
+    const tooLarge = chosen.filter(file => file.size > MAX_PHOTO_BYTES);
+    const accepted = [];
+    const taken = new Set(files.map(file => file.name));
+    for (const file of chosen.filter(item => item.size <= MAX_PHOTO_BYTES)) {
+      if (files.length + accepted.length >= MAX_PHOTOS) break;
+      // The same photo picked twice is skipped; a different photo with the same name is kept.
+      if (files.some(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified)) continue;
+      const unique = withUniqueName(file, taken);
+      taken.add(unique.name);
+      accepted.push(unique);
+    }
+    const skipped = chosen.length - tooLarge.length - accepted.length;
+    setError([tooLarge.length ? `${tooLarge.length} photo${tooLarge.length === 1 ? ' is' : 's are'} larger than 5 MB and ${tooLarge.length === 1 ? 'was' : 'were'} not added.` : '', skipped > 0 && files.length + accepted.length >= MAX_PHOTOS ? `Up to ${MAX_PHOTOS} photos can be attached.` : ''].filter(Boolean).join(' '));
+    setFiles(current => [...current, ...accepted]);
+  };
   const removeFile = file => { setFiles(current => current.filter(item => item !== file)); setAnnotated(current => current.filter(item => item.name !== annotatedName(file))); };
   const saveAnnotation = file => { setAnnotated(current => [...current.filter(item => item.name !== file.name), file]); setEditing(null); };
 
@@ -167,17 +198,19 @@ export function RequestEnhanced() {
     // The request exists at this point; an upload failure must not trigger a
     // duplicate submission, so it is reported on the confirmation instead.
     let uploadError = '';
-    try {
-      await uploadImages(ticket._id, files);
-      await uploadAnnotatedImages(ticket._id, annotated);
-    } catch (imageError) {
-      uploadError = friendlyError(imageError, 'Photos could not be uploaded.');
-    }
+    // Uploaded separately, so a problem with the marked-up copies doesn't lose the original photos.
+    try { await uploadImages(ticket._id, files); }
+    catch (imageError) { uploadError = friendlyError(imageError, 'Photos could not be uploaded.'); }
+    try { await uploadAnnotatedImages(ticket._id, annotated); }
+    catch (imageError) { uploadError = [uploadError, friendlyError(imageError, 'Marked-up photos could not be uploaded.')].filter(Boolean).join(' '); }
     setDone({ ticket, uploadError });
     setSubmitting(false);
   };
 
-  const reset = () => { setDone(null); setDevice(null); setSerial(''); setFiles([]); setAnnotated([]); setForm(current => ({ ...current, description: '', deviceId: '', preferredServiceDate: todayInIndia() })); setStep(0); setAiRequest(null); setRecommendation(null); };
+  const reset = () => { setDone(null); setDevice(null); setSerial(''); setFiles([]); setAnnotated([]); setForm(current => ({ ...current, description: '', deviceId: '', preferredServiceDate: todayInIndia() })); setStep(0); setAiRequest(null); setRecommendation(null); setError('');
+    // Drop ?conversationId / ?serviceFollowUp, or the previous draft would be loaded again.
+    navigate('/corporate/raise-request', { replace: true, state: null });
+  };
 
   if (done) return <Shell title="Raise Request" crumbs={[{ label: 'Raise Request' }]}>
     <Stepper steps={steps} current={steps.length} />

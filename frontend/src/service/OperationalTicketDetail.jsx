@@ -64,7 +64,10 @@ export function OperationalTicketDetail() {
   const { id } = useParams();
   const [params, setParams] = useSearchParams();
   const state = useAsync(() => Promise.all([getServiceTicket(id), getEngineers()]).then(([ticketData, engineers]) => ({ ...ticketData, engineers })), [id]);
-  const serial = state.data?.ticket?.deviceId?.serialNumber;
+  // While another ticket is loading (e.g. opened from Ctrl+K), the previous ticket must not be
+  // shown: its buttons would act on the new id with the old ticket's state.
+  const data = state.data && String(state.data.ticket?._id) === String(id) ? state.data : null;
+  const serial = data?.ticket?.deviceId?.serialNumber;
   // Other tickets for the same device, used for the recurring-issue insight.
   const history = useAsync(() => (serial ? getServiceTickets({ search: serial }) : Promise.resolve([])), [serial]);
   const [note, setNote] = useState('');
@@ -76,19 +79,19 @@ export function OperationalTicketDetail() {
   const [callOpen, setCallOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
-  const crumbs = [{ label: 'Tickets', to: '/service/tickets' }, { label: state.data?.ticket?.ticketId || 'Ticket details' }];
+  const crumbs = [{ label: 'Tickets', to: '/service/tickets' }, { label: data?.ticket?.ticketId || 'Ticket details' }];
 
-  const canAssign = ['Open', 'Engineer Assigned'].includes(state.data?.ticket?.status);
+  const canAssign = ['Open', 'Engineer Assigned'].includes(data?.ticket?.status);
   useEffect(() => {
-    if (params.get('assign') !== '1' || !state.data) return;
+    if (params.get('assign') !== '1' || !data) return;
     if (canAssign) setAssignOpen(true);
     setParams({}, { replace: true });
-  }, [params, state.data, canAssign, setParams]);
+  }, [params, data, canAssign, setParams]);
 
-  if (state.loading && !state.data) return <ServiceShell title="Ticket details" crumbs={crumbs}><PageSkeleton variant="detail" kpis={0} /></ServiceShell>;
-  if (state.error && !state.data) return <ServiceShell title="Ticket details" crumbs={crumbs}><div className="card"><ErrorState title="Unable to load this ticket" message={friendlyError(state.error)} onRetry={state.reload} /></div></ServiceShell>;
+  if (!data && !state.error) return <ServiceShell title="Ticket details" crumbs={crumbs}><PageSkeleton variant="detail" kpis={0} /></ServiceShell>;
+  if (!data) return <ServiceShell title="Ticket details" crumbs={crumbs}><div className="card"><ErrorState title="Unable to load this ticket" message={friendlyError(state.error)} onRetry={state.reload} /></div></ServiceShell>;
 
-  const { ticket, timeline, engineers, coverage, escalationContact, callHistory } = state.data;
+  const { ticket, timeline, engineers, coverage, escalationContact, callHistory } = data;
   const device = ticket.deviceId || {};
   const engineer = ticket.assignedEngineerId && typeof ticket.assignedEngineerId === 'object' ? ticket.assignedEngineerId : null;
   const company = ticket.companyId?.name || ticket.customerId?.company || 'Corporate';
