@@ -13,6 +13,7 @@ const typeMeta = {
   NEW_DEVICE: { label: 'Device enrollment', icon: Laptop, tone: 'success' },
   RATE_SERVICE: { label: 'Review request', icon: Star, tone: 'neutral' },
   NEW_CUSTOMER_REVIEW: { label: 'Customer review', icon: MessageSquareText, tone: 'neutral' },
+  GOOGLE_REVIEW_ACTIVITY: { label: 'Google review', icon: Star, tone: 'neutral' },
 };
 
 function metaFor(item) {

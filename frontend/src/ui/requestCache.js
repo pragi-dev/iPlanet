@@ -23,5 +23,6 @@ export function clearRequestCache() {
 }
 
 // Live data (notification polling, unread badges), sign-in and the AI
-// assistant always go to the network.
-export const isCacheablePath = path => !/notifications|\/auth\/|\/ai\/|ai-support|\/health/.test(path);
+// assistant always go to the network. Google Business data has its own
+// short-lived cache on the backend.
+export const isCacheablePath = path => !/notifications|\/auth\/|\/ai\/|ai-support|\/health|google-business/.test(path);

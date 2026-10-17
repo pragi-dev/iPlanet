@@ -33,3 +33,11 @@ services:
         value: https://www.googleapis.com/auth/business.manage
       - key: GOOGLE_BUSINESS_TOKEN_ENCRYPTION_KEY
         sync: false
+      - key: GOOGLE_BUSINESS_RETURN_URL
+        sync: false
+      - key: GOOGLE_PUBSUB_TOPIC
+        sync: false
+      - key: GOOGLE_PUBSUB_PUSH_AUDIENCE
+        sync: false
+      - key: GOOGLE_PUBSUB_PUSH_SERVICE_ACCOUNT
+        sync: false

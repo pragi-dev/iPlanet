@@ -795,6 +795,14 @@ button.chip:hover { background: var(--color-fill-strong); }
 .connection-status { display: inline-flex; align-items: center; gap: var(--space-2); font-size: 15px; font-weight: 500; }
 .status-light { width: 8px; height: 8px; border-radius: 50%; background: var(--color-text-tertiary); }
 .status-light.on { background: var(--color-success); }
+.status-light.warn { background: var(--color-warning); }
+.status-light.bad { background: var(--color-error); }
+.review-reply { padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--color-fill); font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
+.review-reply-label { font-size: 12px; font-weight: 600; color: var(--color-text-secondary); margin-bottom: 4px; }
+.gbp-scope-note { font-size: 13px; color: var(--color-text-secondary); }
+.gbp-reply-input { width: 100%; min-height: 140px; resize: vertical; }
+.gbp-date-range { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
+.gbp-date-range input { min-height: 36px; }
 
 /* --------------------------------------------------------------------------
    People, settings, configuration

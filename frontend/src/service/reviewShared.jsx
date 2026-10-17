@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
-import { ExternalLink } from 'lucide-react';
-import { Avatar, Badge, Stars, Tabs, formatDate, formatRelative } from '../ui';
+import { ExternalLink, MessageSquareReply, Pencil, Trash2 } from 'lucide-react';
+import { Avatar, Badge, Button, Stars, Tabs, formatDate, formatRelative } from '../ui';
 
 export function ReviewTabs({ current }) {
   return <Tabs label="Review source" value={current} tabs={[
@@ -11,29 +11,52 @@ export function ReviewTabs({ current }) {
 }
 
 export function GoogleBadge() {
-  return <Badge tone="google"><span className="google-g" aria-hidden="true">G</span>Google review</Badge>;
+  return <Badge tone="google"><span className="google-g" aria-hidden="true">G</span>Google</Badge>;
 }
 
-// Last Google review sync in this browser session. Syncing calls Google's
-// rate-limited API, so the All tab reuses these results instead of re-syncing.
-let lastGoogleSync = null;
-export const getCachedGoogleSync = () => lastGoogleSync;
-export const setCachedGoogleSync = result => { lastGoogleSync = result; };
+// Google reviews retrieved in this browser session. Review content is not
+// stored by iPlanet; this only avoids re-requesting it on every tab switch.
+let lastGoogleReviews = null;
+export const getCachedGoogleReviews = () => lastGoogleReviews;
+export const setCachedGoogleReviews = result => { lastGoogleReviews = result; };
 
-export function flattenGoogleReviews(syncResult, centreName = () => null) {
-  return (syncResult?.results || []).flatMap(result => (result.reviews || []).filter(Boolean).map(review => ({ ...review, source: 'google', serviceCentre: centreName(result.serviceCentreId) })));
+export function flattenGoogleReviews(result) {
+  return (result?.locations || []).flatMap(location => (location.reviews || []).map(review => ({ ...review, createdAt: review.createTime })));
 }
 
-export function GoogleReviewCard({ review }) {
-  const place = review.locationName || review.serviceCentre || '';
+// Backend Google errors carry a safe message and a category; prefer them over
+// the generic error rewriting used elsewhere.
+export function googleErrorMessage(error, fallback = 'Google Business Profile request failed.') {
+  if (error?.google?.message) return error.google.message;
+  const message = error?.message || '';
+  return message && message.length <= 300 && !/[{}[\]]|failed to fetch/i.test(message) ? message : fallback;
+}
+
+export function reviewerName(review) {
+  if (review.reviewer?.isAnonymous) return 'Anonymous Google user';
+  return review.reviewer?.displayName || 'Name not provided';
+}
+
+export function GoogleReviewCard({ review, onReply, onDeleteReply }) {
+  const place = review.location?.title || review.location?.serviceCentreName || 'Google Business Profile';
+  const edited = review.updateTime && review.createTime && review.updateTime !== review.createTime;
+  const replied = Boolean(review.reply?.comment);
   return <article className="review-card review-card-google">
-    <div className="review-card-head"><GoogleBadge /><Stars rating={review.rating} /></div>
-    <div className="review-author"><Avatar name={review.authorName} size={32} /><div><strong>{review.authorName}</strong><span>{place || 'Google Business Profile'}</span></div></div>
+    <div className="review-card-head"><GoogleBadge />{review.rating ? <Stars rating={review.rating} /> : <span className="text-muted text-small">No star rating</span>}</div>
+    <div className="review-author"><Avatar name={reviewerName(review)} size={32} /><div><strong>{reviewerName(review)}</strong><span>{place}{review.location?.serviceCentreName && review.location?.title ? ` · ${review.location.serviceCentreName}` : ''}</span></div></div>
     {review.comment ? <p className="review-text">{review.comment}</p> : <p className="text-muted text-small">Rating only, no written review.</p>}
+    {replied && <div className="review-reply"><p className="review-reply-label">Owner reply{review.reply.updateTime ? ` · ${formatRelative(review.reply.updateTime)}` : ''}</p><p>{review.reply.comment}</p></div>}
     <div className="review-card-foot">
-      <time dateTime={review.createdAt} title={formatDate(review.createdAt)}>{formatRelative(review.createdAt)}</time>
-      {place && <a className="row-action" href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}`} target="_blank" rel="noopener noreferrer">View on Google<ExternalLink size={13} aria-hidden="true" /></a>}
+      <span className="row">
+        {review.createTime ? <time dateTime={review.createTime} title={formatDate(review.createTime)}>{formatRelative(review.createTime)}{edited ? ' · edited' : ''}</time> : <span>Date not provided</span>}
+        <Badge tone={replied ? 'success' : 'warning'}>{replied ? 'Replied' : 'Awaiting reply'}</Badge>
+      </span>
+      {review.location?.mapsUri && <a className="row-action" href={review.location.mapsUri} target="_blank" rel="noopener noreferrer">Google Maps<ExternalLink size={13} aria-hidden="true" /></a>}
     </div>
+    {onReply && <div className="row">
+      <Button size="sm" icon={replied ? Pencil : MessageSquareReply} onClick={() => onReply(review)}>{replied ? 'Edit reply' : 'Reply'}</Button>
+      {replied && onDeleteReply && <Button size="sm" variant="ghost" icon={Trash2} onClick={() => onDeleteReply(review)}>Delete reply</Button>}
+    </div>}
   </article>;
 }
 
