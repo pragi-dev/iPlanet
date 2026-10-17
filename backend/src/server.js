@@ -8,12 +8,13 @@ import multer from 'multer';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Review, Notification, EscalationRule, CallRecord, AITroubleshootingSession, ServiceFollowUp, GoogleBusinessIntegration, GoogleBusinessLocationMapping } from './models.js';
+import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Review, Notification, EscalationRule, CallRecord, AITroubleshootingSession, ServiceFollowUp, GoogleBusinessIntegration, GoogleBusinessLocationMapping, GoogleBusinessNotificationReceipt } from './models.js';
 import { auth, allowRoles } from './middleware.js';
 import { createAiSupportRouter } from './routes/aiSupport.js';
-import { buildGoogleBusinessAuthUrl, parseGoogleBusinessState, encryptGoogleBusinessToken, decryptGoogleBusinessToken, exchangeGoogleBusinessCodeForTokens, refreshGoogleBusinessTokens, getGoogleBusinessOauthConfig, validateGoogleBusinessOauthConfig, inspectGoogleBusinessAuthUrl } from './integrations/googleBusinessProfile/googleBusinessProfileAuth.js';
-import { listGoogleBusinessAccounts, normalizeGoogleBusinessAccount, discoverGoogleBusinessLocations, getGoogleBusinessReviews } from './integrations/googleBusinessProfile/googleBusinessProfileProvider.js';
-import { normalizeGoogleBusinessReview } from './integrations/googleBusinessProfile/googleBusinessProfileSyncService.js';
+import { createGoogleBusinessRouter } from './routes/googleBusiness.js';
+import { getGoogleBusinessOauthConfig, validateGoogleBusinessOauthConfig } from './integrations/googleBusinessProfile/googleBusinessProfileAuth.js';
+import { createMongoGoogleBusinessStore, GOOGLE_BUSINESS_PROVIDER } from './integrations/googleBusinessProfile/googleBusinessProfileStore.js';
+import { getPubSubPushConfig, isPubSubPushConfigured } from './integrations/googleBusinessProfile/googleBusinessProfilePubSub.js';
 import { getAiSupportReply } from './ai/aiEngine.js';
 import { buildSupportContext } from './ai/contextBuilder.js';
 import { understandRequest, understandDeterministicResult, REQUEST_CATEGORIES, REQUEST_ISSUE_TYPES } from './ai/requestExtractor.js';
@@ -24,7 +25,7 @@ import { createProactiveEngine, createProactiveScheduler, proactiveConfig, Proac
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '../.env') });
 const googleOAuthDiagnostics = validateGoogleBusinessOauthConfig(getGoogleBusinessOauthConfig());
-const GOOGLE_BUSINESS_PROVIDER = 'google-business-profile';
+console.info(`[Google Business] Pub/Sub push authentication configured: ${isPubSubPushConfigured(getPubSubPushConfig())}`);
 console.info(`[Google OAuth] Client ID configured: ${googleOAuthDiagnostics.clientIdConfigured}`);
 console.info(`[Google OAuth] Client secret configured: ${googleOAuthDiagnostics.clientSecretConfigured}`);
 console.info(`[Google OAuth] Redirect URI configured: ${googleOAuthDiagnostics.redirectUriConfigured}`);
@@ -67,263 +68,7 @@ app.use(express.json());
 app.use('/uploads', express.static(uploadDir));
 app.use('/api/ai', auth, createAiSupportRouter());
 app.get('/api/health', (_, res) => res.json({ success: true, message: 'API is running' }));
-app.get('/api/google-business/health', auth, allowRoles('iplanet_service'), async (req, res) => {
-  const integration = await GoogleBusinessIntegration.findOne({ provider: GOOGLE_BUSINESS_PROVIDER }).select('status connectedAt accountName accountDisplayName expiresAt').lean();
-  res.json({
-    success: true,
-    mode: 'business-profile',
-    configured: googleOAuthDiagnostics.valid,
-    connected: integration?.status === 'connected',
-    connection: integration || null,
-  });
-});
-app.get('/api/google-business/auth', auth, allowRoles('iplanet_service'), async (req, res) => {
-  try {
-    const state = JSON.stringify({ userId: req.user.id });
-    const redirectUrl = buildGoogleBusinessAuthUrl({ state });
-    const urlDiagnostics = inspectGoogleBusinessAuthUrl(redirectUrl);
-    console.info(`[Google OAuth] Authorization URL parameters: ${Object.entries(urlDiagnostics).filter(([, configured]) => configured).map(([parameter]) => parameter).join(', ')}`);
-    return res.json({ success: true, url: redirectUrl, state });
-  } catch (error) {
-    console.error(`[Google OAuth] Authorization unavailable: ${error.message}`);
-    return res.status(503).json({ success: false, message: error.message || 'Google OAuth is not configured on the backend.' });
-  }
-});
-app.get('/api/google-business/callback', async (req, res) => {
-  const { code, state, error } = req.query;
-  if (error) return res.status(400).json({ success: false, message: `Google OAuth error: ${error}` });
-  if (!code) return res.status(400).json({ success: false, message: 'Missing Google authorization code.' });
-
-  const safeState = parseGoogleBusinessState(state || '{}');
-  const userId = safeState.userId;
-  const provider = GOOGLE_BUSINESS_PROVIDER;
-  const integrationLookup = { provider };
-
-  if (!userId) return res.status(400).json({ success: false, message: 'Google Business Profile OAuth state is missing the user identity.' });
-
-  const user = await User.findById(userId).select('_id role').lean();
-  console.info('[GOOGLE DEBUG]', { userId: String(userId), role: user?.role || null, provider, integrationLookup });
-
-  if (!user) return res.status(400).json({ success: false, message: 'Google Business Profile OAuth user was not found.' });
-  if (user.role !== 'iplanet_service') return res.status(403).json({ success: false, message: 'Only iPlanet Service users can connect Google Business Profile.' });
-
-  try {
-    const exchange = await exchangeGoogleBusinessCodeForTokens({
-      code: String(code),
-      clientId: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      redirectUri: process.env.GOOGLE_REDIRECT_URI,
-    });
-
-    const accessToken = encryptGoogleBusinessToken(exchange.accessToken);
-    const existingIntegration = await GoogleBusinessIntegration.findOne(integrationLookup).select('refreshToken').lean();
-    const refreshToken = exchange.refreshToken
-      ? encryptGoogleBusinessToken(exchange.refreshToken)
-      : existingIntegration?.refreshToken || null;
-    const expiresAt = exchange.expiresAt ? new Date(exchange.expiresAt) : null;
-
-    const integration = await GoogleBusinessIntegration.findOneAndUpdate(
-      integrationLookup,
-      {
-        userId,
-        portalRole: 'iplanet_service',
-        provider: GOOGLE_BUSINESS_PROVIDER,
-        accountName: safeState.accountName || null,
-        accountDisplayName: safeState.accountDisplayName || null,
-        accessToken,
-        refreshToken,
-        tokenType: exchange.tokenType || 'Bearer',
-        expiresAt,
-        connectedAt: new Date(),
-        status: 'connected',
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
-
-    return res.json({
-      success: true,
-      message: 'Google Business Profile is connected successfully.',
-      state: safeState,
-      integration: {
-        id: integration._id,
-        userId: integration.userId,
-        portalRole: integration.portalRole,
-        accountName: integration.accountName,
-        accountDisplayName: integration.accountDisplayName,
-        status: integration.status,
-        connectedAt: integration.connectedAt,
-      },
-    });
-  } catch (error) {
-    console.error('[GOOGLE_BUSINESS_CALLBACK_ERROR]', error);
-    return res.status(400).json({
-      success: false,
-      message: error.message || 'Unable to complete the Google Business Profile connection.',
-      state: safeState,
-    });
-  }
-});
-
-async function getValidGoogleBusinessIntegration(forceRefresh = false) {
-  const integration = await GoogleBusinessIntegration.findOne({ provider: GOOGLE_BUSINESS_PROVIDER }).sort({ createdAt: -1 }).lean();
-  if (!integration) return null;
-
-  if (!integration.accessToken) return null;
-
-  const now = Date.now();
-  const expiresAt = integration.expiresAt ? new Date(integration.expiresAt).getTime() : null;
-  if (!forceRefresh && expiresAt && expiresAt > now + 60_000) {
-    return {
-      ...integration,
-      accessToken: decryptGoogleBusinessToken(integration.accessToken),
-      refreshToken: integration.refreshToken ? decryptGoogleBusinessToken(integration.refreshToken) : '',
-    };
-  }
-
-  if (!forceRefresh && !integration.refreshToken) {
-    return {
-      ...integration,
-      accessToken: decryptGoogleBusinessToken(integration.accessToken),
-      refreshToken: '',
-    };
-  }
-
-  const refreshed = await refreshGoogleBusinessTokens({
-    refreshToken: decryptGoogleBusinessToken(integration.refreshToken),
-    clientId: process.env.GOOGLE_CLIENT_ID,
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-  });
-
-  const encryptedAccessToken = encryptGoogleBusinessToken(refreshed.accessToken);
-  const encryptedRefreshToken = refreshed.refreshToken ? encryptGoogleBusinessToken(refreshed.refreshToken) : integration.refreshToken;
-
-  await GoogleBusinessIntegration.findOneAndUpdate(
-    { _id: integration._id },
-    {
-      accessToken: encryptedAccessToken,
-      refreshToken: encryptedRefreshToken,
-      tokenType: refreshed.tokenType || integration.tokenType || 'Bearer',
-      expiresAt: refreshed.expiresAt ? new Date(refreshed.expiresAt) : null,
-      lastSyncedAt: new Date(),
-      status: 'connected',
-    }
-  );
-
-  return {
-    ...integration,
-    accessToken: refreshed.accessToken,
-    refreshToken: refreshed.refreshToken || decryptGoogleBusinessToken(encryptedRefreshToken),
-    expiresAt: refreshed.expiresAt ? new Date(refreshed.expiresAt) : integration.expiresAt,
-    tokenType: refreshed.tokenType || integration.tokenType || 'Bearer',
-  };
-}
-
-function googleBusinessErrorStatus(error) {
-  return [401, 403, 404, 429].includes(error?.status) ? error.status : 502;
-}
-
-function safeGoogleBusinessAccount(account) {
-  const normalized = normalizeGoogleBusinessAccount(account);
-  if (!normalized) return null;
-  return normalized;
-}
-
-app.get('/api/google-business/accounts', auth, allowRoles('iplanet_service'), async (req, res) => {
-  let integration;
-  try {
-    integration = await getValidGoogleBusinessIntegration();
-    if (!integration?.accessToken) {
-      return res.status(400).json({ success: false, message: 'Google Business Profile is not connected for this user.' });
-    }
-
-    let accounts;
-    try {
-      accounts = await listGoogleBusinessAccounts(integration.accessToken);
-    } catch (error) {
-      if (error.status !== 401 || !integration.refreshToken) throw error;
-      integration = await getValidGoogleBusinessIntegration(true);
-      accounts = await listGoogleBusinessAccounts(integration.accessToken);
-    }
-
-    const safeAccounts = accounts.map(safeGoogleBusinessAccount).filter(Boolean);
-    const update = safeAccounts.length === 1
-      ? {
-          accountId: safeAccounts[0].accountId,
-          accountName: safeAccounts[0].accountName,
-          accountDisplayName: safeAccounts[0].accountDisplayName,
-        }
-      : safeAccounts.length === 0
-        ? { accountId: null, accountName: null, accountDisplayName: null }
-        : {};
-
-    const savedIntegration = Object.keys(update).length
-      ? await GoogleBusinessIntegration.findOneAndUpdate(
-          { _id: integration._id, provider: GOOGLE_BUSINESS_PROVIDER },
-          update,
-          { new: true }
-        ).select('accountId accountName accountDisplayName status connectedAt').lean()
-      : await GoogleBusinessIntegration.findOne({ _id: integration._id }).select('accountId accountName accountDisplayName status connectedAt').lean();
-
-    return res.json({
-      success: true,
-      accounts: safeAccounts,
-      accountCount: safeAccounts.length,
-      selectionRequired: safeAccounts.length > 1,
-      integration: savedIntegration,
-    });
-  } catch (error) {
-    console.error(`[GOOGLE_BUSINESS_ACCOUNTS_ERROR] ${error.message}`);
-    return res.status(googleBusinessErrorStatus(error)).json({
-      success: false,
-      message: error.message || 'Unable to retrieve Google Business Profile accounts.',
-    });
-  }
-});
-
-app.get('/api/google-business/locations', auth, allowRoles('iplanet_service'), async (req, res) => {
-  try {
-    const integration = await getValidGoogleBusinessIntegration();
-    if (!integration?.accessToken) {
-      return res.status(400).json({ message: 'Google Business Profile is not connected for iPlanet Service.' });
-    }
-    const locations = await discoverGoogleBusinessLocations(integration.accessToken);
-    res.json({ success: true, locations });
-  } catch (error) {
-    console.error('[GOOGLE_BUSINESS_LOCATIONS_ERROR]', error);
-    const status = googleBusinessErrorStatus(error);
-    res.status(status).json({ success: false, message: error.message || 'Google Business Profile access failed.' });
-  }
-});
-app.get('/api/google-business/reviews/sync', auth, allowRoles('iplanet_service'), async (req, res) => {
-  const integration = await getValidGoogleBusinessIntegration();
-  if (!integration?.accessToken) {
-    return res.status(400).json({ message: 'Google Business Profile is not connected for iPlanet Service.' });
-  }
-  const mappings = await GoogleBusinessLocationMapping.find().lean();
-  const results = [];
-  for (const mapping of mappings) {
-    try {
-      const response = await getGoogleBusinessReviews(mapping.locationName, integration.accessToken);
-      const reviews = response.reviews.map(review => normalizeGoogleBusinessReview(review, mapping.locationDisplayName || mapping.serviceCentreName));
-      results.push({ serviceCentreId: mapping.serviceCentreId, locationName: mapping.locationName, reviewCount: reviews.filter(Boolean).length, reviews });
-    } catch (error) {
-      results.push({ serviceCentreId: mapping.serviceCentreId, locationName: mapping.locationName, error: error.message, reviewCount: 0, reviews: [] });
-    }
-  }
-  res.json({ success: true, results });
-});
-app.post('/api/google-business/locations/map', auth, allowRoles('iplanet_service'), async (req, res) => {
-  const { locationName, locationDisplayName, accountName, serviceCentreId } = req.body || {};
-  if (!locationName || !serviceCentreId) return res.status(400).json({ message: 'locationName and serviceCentreId are required.' });
-  const serviceCentre = await ServiceCentre.findOne({ _id: serviceCentreId, status: 'Active' });
-  if (!serviceCentre) return res.status(404).json({ message: 'Service centre not found.' });
-  const mapping = await GoogleBusinessLocationMapping.findOneAndUpdate(
-    { serviceCentreId: serviceCentre._id, locationName },
-    { serviceCentreId: serviceCentre._id, locationName, locationDisplayName: locationDisplayName || serviceCentre.name, accountName: accountName || '', serviceCentreName: serviceCentre.name },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
-  );
-  res.status(201).json({ success: true, mapping });
-});
+app.use('/api/google-business', createGoogleBusinessRouter({ store: createMongoGoogleBusinessStore({ GoogleBusinessIntegration, GoogleBusinessLocationMapping, GoogleBusinessNotificationReceipt, ServiceCentre, User, Notification }), auth, allowRoles }));
 const ticketId = () => `TKT-2026-${String(Date.now()).slice(-5)}`;
 const serviceAuth = [auth, allowRoles('iplanet_service')];
 // Notification centres show the most recent items; older ones stay in the database.
@@ -1068,4 +813,4 @@ async function ensureDemoAccounts() {
   );
 }
  
-mongoose.connect(process.env.MONGODB_URI).then(async () => { await ensureDemoAccounts(); await ensureDemoEnrollmentDevices(); await ensureEscalationRules(); await ensureServiceCentres(); await ensureReviewIndexes(); await ensureGoogleBusinessIntegrationIndexes(); await ensureGoogleBusinessLocationMappingIndexes(); await ServiceFollowUp.createIndexes(); proactiveScheduler.start(); app.listen(port, '0.0.0.0', () => console.log(`API running at http://localhost:${port}`)); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });
+mongoose.connect(process.env.MONGODB_URI).then(async () => { await ensureDemoAccounts(); await ensureDemoEnrollmentDevices(); await ensureEscalationRules(); await ensureServiceCentres(); await ensureReviewIndexes(); await ensureGoogleBusinessIntegrationIndexes(); await ensureGoogleBusinessLocationMappingIndexes(); await GoogleBusinessNotificationReceipt.createIndexes(); await ServiceFollowUp.createIndexes(); proactiveScheduler.start(); app.listen(port, '0.0.0.0', () => console.log(`API running at http://localhost:${port}`)); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });

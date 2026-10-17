@@ -19,7 +19,11 @@ async function send(path, options = {}) {
   const response = await fetch(`${API}${path}`, { ...options, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}`, ...(options.headers || {}) } });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.message || `Request failed (${response.status})`);
+    const error = new Error(body.message || `Request failed (${response.status})`);
+    error.status = response.status;
+    // Google Business endpoints add a safe, categorised error (e.g. access_pending).
+    if (body.error && typeof body.error === 'object') error.google = body.error;
+    throw error;
   }
   return response.json();
 }
@@ -34,12 +38,21 @@ export async function getEngineers() { return request('/iplanet/engineers'); }
 export async function getCompanies() { return request('/iplanet/companies'); }
 export async function createCompany(payload) { return request('/iplanet/companies', { method: 'POST', body: JSON.stringify(payload) }); }
 export async function getServiceCentres() { return request('/iplanet/service-centres'); }
-export async function getGoogleBusinessHealth() { return request('/google-business/health'); }
-export async function startGoogleBusinessAuth() { return request('/google-business/auth'); }
-export async function getGoogleAccounts() { return request('/google-business/accounts'); }
-export async function getGoogleLocations() { return request('/google-business/locations'); }
+// Google Business Profile (all calls go through the backend; no Google credentials in the browser)
+export async function getGoogleBusinessStatus() { return request('/google-business/status'); }
+export async function startGoogleBusinessAuth({ reconnect = false } = {}) { return request(`/google-business/auth${reconnect ? '?reconnect=true' : ''}`); }
+export async function checkGoogleConnection() { return request('/google-business/check', { method: 'POST', body: JSON.stringify({}) }); }
+export async function disconnectGoogleBusiness() { return request('/google-business/connection', { method: 'DELETE' }); }
+export async function getGoogleLocations({ refresh = false } = {}) { return request(`/google-business/locations${refresh ? '?refresh=true' : ''}`); }
+export async function getGoogleMappings() { return request('/google-business/mappings'); }
 export async function mapGoogleLocation(payload) { return request('/google-business/locations/map', { method: 'POST', body: JSON.stringify(payload) }); }
-export async function getGoogleReviewsSync() { return request('/google-business/reviews/sync'); }
+export async function unmapGoogleLocation(mappingId) { return request(`/google-business/locations/map/${mappingId}`, { method: 'DELETE' }); }
+export async function getGoogleReviews({ mappingId, pageToken } = {}) { const params = new URLSearchParams(Object.entries({ mappingId, pageToken }).filter(([, value]) => value)); return request(`/google-business/reviews${params.toString() ? `?${params}` : ''}`); }
+export async function syncGoogleLocation(mappingId) { return request(`/google-business/locations/${mappingId}/sync`, { method: 'POST', body: JSON.stringify({}) }); }
+export async function saveGoogleReviewReply(mappingId, reviewId, comment) { return request(`/google-business/locations/${mappingId}/reviews/${encodeURIComponent(reviewId)}/reply`, { method: 'PUT', body: JSON.stringify({ comment, confirmed: true }) }); }
+export async function deleteGoogleReviewReply(mappingId, reviewId) { return request(`/google-business/locations/${mappingId}/reviews/${encodeURIComponent(reviewId)}/reply`, { method: 'DELETE', body: JSON.stringify({ confirmed: true }) }); }
+export async function getGoogleNotificationSetting(accountName) { return request(`/google-business/notifications?accountName=${encodeURIComponent(accountName)}`); }
+export async function setGoogleNotifications(accountName, enabled) { return request('/google-business/notifications', { method: 'PUT', body: JSON.stringify({ accountName, enabled }) }); }
 export async function createServiceCentre(payload) { return request('/iplanet/service-centres', { method: 'POST', body: JSON.stringify(payload) }); }
 export async function assignEngineer(ticketId, engineerId) { return request(`/iplanet/tickets/${ticketId}/assign`, { method: 'POST', body: JSON.stringify({ engineerId }) }); }
 export async function serviceAction(ticketId, action, payload = {}) { const path = action === 'updates' ? 'update' : action; return request(`/iplanet/tickets/${ticketId}/${path}`, { method: 'POST', body: JSON.stringify(payload) }); }

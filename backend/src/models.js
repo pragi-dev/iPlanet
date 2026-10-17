@@ -58,20 +58,52 @@ const googleBusinessIntegrationSchema = new mongoose.Schema({
   expiresAt: { type: Date, default: null },
   connectedAt: { type: Date, default: Date.now },
   lastSyncedAt: { type: Date, default: null },
-  status: { type: String, default: 'connected', enum: ['connected', 'error', 'disconnected'] }
+  status: { type: String, default: 'connected', enum: ['connected', 'error', 'disconnected', 'reconnect_required'] },
+  grantedScope: { type: String, default: null },
+  // Outcome of the latest Google API call, so the portal can explain e.g.
+  // "access pending" (zero quota) without calling Google again.
+  accessState: { type: String, default: 'unknown', enum: ['unknown', 'granted', 'pending', 'error'] },
+  lastErrorCategory: { type: String, default: null },
+  lastErrorMessage: { type: String, default: null },
+  lastErrorAt: { type: Date, default: null },
+  lastCheckedAt: { type: Date, default: null },
+  notificationAccountName: { type: String, default: null },
+  notificationTopic: { type: String, default: null },
+  notificationsEnabledAt: { type: Date, default: null }
 }, { timestamps: true });
 googleBusinessIntegrationSchema.index({ provider: 1 }, { unique: true, name: 'provider_1' });
+// Sync metadata only. Google review content is never stored here.
 const googleBusinessLocationMappingSchema = new mongoose.Schema({
   serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre', required: true, index: true },
   locationName: { type: String, required: true },
   locationDisplayName: { type: String, default: '' },
   accountName: { type: String, default: '' },
   serviceCentreName: { type: String, default: '' },
+  mapsUri: { type: String, default: null },
   mappedAt: { type: Date, default: Date.now },
   lastReviewSyncAt: { type: Date, default: null },
-  lastSyncedReviewCount: { type: Number, default: 0 }
+  lastSyncedReviewCount: { type: Number, default: 0 },
+  lastSyncAttemptAt: { type: Date, default: null },
+  syncStatus: { type: String, default: 'never', enum: ['never', 'ok', 'error', 'pending'] },
+  lastErrorCategory: { type: String, default: null },
+  nextRetryAt: { type: Date, default: null },
+  lastNotificationAt: { type: Date, default: null }
 }, { timestamps: true });
 googleBusinessLocationMappingSchema.index({ serviceCentreId: 1, locationName: 1 }, { unique: true, name: 'serviceCentre_locationName_unique' });
+// One record per Pub/Sub delivery, used to make processing idempotent. Holds
+// resource names and event type only, and expires after seven days.
+export const GOOGLE_NOTIFICATION_RECEIPT_TTL_SECONDS = 7 * 24 * 60 * 60;
+const googleBusinessNotificationReceiptSchema = new mongoose.Schema({
+  messageId: { type: String, required: true, unique: true },
+  eventKey: { type: String, default: undefined },
+  type: String,
+  location: String,
+  status: { type: String, enum: ['processing', 'processed', 'ignored', 'failed'], default: 'processing' },
+  outcome: String,
+  receivedAt: { type: Date, default: Date.now }
+});
+googleBusinessNotificationReceiptSchema.index({ eventKey: 1 }, { unique: true, sparse: true });
+googleBusinessNotificationReceiptSchema.index({ receivedAt: 1 }, { expireAfterSeconds: GOOGLE_NOTIFICATION_RECEIPT_TTL_SECONDS });
 const notificationSchema = new mongoose.Schema({ user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, portalRole: String, type: String, priority: { type: String, enum: ['normal', 'high'], default: 'normal' }, title: String, message: String, ticket: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' }, device: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, reviewId: { type: mongoose.Schema.Types.ObjectId, ref: 'Review' }, action: { type: Object, default: null }, read: { type: Boolean, default: false } }, { timestamps: true });
 const timelineSchema = new mongoose.Schema({ ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' }, status: String, message: String, note: String, updatedBy: String, userRole: String, timestamp: { type: Date, default: Date.now } });
 const callRecordSchema = new mongoose.Schema({ ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket', required: true }, agentUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, agentName: String, ticketNumber: String, customerName: String, customerPhone: String, outcome: { type: String, enum: ['Issue Resolved Remotely', 'Customer Needs Further Assistance', 'Engineer Visit Required', 'Customer Unavailable', 'Call Back Required'], default: 'Customer Unavailable' }, notes: String, callStatus: { type: String, default: 'Call Attempted' } }, { timestamps: true });
@@ -99,6 +131,7 @@ export const TicketTimeline = mongoose.model('TicketTimeline', timelineSchema);
 export const Review = mongoose.model('Review', reviewSchema);
 export const GoogleBusinessIntegration = mongoose.model('GoogleBusinessIntegration', googleBusinessIntegrationSchema);
 export const GoogleBusinessLocationMapping = mongoose.model('GoogleBusinessLocationMapping', googleBusinessLocationMappingSchema);
+export const GoogleBusinessNotificationReceipt = mongoose.model('GoogleBusinessNotificationReceipt', googleBusinessNotificationReceiptSchema);
 export const Notification = mongoose.model('Notification', notificationSchema);
 export const EscalationRule = mongoose.model('EscalationRule', escalationRuleSchema);
 export const ServiceFollowUp = mongoose.model('ServiceFollowUp', serviceFollowUpSchema);

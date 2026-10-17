@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ChevronLeft, MessageSquareText, RefreshCcw } from 'lucide-react';
 import { ServiceShell } from './components';
-import { getGoogleReviewsSync, getServiceReview, getServiceReviews } from './api';
-import { GoogleBadge, GoogleReviewCard, InternalReviewCard, ReviewTabs, flattenGoogleReviews, getCachedGoogleSync, setCachedGoogleSync } from './reviewShared';
+import { getGoogleReviews, getServiceReview, getServiceReviews } from './api';
+import { GoogleBadge, GoogleReviewCard, InternalReviewCard, ReviewTabs, flattenGoogleReviews, getCachedGoogleReviews, googleErrorMessage, setCachedGoogleReviews } from './reviewShared';
 import { Badge, Button, EmptyState, ErrorState, FilterBar, FilterSelect, InfoList, InlineAlert, KPI, KPIGrid, PageHeader, PageSkeleton, RowAction, SearchInput, Section, Stars, Surface, TableCard, formatDate, formatDateTime, friendlyError, useAsync } from '../ui';
 
 export { ReviewTabs };
@@ -13,7 +13,7 @@ export function InternalReviews() {
   const view = params.get('source') === 'internal' ? 'internal' : 'all';
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState({ search: '', rating: 'All' });
-  const [googleSync, setGoogleSync] = useState(getCachedGoogleSync);
+  const [googleSync, setGoogleSync] = useState(getCachedGoogleReviews);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState('');
   useEffect(() => { const timer = window.setTimeout(() => setFilters(current => ({ ...current, search })), 300); return () => window.clearTimeout(timer); }, [search]);
@@ -26,8 +26,8 @@ export function InternalReviews() {
   const syncGoogle = async () => {
     setSyncing(true);
     setSyncError('');
-    try { const result = await getGoogleReviewsSync(); setCachedGoogleSync(result); setGoogleSync(result); }
-    catch (error) { setSyncError(friendlyError(error, 'Unable to sync Google reviews.')); }
+    try { const result = await getGoogleReviews(); setCachedGoogleReviews(result); setGoogleSync(result); }
+    catch (error) { setSyncError(googleErrorMessage(error, 'Unable to retrieve Google reviews.')); }
     finally { setSyncing(false); }
   };
 
@@ -43,7 +43,7 @@ export function InternalReviews() {
     <KPIGrid columns={3}>
       <KPI label="Internal reviews" value={state.data ? reviews.length : '—'} hint={filters.rating !== 'All' || filters.search ? 'Matching current filters' : 'After closed service requests'} />
       <KPI label="Average internal rating" value={average === null ? '—' : average.toFixed(1)} hint={average === null ? 'No reviews yet' : 'Out of 5'} />
-      <KPI label="Google reviews" value={googleSync ? flattenGoogleReviews(googleSync).length : '—'} hint={googleSync ? 'From the last sync' : 'Not synced this session'} />
+      <KPI label="Google reviews" value={googleSync ? flattenGoogleReviews(googleSync).length : '—'} hint={googleSync ? 'Retrieved this session, not a lifetime total' : 'Not retrieved this session'} />
     </KPIGrid>
 
     {view === 'internal' ? <TableCard columns={7} loading={state.loading && !state.data} error={state.error && friendlyError(state.error)} errorTitle="Unable to load reviews" onRetry={state.reload} toolbar={filterBar}
@@ -64,7 +64,7 @@ export function InternalReviews() {
       : <div className="stack-16">
         <div className="card card-flush">{filterBar}
           <div className="row-between" style={{ padding: '14px 24px' }}>
-            <span className="text-muted text-small">{googleSync ? 'Includes Google reviews from the last sync in this session.' : 'Google reviews are retrieved on request from your Business Profile.'}</span>
+            <span className="text-muted text-small">{googleSync ? 'Includes the newest Google reviews retrieved in this session.' : 'Google reviews are retrieved on request from your Business Profile.'}</span>
             <Button size="sm" icon={RefreshCcw} onClick={syncGoogle} disabled={syncing}>{syncing ? 'Syncing…' : googleSync ? 'Refresh Google reviews' : 'Include Google reviews'}</Button>
           </div>
         </div>
@@ -72,7 +72,7 @@ export function InternalReviews() {
         {state.loading && !state.data ? <PageSkeleton variant="none" kpis={0} />
           : state.error ? <div className="card"><ErrorState title="Unable to load reviews" message={friendlyError(state.error)} onRetry={state.reload} /></div>
           : !combined.length ? <div className="card"><EmptyState icon={MessageSquareText} title="No reviews yet" description="Internal reviews appear after customers rate closed requests. Google reviews appear after a sync." /></div>
-          : <div className="review-cards">{combined.map((review, index) => review.source === 'google' ? <GoogleReviewCard key={review.googleReviewId || `g-${index}`} review={review} /> : <InternalReviewCard key={review._id} review={review} />)}</div>}
+          : <div className="review-cards">{combined.map((review, index) => review.source === 'google' ? <GoogleReviewCard key={`g-${review.location?.mappingId}-${review.reviewId || index}`} review={review} /> : <InternalReviewCard key={review._id} review={review} />)}</div>}
       </div>}
   </ServiceShell>;
 }
