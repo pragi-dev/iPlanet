@@ -14,6 +14,12 @@ export function formatDate(value, fallback = '—') {
   return date ? dateFormatter.format(date) : fallback;
 }
 
+// A review month, 'YYYY-MM', as "October 2026".
+export function formatMonth(period, fallback = '—') {
+  if (!/^\d{4}-\d{2}$/.test(String(period || ''))) return fallback;
+  return new Date(`${period}-15T00:00:00Z`).toLocaleString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+
 export function formatDateTime(value, fallback = '—') {
   const date = toDate(value);
   return date ? `${dateFormatter.format(date)} • ${timeFormatter.format(date)}` : fallback;

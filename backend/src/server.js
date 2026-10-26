@@ -1,6 +1,5 @@
 import dotenv from 'dotenv';
 import express from 'express';
-import cors from 'cors';
 import compression from 'compression';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
@@ -9,9 +8,11 @@ import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Review, Notification, EscalationRule, CallRecord, AITroubleshootingSession, ServiceFollowUp, GoogleBusinessIntegration, GoogleBusinessLocationMapping, GoogleBusinessNotificationReceipt } from './models.js';
-import { auth, allowRoles, jwtSecret } from './middleware.js';
+import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Review, Notification, EscalationRule, CallRecord, AITroubleshootingSession, ServiceFollowUp, AccountRequest, GoogleBusinessIntegration, GoogleBusinessLocationMapping, GoogleBusinessNotificationReceipt } from './models.js';
+import { auth, allowRoles, jwtSecret, restrictB2COnlyStaff } from './middleware.js';
 import { hashPassword, verifyPassword, needsRehash } from './passwords.js';
+import { createCorsMiddleware } from './corsPolicy.js';
+import { computeSlaEscalation, targetHours } from './slaEscalation.js';
 import { createAiSupportRouter } from './routes/aiSupport.js';
 import { createGoogleBusinessRouter } from './routes/googleBusiness.js';
 import { getGoogleBusinessOauthConfig, validateGoogleBusinessOauthConfig } from './integrations/googleBusinessProfile/googleBusinessProfileAuth.js';
@@ -21,8 +22,14 @@ import { getAiSupportReply } from './ai/aiEngine.js';
 import { buildSupportContext } from './ai/contextBuilder.js';
 import { understandRequest, understandDeterministicResult, REQUEST_CATEGORIES, REQUEST_ISSUE_TYPES } from './ai/requestExtractor.js';
 import { indiaToday, resolveServiceDateIntent } from './ai/serviceDate.js';
+import { createDeviceRegistrationRouter } from './deviceRegistration/deviceRoutes.js';
+import { createClaudeColumnMapper } from './deviceRegistration/columnMapper.js';
+import { isPeriod, periodEnded, periodLabel, reviewPeriod, reviewPeriods, startMonthlyReviewScheduler, ticketReviewPeriod } from './monthlyReviews.js';
 import { demoEnrollmentDevices } from './demoData.js';
 import { createProactiveEngine, createProactiveScheduler, proactiveConfig, ProactiveServiceError } from './services/proactiveService/index.js';
+import { createB2CModule } from './b2c/index.js';
+import { createAccountRequestRouter } from './accountRequests/accountRequestRoutes.js';
+import { parseEmailDomains } from './accountRequests/accountRequestRules.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '../.env') });
@@ -38,39 +45,28 @@ fs.mkdirSync(uploadDir, { recursive: true });
 const upload = multer({ dest: uploadDir, limits: { fileSize: 5 * 1024 * 1024 }, fileFilter: (_, file, cb) => cb(null, /^image\//.test(file.mimetype)) });
 const AI_SUPPORT_FALLBACK_MESSAGE = 'AI Support is temporarily unavailable. You can continue the request manually or contact the service team.';
 const app = express();
-const allowedOrigins = new Set((process.env.FRONTEND_URLS || 'http://localhost:5173,http://localhost:5174')
-  .split(',')
-  .map(origin => origin.trim())
-  .filter(Boolean));
-const isAllowedOrigin = origin => {
-  if (!origin) return true;
-  if (allowedOrigins.has(origin)) return true;
-  try {
-    const hostname = new URL(origin).hostname;
-    return ['localhost', '127.0.0.1'].includes(hostname)
-      || hostname.endsWith('.loca.lt')
-      || hostname.endsWith('.localtunnel.me')
-      || hostname.endsWith('.devtunnels.ms')
-      || hostname.endsWith('.app.github.dev')
-      || hostname.endsWith('.vercel.app');
-  } catch {
-    return false;
-  }
-};
-app.use(cors({
-  origin(origin, callback) {
-    // Requests without an Origin header include local health checks and curl.
-    if (isAllowedOrigin(origin)) return callback(null, true);
-    return callback(new Error(`Origin ${origin} is not allowed by CORS`));
-  },
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}));
+// Behind a proxy (Render, a load balancer) set TRUST_PROXY to the number of proxy hops so
+// req.ip — used by the sign-up rate limit — is the client address rather than the proxy's.
+if (process.env.TRUST_PROXY) app.set('trust proxy', /^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY);
+app.use(createCorsMiddleware());
 app.use(compression());
 app.use(express.json());
 app.use('/uploads', express.static(uploadDir));
+app.use('/api', restrictB2COnlyStaff);
 app.use('/api/ai', auth, createAiSupportRouter());
 app.get('/api/health', (_, res) => res.json({ success: true, message: 'API is running' }));
+app.use('/api/corporate/devices', createDeviceRegistrationRouter({ models: { Device, Company, ServiceCentre }, auth, allowRoles, suggestColumnMapping: createClaudeColumnMapper() }));
 app.use('/api/google-business', createGoogleBusinessRouter({ store: createMongoGoogleBusinessStore({ GoogleBusinessIntegration, GoogleBusinessLocationMapping, GoogleBusinessNotificationReceipt, ServiceCentre, User, Notification }), auth, allowRoles }));
+// B2C email escalation management. Separate collections and routes; shares
+// accounts, authentication and in-app notifications with the B2B portal.
+// With B2C_SEPARATE_SERVER=true it runs only in src/b2cServer.js, so the
+// email scheduler never runs in both processes.
+const b2cSeparate = process.env.B2C_SEPARATE_SERVER === 'true';
+const b2c = b2cSeparate ? null : createB2CModule({ User, Notification, EscalationRule, notifyUsers, auth });
+if (b2c) {
+  app.use('/api/b2c', b2c.router);
+  app.use('/api/internal/b2c', b2c.internalRouter);
+} else console.info('[B2C] Served by the separate B2C server (B2C_SEPARATE_SERVER=true)');
 // Six random digits under the current year; createTicketWithUniqueId retries on the rare collision.
 const ticketId = () => `TKT-${new Date().getFullYear()}-${crypto.randomInt(100000, 1000000)}`;
 async function createTicketWithUniqueId(fields) {
@@ -83,10 +79,23 @@ const serviceAuth = [auth, allowRoles('iplanet_service')];
 // Notification centres show the most recent items; older ones stay in the database.
 const NOTIFICATION_LIST_LIMIT = 100;
 // Fields a corporate user may set when raising a request; everything else on a ticket is server-owned.
-const TICKET_REQUEST_FIELDS = ['category', 'issueType', 'description', 'location', 'preferredServiceDate', 'priority'];
+const TICKET_REQUEST_FIELDS = ['category', 'issueType', 'description', 'location', 'preferredServiceDate', 'priority', 'deviceCount'];
+// Health camps and buyback / e-waste pickups are on-site visits for a batch of devices:
+// they need a device count and advance notice to plan.
+const ON_SITE_LEAD_DAYS = { 'Health Camp': 4, 'Buyback / E-Waste': 2 };
+const ON_SITE_CATEGORIES = Object.keys(ON_SITE_LEAD_DAYS);
+const ON_SITE_MAX_DEVICES = 1000;
+const addDaysIso = (iso, days) => { const date = new Date(`${iso}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10); };
+function onSiteRequestError(body) {
+  if (!ON_SITE_CATEGORIES.includes(body.category)) return null;
+  const count = Number(body.deviceCount);
+  if (!Number.isInteger(count) || count < 1 || count > ON_SITE_MAX_DEVICES) return `Enter the number of devices (1 to ${ON_SITE_MAX_DEVICES}).`;
+  const earliest = addDaysIso(indiaToday(), ON_SITE_LEAD_DAYS[body.category]);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(body.preferredServiceDate || '') || body.preferredServiceDate < earliest) return `Choose a ${body.category} date on or after ${earliest}.`;
+  return null;
+}
 const transitions = { Open: ['Engineer Assigned'], 'Engineer Assigned': ['Engineer Accepted'], 'Engineer Accepted': ['In Progress'], 'In Progress': ['Waiting for Parts', 'Completed'], 'Waiting for Parts': ['In Progress'], Completed: ['Closed'], Closed: [] };
 const escalationContacts = { 1: { level: 1, name: 'Service Coordinator', contactName: 'Neha Menon', email: 'service@iplanet.local' }, 2: { level: 2, name: 'Service Manager', contactName: 'Ravi Shah', email: 'manager@iplanet.local' }, 3: { level: 3, name: 'Regional Operations Manager', contactName: 'Kiran Rao', email: 'operations@iplanet.local' } };
-function targetHours(priority = 'Medium') { return { Critical: 4, High: 12, Medium: 24, Low: 48 }[priority] || 24; }
 async function notifyUsers({ users, company, ticket, device, type, title, message, serviceCentreId, reviewId, action, priority }) { if (!users.length) return; await Notification.insertMany(users.map(user => ({ user: user._id, company, serviceCentreId, ticket: ticket?._id, device: device?._id, reviewId, portalRole: user.role, type, priority, title, message, action, read: false }))); }
 async function serviceUsers() { return User.find({ role: 'iplanet_service' }); }
 async function serviceUsersForCentre(serviceCentreId) { return serviceCentreId ? User.find({ role: 'iplanet_service', $or: [{ serviceCentreId }, { serviceCentreId: null }] }) : User.find({ role: 'iplanet_service' }); }
@@ -148,7 +157,7 @@ function extractAiRequest(reply = '') {
   if (!match) return { reply: String(reply).trim(), requestData: null };
   try {
     const data = JSON.parse(match[1]);
-    const categories = ['Service', 'Health Camp', 'Buyback', 'E-Waste'];
+    const categories = ['Service', 'Health Camp', 'Buyback / E-Waste'];
     if (!categories.includes(data.category) || !data.description?.trim()) throw Object.assign(new Error('Invalid AI request data'), { status: 422 });
     return { reply: String(reply).slice(0, match.index).trim(), requestData: data };
   } catch { return { reply: String(reply).replace(match[0], '').trim(), requestData: null }; }
@@ -261,31 +270,12 @@ function activeEscalationRules() {
   return escalationRuleCache.rules;
 }
 const clearEscalationRuleCache = () => { escalationRuleCache = { at: 0, rules: null }; };
-const BREACH_TRIGGERS = ['SLA Breached', 'Critical SLA Breach', 'High Priority SLA Breach'];
-const RISK_TRIGGERS = ['SLA Approaching', 'SLA At Risk'];
-// Of the rules a ticket has reached, the one with the highest escalation level wins, so a
-// generic "All priorities" rule can never downgrade a Critical ticket's escalation.
-const strongestRule = (rules, triggers, elapsedPercent) => rules.filter(rule => triggers.includes(rule.trigger) && elapsedPercent >= rule.slaThreshold).sort((a, b) => b.level - a.level || b.slaThreshold - a.slaThreshold)[0];
+// The calculation lives in slaEscalation.js so B2C escalations follow the same rules.
 async function evaluateEscalation(ticket, createEvents = false) {
   if (!ticket.slaTargetAt || ['Completed', 'Closed'].includes(ticket.status)) return ticket;
-  const now = Date.now();
-  const target = new Date(ticket.slaTargetAt).getTime();
-  const created = new Date(ticket.createdAt).getTime();
-  const elapsedPercent = Math.min(100, Math.max(0, ((now - created) / (target - created)) * 100));
-  const rules = (await activeEscalationRules()).filter(rule => rule.priority === 'All' || rule.priority === ticket.priority);
-  const breachRule = strongestRule(rules, BREACH_TRIGGERS, elapsedPercent);
-  const riskRule = strongestRule(rules, RISK_TRIGGERS, elapsedPercent);
-  const nextStatus = breachRule ? 'SLA Breached' : riskRule ? 'At Risk' : 'Healthy';
-  if (nextStatus === 'Healthy' || ['SLA Breached', 'Escalated'].includes(ticket.escalationStatus) && nextStatus !== 'SLA Breached') return ticket;
-  const rule = breachRule || riskRule;
-  const ruleLevel = rule?.level || (nextStatus === 'SLA Breached' && ticket.priority === 'Critical' ? 3 : nextStatus === 'SLA Breached' ? 2 : 1);
-  const level = Math.max(ruleLevel, ticket.escalationLevel || 0);
-  // Level 2+ breaches are handed to service management, which the dashboards count as escalations.
-  const nextEscalation = nextStatus === 'SLA Breached' && level >= 2 ? 'Escalated' : nextStatus;
-  const reason = nextStatus !== 'SLA Breached' ? 'Resolution SLA approaching' : now >= target ? 'Resolution SLA exceeded' : 'Escalation threshold reached before the SLA deadline';
-  const update = { slaStatus: nextStatus, escalationStatus: nextEscalation, escalationLevel: level, escalationReason: reason, escalatedAt: ticket.escalatedAt || new Date() };
-  if (Object.entries(update).every(([key, value]) => key === 'escalatedAt' ? Boolean(ticket.escalatedAt) : ticket[key] === value)) return ticket;
-  const changed = ticket.slaStatus !== nextStatus || ticket.escalationStatus !== nextEscalation;
+  const escalation = computeSlaEscalation(ticket, await activeEscalationRules());
+  if (!escalation) return ticket;
+  const { update, nextStatus, level, reason, changed } = escalation;
   // Several requests can evaluate the same ticket at once (dashboard + list, two users). The write is
   // conditional on the state this request read, so only the request whose write lands emits events.
   const result = await Ticket.updateOne({ _id: ticket._id, slaStatus: ticket.slaStatus ?? null, escalationStatus: ticket.escalationStatus ?? null, escalationLevel: ticket.escalationLevel ?? null }, { $set: update });
@@ -309,7 +299,8 @@ app.post('/api/auth/login', async (req, res) => {
   if (!user || !verifyPassword(password, user.password)) return res.status(401).json({ message: 'Invalid demo credentials' });
   if (needsRehash(user.password)) await User.updateOne({ _id: user._id }, { password: hashPassword(password) });
   const token = jwt.sign({ id: user._id, name: user.name, email: user.email, role: user.role, companyId: user.companyId, serviceCentreId: user.serviceCentreId }, jwtSecret(), { expiresIn: '8h' });
-  res.json({ token, user: { id: user._id, name: user.name, email: user.email, role: user.role, company: user.company, companyId: user.companyId, serviceCentreId: user.serviceCentreId } });
+  // b2cRole only controls which navigation the portal shows; the B2C API re-reads it from the database on every request.
+  res.json({ token, user: { id: user._id, name: user.name, email: user.email, role: user.role, company: user.company, companyId: user.companyId, serviceCentreId: user.serviceCentreId, b2cRole: user.b2cRole || null } });
 });
 
 const corporateCompany = req => req.user.role === 'corporate_admin' ? { companyId: new mongoose.Types.ObjectId(req.user.companyId) } : {};
@@ -317,8 +308,21 @@ app.get('/api/devices', auth, allowRoles('corporate_admin'), async (req, res) =>
 app.get('/api/devices/serial/:serialNumber', auth, allowRoles('corporate_admin'), async (req, res) => { const device = await Device.findOne({ serialNumber: req.params.serialNumber, ...corporateCompany(req) }); if (!device) return res.status(404).json({ message: 'No device found for that serial number' }); res.json(device); });
 app.get('/api/devices/:id', auth, allowRoles('corporate_admin'), async (req, res) => { const device = await Device.findOne({ _id: req.params.id, ...corporateCompany(req) }); if (!device) return res.status(404).json({ message: 'Device not found' }); res.json(device); });
 app.get('/api/tickets', auth, allowRoles('corporate_admin'), async (req, res) => { const query = { companyId: req.user.companyId, ...(req.query.status && req.query.status !== 'All' ? { status: req.query.status } : {}) }; const tickets = await Ticket.find(query).populate('deviceId').populate('companyId', 'name companyId location').populate('assignedEngineerId', 'name employeeId phone email location status').sort({ createdAt: -1 }); await Promise.all(tickets.map(ticket => evaluateEscalation(ticket, true))); res.json(tickets); });
-app.get('/api/tickets/:id', auth, allowRoles('corporate_admin'), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }).populate('deviceId').populate('companyId').populate('serviceCentreId').populate('assignedEngineerId').populate('customerId'); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); await evaluateEscalation(ticket, true); const [timeline, callHistory, aiSupport, review] = await Promise.all([TicketTimeline.find({ ticketId: ticket._id }).sort({ timestamp: 1 }), CallRecord.find({ ticketId: ticket._id }).sort({ createdAt: -1 }), AITroubleshootingSession.find({ ticketId: ticket._id }).sort({ createdAt: -1 }), Review.findOne({ ticketId: ticket._id })]); const reviewSubmitted = Boolean(review); const reviewEligible = ticket.status === 'Closed' && !reviewSubmitted; res.json({ ticket, reviewEligible, reviewSubmitted, reviewId: review?._id || null, escalation: { status: ticket.escalationStatus, level: ticket.escalationLevel, reason: ticket.escalationReason, responseTarget: ticket.responseTarget, resolutionTarget: ticket.resolutionTarget, slaTargetAt: ticket.slaTargetAt }, escalationContact: escalationContacts[ticket.escalationLevel] || null, timeline, callHistory, aiSupport }); });
-app.post('/api/tickets', auth, allowRoles('corporate_admin'), async (req, res) => { const device = await Device.findOne({ _id: req.body.deviceId, companyId: req.user.companyId }); if (!device) return res.status(400).json({ message: 'Valid company device selection is required' }); let followUp = null; try { followUp = await proactiveEngine.validateTicketLink(req.body.serviceFollowUpId, { companyId: req.user.companyId, deviceId: device._id }); } catch (error) { return res.status(error.status || 400).json({ message: error.message }); } const requestFields = Object.fromEntries(TICKET_REQUEST_FIELDS.filter(field => req.body[field] !== undefined).map(field => [field, req.body[field]])); const createdAt = new Date(); const ticket = await createTicketWithUniqueId({ ...requestFields, serviceFollowUpId: followUp?._id, ...(followUp?.serviceCentreId ? { serviceCentreId: followUp.serviceCentreId } : {}), customerId: req.user.id, companyId: req.user.companyId, deviceId: device._id, status: 'Open', images: [], originalImages: [], annotatedImages: [], responseTarget: '4 business hours', resolutionTarget: `${targetHours(req.body.priority)} hours`, slaTargetAt: new Date(createdAt.getTime() + targetHours(req.body.priority) * 3600000), slaStatus: 'Healthy', escalationStatus: 'Not Escalated' }); await TicketTimeline.create({ ticketId: ticket._id, status: 'Open', message: followUp ? 'Service request created by Corporate Admin from a preventive service recommendation.' : 'Service request created by Corporate Admin.', updatedBy: 'Corporate Portal', userRole: 'corporate_admin' }); if (followUp) await proactiveEngine.linkTicket(followUp, ticket, req.user); const users = await serviceUsers(); await notifyUsers({ users, company: ticket.companyId, ticket, device, type: 'NEW_SERVICE_REQUEST', title: 'New service request', message: `${ticket.ticketId} was raised for ${device.model}.` }); res.status(201).json(await ticket.populate('deviceId')); });
+// What was done to resolve each of the organization's completed or closed requests, for reports:
+// the latest Completed note (the Closed note if there is none), with when it was recorded.
+app.get('/api/tickets/resolutions', auth, allowRoles('corporate_admin'), async (req, res) => {
+  const tickets = await Ticket.find({ companyId: req.user.companyId, status: { $in: ['Completed', 'Closed'] } }).select('_id').lean();
+  const entries = await TicketTimeline.find({ ticketId: { $in: tickets.map(ticket => ticket._id) }, status: { $in: ['Completed', 'Closed'] } }).sort({ timestamp: -1 }).lean();
+  const resolutions = {};
+  for (const entry of entries) {
+    const id = String(entry.ticketId);
+    const current = resolutions[id];
+    if (!current || (current.status === 'Closed' && entry.status === 'Completed')) resolutions[id] = { status: entry.status, resolution: [entry.message, entry.note].filter(Boolean).join(' '), recordedAt: entry.timestamp };
+  }
+  res.json(resolutions);
+});
+app.get('/api/tickets/:id', auth, allowRoles('corporate_admin'), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }).populate('deviceId').populate('companyId').populate('serviceCentreId').populate('assignedEngineerId').populate('customerId'); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); await evaluateEscalation(ticket, true); const [timeline, callHistory, aiSupport, review] = await Promise.all([TicketTimeline.find({ ticketId: ticket._id }).sort({ timestamp: 1 }), CallRecord.find({ ticketId: ticket._id }).sort({ createdAt: -1 }), AITroubleshootingSession.find({ ticketId: ticket._id }).sort({ createdAt: -1 }), Review.findOne({ ticketId: ticket._id })]); const reviewPeriodKey = await ticketReviewPeriod(reviewModels, ticket); const monthReview = !review && reviewPeriodKey ? await Review.findOne({ corporateId: ticket.companyId?._id || ticket.companyId, period: reviewPeriodKey }) : null; const reviewSubmitted = Boolean(review || monthReview); const reviewEligible = Boolean(reviewPeriodKey) && periodEnded(reviewPeriodKey) && !reviewSubmitted; res.json({ ticket, reviewEligible, reviewSubmitted, reviewId: (review || monthReview)?._id || null, reviewPeriod: reviewPeriodKey ? { period: reviewPeriodKey, label: periodLabel(reviewPeriodKey), ended: periodEnded(reviewPeriodKey) } : null, escalation: { status: ticket.escalationStatus, level: ticket.escalationLevel, reason: ticket.escalationReason, responseTarget: ticket.responseTarget, resolutionTarget: ticket.resolutionTarget, slaTargetAt: ticket.slaTargetAt }, escalationContact: escalationContacts[ticket.escalationLevel] || null, timeline, callHistory, aiSupport }); });
+app.post('/api/tickets', auth, allowRoles('corporate_admin'), async (req, res) => { const device = await Device.findOne({ _id: req.body.deviceId, companyId: req.user.companyId }); if (!device) return res.status(400).json({ message: 'Valid company device selection is required' }); const onSiteError = onSiteRequestError(req.body); if (onSiteError) return res.status(400).json({ message: onSiteError }); let followUp = null; try { followUp = await proactiveEngine.validateTicketLink(req.body.serviceFollowUpId, { companyId: req.user.companyId, deviceId: device._id }); } catch (error) { return res.status(error.status || 400).json({ message: error.message }); } const requestFields = Object.fromEntries(TICKET_REQUEST_FIELDS.filter(field => req.body[field] !== undefined).map(field => [field, req.body[field]])); if (ON_SITE_CATEGORIES.includes(requestFields.category)) requestFields.deviceCount = Number(requestFields.deviceCount); else delete requestFields.deviceCount; const createdAt = new Date(); const ticket = await createTicketWithUniqueId({ ...requestFields, serviceFollowUpId: followUp?._id, ...(followUp?.serviceCentreId ? { serviceCentreId: followUp.serviceCentreId } : {}), customerId: req.user.id, companyId: req.user.companyId, deviceId: device._id, status: 'Open', images: [], originalImages: [], annotatedImages: [], responseTarget: '4 business hours', resolutionTarget: `${targetHours(req.body.priority)} hours`, slaTargetAt: new Date(createdAt.getTime() + targetHours(req.body.priority) * 3600000), slaStatus: 'Healthy', escalationStatus: 'Not Escalated' }); await TicketTimeline.create({ ticketId: ticket._id, status: 'Open', message: followUp ? 'Service request created by Corporate Admin from a preventive service recommendation.' : 'Service request created by Corporate Admin.', updatedBy: 'Corporate Portal', userRole: 'corporate_admin' }); if (followUp) await proactiveEngine.linkTicket(followUp, ticket, req.user); const users = await serviceUsers(); await notifyUsers({ users, company: ticket.companyId, ticket, device, type: 'NEW_SERVICE_REQUEST', title: 'New service request', message: `${ticket.ticketId} was raised for ${device.model}.` }); res.status(201).json(await ticket.populate('deviceId')); });
 app.post('/api/tickets/:id/images', auth, allowRoles('corporate_admin'), upload.array('images', 5), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); if (!req.files?.length) return res.status(400).json({ message: 'Attach at least one image.' }); const paths = req.files.map(file => `/uploads/${file.filename}`); ticket.images.push(...paths); ticket.originalImages.push(...paths); await ticket.save(); res.json(ticket); });
 app.post('/api/tickets/:id/annotated-images', auth, allowRoles('corporate_admin'), upload.array('images', 5), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); if (!req.files?.length) return res.status(400).json({ message: 'Attach at least one image.' }); const paths = req.files.map(file => `/uploads/${file.filename}`); ticket.images.push(...paths); ticket.annotatedImages.push(...paths); await ticket.save(); res.json(ticket); });
 app.get('/api/tickets/:id/calls', auth, allowRoles('corporate_admin'), async (req, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, companyId: req.user.companyId }).populate('customerId'); if (!ticket) return res.status(404).json({ message: 'Ticket not found' }); res.json(await CallRecord.find({ ticketId: ticket._id }).sort({ createdAt: -1 })); });
@@ -593,53 +597,74 @@ app.get('/api/corporate/notifications', auth, allowRoles('corporate_admin'), asy
 app.get('/api/corporate/notifications/unread-count', auth, allowRoles('corporate_admin'), async (req, res) => res.json({ count: await Notification.countDocuments({ user: req.user.id, company: req.user.companyId, read: false }) }));
 app.patch('/api/corporate/notifications/:id/read', auth, allowRoles('corporate_admin'), async (req, res) => { const notification = await Notification.findOneAndUpdate({ _id: req.params.id, user: req.user.id, company: req.user.companyId }, { read: true }, { new: true }); if (!notification) return res.status(404).json({ message: 'Notification not found' }); res.json(notification); });
 app.patch('/api/corporate/notifications/read-all', auth, allowRoles('corporate_admin'), async (req, res) => { await Notification.updateMany({ user: req.user.id, company: req.user.companyId, read: false }, { read: true }); res.json({ ok: true }); });
-app.patch('/api/corporate/devices/:id/assign', auth, allowRoles('corporate_admin'), async (req, res) => { const device = await Device.findOne({ _id: req.params.id, companyId: req.user.companyId }); if (!device) return res.status(404).json({ message: 'Device not found in your company inventory' }); device.employeeName = req.body.employeeName; device.employeeId = req.body.employeeId; device.department = req.body.department; device.location = req.body.location; device.deviceAllocationStatus = 'Assigned'; await device.save(); await Notification.updateMany({ user: req.user.id, company: req.user.companyId, device: device._id, type: 'NEW_DEVICE' }, { read: true }); res.json(device); });
+app.patch('/api/corporate/devices/:id/assign', auth, allowRoles('corporate_admin'), async (req, res) => { const device = await Device.findOne({ _id: req.params.id, companyId: req.user.companyId }); if (!device) return res.status(404).json({ message: 'Device not found in your company inventory' }); // The employee is optional: without one the device is still marked Assigned and keeps its location.
+  const employeeName = String(req.body.employeeName || '').trim(); const employeeId = String(req.body.employeeId || '').trim(); if (Boolean(employeeName) !== Boolean(employeeId)) return res.status(400).json({ message: 'Provide both the employee name and ID, or neither.' }); device.employeeName = employeeName || undefined; device.employeeId = employeeId || undefined; device.department = employeeName ? req.body.department : undefined; if (employeeName && req.body.location) device.location = req.body.location; device.deviceAllocationStatus = 'Assigned'; await device.save(); await Notification.updateMany({ user: req.user.id, company: req.user.companyId, device: device._id, type: 'NEW_DEVICE' }, { read: true }); res.json(device); });
 
-function reviewTicketQueryForService(req) { return req.user.serviceCentreId ? { serviceCentreId: req.user.serviceCentreId } : {}; }
+// A service-centre user sees reviews for its centre: monthly reviews list every centre involved.
+function reviewTicketQueryForService(req) { return req.user.serviceCentreId ? { $or: [{ serviceCentreId: req.user.serviceCentreId }, { serviceCentreIds: req.user.serviceCentreId }] } : {}; }
+const reviewModels = { Company, User, Notification, Review, Ticket, TicketTimeline };
+const reviewPopulate = query => query.populate('ticketId').populate('ticketIds', 'ticketId issueType category').populate('customerId', 'name').populate('corporateId').populate('serviceCentreId').populate('serviceCentreIds', 'name').populate('deviceId');
 app.post('/api/reviews', auth, allowRoles('corporate_admin'), async (req, res) => {
-  const { ticketId: requestedTicketId, rating, comment } = req.body || {};
+  const { period, rating, comment } = req.body || {};
   const cleanComment = String(comment || '').trim();
-  if (!requestedTicketId) return res.status(400).json({ message: 'ticketId is required.' });
+  if (!isPeriod(period)) return res.status(400).json({ message: 'Choose the month you are reviewing.' });
   if (!Number.isInteger(Number(rating)) || Number(rating) < 1 || Number(rating) > 5) return res.status(400).json({ message: 'Rating must be an integer from 1 to 5.' });
   if (!cleanComment) return res.status(400).json({ message: 'A review comment is required.' });
   if (cleanComment.length > 2000) return res.status(400).json({ message: 'Review comment must be 2000 characters or fewer.' });
-  const identifier = String(requestedTicketId).trim();
-  const ticketIdentifierQuery = mongoose.isObjectIdOrHexString(identifier)
-    ? { $or: [{ _id: identifier }, { ticketId: identifier }] }
-    : { ticketId: identifier };
-  const ticket = await Ticket.findOne({ ...ticketIdentifierQuery, companyId: req.user.companyId, customerId: req.user.id });
-  if (!ticket) return res.status(404).json({ message: 'Ticket not found.' });
-  if (ticket.status !== 'Closed') return res.status(400).json({ message: 'Only closed service requests can be reviewed.' });
+  const summary = await reviewPeriod(reviewModels, req.user.companyId, period);
+  if (!summary) return res.status(404).json({ message: 'No service requests were closed in that month.' });
+  if (summary.review) return res.status(409).json({ message: `${summary.label} has already been reviewed.` });
+  if (!summary.ended) return res.status(400).json({ message: `${summary.label} can be reviewed once the month has ended.` });
+  const tickets = await Ticket.find({ _id: { $in: summary.tickets.map(ticket => ticket._id) } }).select('serviceCentreId');
+  const serviceCentreIds = [...new Set(tickets.map(ticket => ticket.serviceCentreId && String(ticket.serviceCentreId)).filter(Boolean))];
   try {
-    const review = await Review.create({ ticketId: ticket._id, corporateId: ticket.companyId, customerId: ticket.customerId, serviceCentreId: ticket.serviceCentreId, deviceId: ticket.deviceId, engineerId: ticket.assignedEngineerId, rating: Number(rating), comment: cleanComment });
-    const recipients = ticket.serviceCentreId ? await serviceUsersForCentre(ticket.serviceCentreId) : await serviceUsers();
-    await notifyUsers({ users: recipients, company: ticket.companyId, serviceCentreId: ticket.serviceCentreId, ticket, device: ticket.deviceId, reviewId: review._id, type: 'NEW_CUSTOMER_REVIEW', title: 'New Customer Review', message: `New customer feedback has been submitted for service request ${ticket.ticketId}.`, action: { type: 'NEW_CUSTOMER_REVIEW', ticketId: String(ticket._id), reviewId: String(review._id), route: `/service/reviews/${review._id}` } });
+    const review = await Review.create({ period, ticketIds: summary.tickets.map(ticket => ticket._id), serviceCentreIds, corporateId: req.user.companyId, customerId: req.user.id, rating: Number(rating), comment: cleanComment });
+    const recipients = serviceCentreIds.length ? (await Promise.all(serviceCentreIds.map(serviceUsersForCentre))).flat() : await serviceUsers();
+    const unique = [...new Map(recipients.map(user => [String(user._id), user])).values()];
+    await notifyUsers({ users: unique, company: req.user.companyId, reviewId: review._id, type: 'NEW_CUSTOMER_REVIEW', title: 'New Customer Review', message: `A corporate customer rated their ${summary.label} service (${summary.ticketCount} closed request${summary.ticketCount === 1 ? '' : 's'}).`, action: { type: 'NEW_CUSTOMER_REVIEW', reviewId: String(review._id), route: `/service/reviews/${review._id}` } });
+    await Notification.updateMany({ company: req.user.companyId, type: 'RATE_SERVICE', 'action.period': period }, { read: true });
     res.status(201).json(review);
   } catch (error) {
-    if (error?.code === 11000) return res.status(409).json({ message: 'This service request has already been reviewed.' });
+    if (error?.code === 11000) return res.status(409).json({ message: `${summary.label} has already been reviewed.` });
     throw error;
   }
 });
-app.get('/api/reviews/my', auth, allowRoles('corporate_admin'), async (req, res) => res.json(await Review.find({ corporateId: req.user.companyId, customerId: req.user.id }).populate('ticketId').populate('serviceCentreId').populate('deviceId').sort({ createdAt: -1 })));
-app.get('/api/reviews/:id', auth, allowRoles('corporate_admin'), async (req, res) => { const review = await Review.findOne({ _id: req.params.id, corporateId: req.user.companyId }).populate('ticketId').populate('serviceCentreId').populate('deviceId'); if (!review) return res.status(404).json({ message: 'Review not found.' }); res.json(review); });
-app.get('/api/service/reviews', ...serviceAuth, async (req, res) => { const query = reviewTicketQueryForService(req); if (req.query.rating) query.rating = Number(req.query.rating); if (req.query.serviceCentreId && !req.user.serviceCentreId) query.serviceCentreId = req.query.serviceCentreId; if (req.query.search) { const tickets = await Ticket.find({ ...query, ticketId: { $regex: req.query.search, $options: 'i' } }).select('_id'); query.ticketId = { $in: tickets.map(ticket => ticket._id) }; } res.json(await Review.find(query).populate('ticketId').populate('corporateId').populate('serviceCentreId').populate('deviceId').sort({ createdAt: -1 })); });
-app.get('/api/service/reviews/:id', ...serviceAuth, async (req, res) => { const review = await Review.findOne({ _id: req.params.id, ...reviewTicketQueryForService(req) }).populate('ticketId').populate('customerId').populate('corporateId').populate('serviceCentreId').populate('deviceId'); if (!review) return res.status(404).json({ message: 'Review not found.' }); res.json(review); });
+// Months with closed requests, newest first; each says whether it can be reviewed yet.
+app.get('/api/reviews/periods', auth, allowRoles('corporate_admin'), async (req, res) => res.json(await reviewPeriods(reviewModels, req.user.companyId)));
+// Accepts a month, or a ticket ID from an older per-request review link.
+app.get('/api/reviews/periods/:key', auth, allowRoles('corporate_admin'), async (req, res) => {
+  let period = req.params.key;
+  if (!isPeriod(period)) {
+    const ticket = mongoose.isObjectIdOrHexString(period) ? await Ticket.findOne({ _id: period, companyId: req.user.companyId }) : null;
+    period = ticket ? await ticketReviewPeriod(reviewModels, ticket) : null;
+  }
+  const summary = period ? await reviewPeriod(reviewModels, req.user.companyId, period) : null;
+  if (!summary) return res.status(404).json({ message: 'No closed service requests to review for that month.' });
+  res.json(summary);
+});
+app.get('/api/reviews/my', auth, allowRoles('corporate_admin'), async (req, res) => res.json(await reviewPopulate(Review.find({ corporateId: req.user.companyId })).sort({ createdAt: -1 })));
+app.get('/api/reviews/:id', auth, allowRoles('corporate_admin'), async (req, res) => { const review = await reviewPopulate(Review.findOne({ _id: req.params.id, corporateId: req.user.companyId })); if (!review) return res.status(404).json({ message: 'Review not found.' }); res.json(review); });
+app.get('/api/service/reviews', ...serviceAuth, async (req, res) => {
+  const conditions = [reviewTicketQueryForService(req)];
+  if (req.query.rating) conditions.push({ rating: Number(req.query.rating) });
+  if (req.query.serviceCentreId && !req.user.serviceCentreId) conditions.push({ $or: [{ serviceCentreId: req.query.serviceCentreId }, { serviceCentreIds: req.query.serviceCentreId }] });
+  if (req.query.search) {
+    const search = escapeRegex(String(req.query.search).trim());
+    const ids = (await Ticket.find({ ticketId: { $regex: search, $options: 'i' } }).select('_id')).map(ticket => ticket._id);
+    conditions.push({ $or: [{ ticketId: { $in: ids } }, { ticketIds: { $in: ids } }, { period: { $regex: `^${search}` } }] });
+  }
+  res.json(await reviewPopulate(Review.find({ $and: conditions })).sort({ createdAt: -1 }));
+});
+app.get('/api/service/reviews/:id', ...serviceAuth, async (req, res) => { const review = await reviewPopulate(Review.findOne({ $and: [{ _id: req.params.id }, reviewTicketQueryForService(req)] })); if (!review) return res.status(404).json({ message: 'Review not found.' }); res.json(review); });
 
 async function serviceTicket(id) { return Ticket.findById(id).populate('customerId').populate('companyId').populate('serviceCentreId').populate('deviceId').populate('assignedEngineerId'); }
-async function addTimeline(ticket, status, message, user) { ticket.status = status; ticket.updatedAt = new Date(); await ticket.save(); return TicketTimeline.create({ ticketId: ticket._id, status, message, updatedBy: user.name, userRole: user.role, timestamp: new Date() }); }
+async function addTimeline(ticket, status, message, user) { ticket.status = status; ticket.updatedAt = new Date(); if (status === 'Closed') ticket.closedAt = ticket.updatedAt; await ticket.save(); return TicketTimeline.create({ ticketId: ticket._id, status, message, updatedBy: user.name, userRole: user.role, timestamp: new Date() }); }
 async function notifyTicketUpdate(ticket, device, type, title, message) {
   const [service, admins] = await Promise.all([serviceUsers(), User.find({ role: 'corporate_admin', companyId: ticket.companyId })]);
   await Promise.all([
     notifyUsers({ users: service, company: ticket.companyId, ticket, device, type, title, message }),
     notifyUsers({ users: admins, company: ticket.companyId, ticket, device, type, title, message })
   ]);
-}
-async function notifyReviewRequest(ticket) {
-  const recipients = await User.find({ _id: ticket.customerId, role: 'corporate_admin', companyId: ticket.companyId });
-  for (const user of recipients) {
-    const exists = await Notification.exists({ user: user._id, ticket: ticket._id, type: 'RATE_SERVICE' });
-    if (!exists) await Notification.create({ user: user._id, company: ticket.companyId, serviceCentreId: ticket.serviceCentreId, ticket: ticket._id, device: ticket.deviceId, portalRole: 'corporate_admin', type: 'RATE_SERVICE', title: 'Service Completed', message: `Your service request ${ticket.ticketId} has been completed. We'd love to hear about your experience.`, action: { type: 'RATE_SERVICE', ticketId: String(ticket._id), route: `/corporate/reviews/${ticket._id}` }, read: false });
-  }
 }
 app.get('/api/iplanet/tickets', ...serviceAuth, async (req, res) => {
   const query = {};
@@ -683,7 +708,7 @@ app.post('/api/iplanet/tickets/:id/ai-support', ...serviceAuth, async (req, res)
     res.status(503).json({ message: 'AI troubleshooting is currently unavailable.', session });
   }
 });
-async function engineerAction(req, res, status, message, title = `${status} update`) { const ticket = await serviceTicket(req.params.id); if (!ticket) return res.status(404).json({ message: 'Service ticket not found' }); if (!ticket.assignedEngineerId) return res.status(409).json({ message: 'Assign an engineer before updating this ticket' }); if (!transitions[ticket.status]?.includes(status)) return res.status(409).json({ message: `Cannot move a ${ticket.status} ticket to ${status}` }); const updateMessage = req.body.note?.trim() || message || `${status} update recorded.`; await addTimeline(ticket, status, updateMessage, req.user); await notifyTicketUpdate(ticket, ticket.deviceId, 'TICKET_UPDATE', title, `${ticket.ticketId}: ${updateMessage}`); if (status === 'Closed') await notifyReviewRequest(ticket); if (status === 'Completed') await proactiveEngine.onTicketCompleted(ticket); await evaluateEscalation(ticket, true); res.json(await serviceTicket(ticket._id)); }
+async function engineerAction(req, res, status, message, title = `${status} update`) { const ticket = await serviceTicket(req.params.id); if (!ticket) return res.status(404).json({ message: 'Service ticket not found' }); if (!ticket.assignedEngineerId) return res.status(409).json({ message: 'Assign an engineer before updating this ticket' }); if (!transitions[ticket.status]?.includes(status)) return res.status(409).json({ message: `Cannot move a ${ticket.status} ticket to ${status}` }); const updateMessage = req.body.note?.trim() || message || `${status} update recorded.`; await addTimeline(ticket, status, updateMessage, req.user); await notifyTicketUpdate(ticket, ticket.deviceId, 'TICKET_UPDATE', title, `${ticket.ticketId}: ${updateMessage}`); if (status === 'Completed') await proactiveEngine.onTicketCompleted(ticket); await evaluateEscalation(ticket, true); res.json(await serviceTicket(ticket._id)); }
 app.post('/api/iplanet/tickets/:id/accept', ...serviceAuth, async (req, res) => engineerAction(req, res, 'Engineer Accepted', 'Engineer accepted the service assignment.'));
 app.post('/api/iplanet/tickets/:id/start', ...serviceAuth, async (req, res) => engineerAction(req, res, 'In Progress', 'Work started on the service request.', 'Work started'));
 app.post('/api/iplanet/tickets/:id/waiting-parts', ...serviceAuth, async (req, res) => engineerAction(req, res, 'Waiting for Parts', 'Waiting for replacement parts.', 'Waiting for parts'));
@@ -796,6 +821,16 @@ app.get('/api/iplanet/device-master/:serialNumber', ...serviceAuth, async (req, 
 app.post('/api/iplanet/devices/enroll', ...serviceAuth, async (req, res) => { const master = await DeviceMaster.findOne({ serialNumber: req.body.serialNumber }); const selectedEntityType = req.body.selectedEntityType; const selectedEntityId = req.body.selectedEntityId; const company = selectedEntityType === 'corporate' ? await Company.findById(selectedEntityId) : null; const centre = selectedEntityType === 'service_centre' ? await ServiceCentre.findById(selectedEntityId) : null; if (!master) return res.status(404).json({ message: 'Device not found. Please verify the serial number.' }); if (!['corporate', 'service_centre'].includes(selectedEntityType) || !selectedEntityId || (!company && !centre)) return res.status(400).json({ message: 'Select a valid Corporate or Service Centre' }); let device = await Device.findOne({ serialNumber: master.serialNumber }); const values = { selectedEntityId, selectedEntityType, ...(company ? { companyId: company._id, location: company.location } : { companyId: null, location: centre.location }), employeeName: null, employeeId: null, department: null, deviceAllocationStatus: 'Unassigned' }; if (device) { Object.assign(device, values); await device.save(); } else { device = await Device.create({ serialNumber: master.serialNumber, deviceType: master.deviceType, model: master.model, assetId: master.assetId, purchaseDate: master.purchaseDate, warrantyStatus: master.warrantyStatus, warrantyExpiry: master.warrantyExpiry, amcStatus: master.amcStatus, amcExpiry: master.amcExpiry, ...values, deviceStatus: 'In Use' }); } const admins = company ? await User.find({ role: 'corporate_admin', companyId: company._id }) : []; await Notification.insertMany(admins.map(admin => ({ user: admin._id, company: company._id, type: 'NEW_DEVICE', title: 'New Device Added', message: `A new ${device.model} has been added to your organization.`, device: device._id, read: false }))); res.status(201).json(await device.populate('companyId')); });
 // This must remain after every API route, including the review routes above.
 // Returning JSON keeps clients from mistaking an unmounted endpoint for a ticket error.
+// Corporate sign-up creates pending requests that iPlanet Service users approve; iPlanet
+// Service sign-up is immediate but limited to SERVICE_SIGNUP_EMAIL_DOMAINS.
+app.use('/api', createAccountRequestRouter({
+  models: { AccountRequest, User, Company },
+  auth,
+  allowRoles,
+  serviceEmailDomains: parseEmailDomains(process.env.SERVICE_SIGNUP_EMAIL_DOMAINS),
+  onRequested: async request => notifyUsers({ users: await serviceUsers(), type: 'ACCOUNT_REQUEST', title: 'New account request', message: `${request.name} (${request.organization}) requested Corporate Self-Care access.`, action: { type: 'ACCOUNT_REQUEST', route: '/service/settings#account-requests' } }),
+}));
+
 app.use('/api', (req, res) => res.status(404).json({ message: `API endpoint not found: ${req.method} ${req.originalUrl}` }));
 // Client mistakes get a specific 4xx; anything else is a server fault, logged here and
 // answered with a generic message so database and stack details never reach the browser.
@@ -813,7 +848,11 @@ app.use((error, req, res, _next) => {
 const port = process.env.PORT || 5000;
 async function ensureEscalationRules() { const defaults = [{ name: 'SLA Approaching', level: 1, trigger: 'SLA Approaching', priority: 'All', slaThreshold: 80, action: 'Notify Service Coordinator' }, { name: 'SLA Breach', level: 2, trigger: 'SLA Breached', priority: 'All', slaThreshold: 100, action: 'Escalate to Service Manager' }, { name: 'Critical SLA Breach', level: 3, trigger: 'Critical SLA Breach', priority: 'Critical', slaThreshold: 100, action: 'Escalate to Regional Operations Manager' }]; if (await EscalationRule.countDocuments() === 0) await EscalationRule.insertMany(defaults); }
 async function ensureServiceCentres() { if (await ServiceCentre.countDocuments() === 0) await ServiceCentre.insertMany(['Chennai', 'Coimbatore', 'Bengaluru', 'Madurai'].map(location => ({ name: `${location} Service Centre`, location, status: 'Active' }))); }
-async function ensureReviewIndexes() { await Review.createIndexes(); }
+// syncIndexes replaces the old one-review-per-ticket unique index with the monthly ones.
+async function ensureReviewIndexes() { await Review.syncIndexes(); }
+// The per-organization asset ID index. Existing duplicate asset IDs would stop it being built;
+// registration still checks for duplicates itself, so that is logged rather than fatal.
+async function ensureDeviceIndexes() { try { await Device.createIndexes(); } catch (error) { console.warn(`[Devices] Could not create device indexes: ${error.message}`); } }
 async function ensureGoogleBusinessIntegrationIndexes() {
   const indexes = await GoogleBusinessIntegration.collection.indexes();
   for (const index of indexes) {
@@ -891,4 +930,4 @@ async function ensureDemoAccounts() {
   );
 }
  
-mongoose.connect(process.env.MONGODB_URI).then(async () => { await ensureDemoAccounts(); await ensureDemoEnrollmentDevices(); await ensureEscalationRules(); await ensureServiceCentres(); await ensureReviewIndexes(); await ensureGoogleBusinessIntegrationIndexes(); await ensureGoogleBusinessLocationMappingIndexes(); await GoogleBusinessNotificationReceipt.createIndexes(); await ServiceFollowUp.createIndexes(); proactiveScheduler.start(); app.listen(port, '0.0.0.0', () => console.log(`API running at http://localhost:${port}`)); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });
+mongoose.connect(process.env.MONGODB_URI).then(async () => { await ensureDemoAccounts(); await ensureDemoEnrollmentDevices(); await ensureEscalationRules(); await ensureServiceCentres(); await ensureReviewIndexes(); await ensureDeviceIndexes(); await ensureGoogleBusinessIntegrationIndexes(); await ensureGoogleBusinessLocationMappingIndexes(); await GoogleBusinessNotificationReceipt.createIndexes(); await ServiceFollowUp.createIndexes(); await AccountRequest.createIndexes(); await b2c?.initialise({ hashPassword }); proactiveScheduler.start(); b2c?.scheduler.start(); startMonthlyReviewScheduler(reviewModels); app.listen(port, '0.0.0.0', () => console.log(`API running at http://localhost:${port}`)); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });

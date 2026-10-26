@@ -1,6 +1,11 @@
 const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 const API = API_BASE ? `${API_BASE.replace(/\/api$/, '')}/api` : '/api';
 const API_ORIGIN = API_BASE ? API_BASE.replace(/\/api$/, '') : '';
+// B2C escalations run on their own server. Without VITE_B2C_API_URL they use the main API base
+// (in development the Vite proxy forwards /api/b2c to the B2C server).
+const B2C_API_BASE = (import.meta.env.VITE_B2C_API_URL || '').replace(/\/+$/, '');
+const B2C_API = B2C_API_BASE ? `${B2C_API_BASE.replace(/\/api$/, '')}/api` : API;
+const apiFor = path => (/^\/b2c(\/|\?|$)/.test(path) ? B2C_API : API);
 export const mediaUrl = path => {
   if (!path) return '';
   if (path.startsWith('http')) return path;
@@ -17,7 +22,7 @@ function request(path, options = {}) {
   return isCacheablePath(path) ? cachedGet(`${token()}|${path}`, () => send(path, options)) : send(path, options);
 }
 async function send(path, options = {}) {
-  const response = await fetch(`${API}${path}`, { ...options, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}`, ...(options.headers || {}) } });
+  const response = await fetch(`${apiFor(path)}${path}`, { ...options, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}`, ...(options.headers || {}) } });
   if (!response.ok) {
     if (isExpiredSessionResponse(response.status, path, Boolean(token()))) endExpiredSession();
     const body = await response.json().catch(() => ({}));
@@ -29,6 +34,23 @@ async function send(path, options = {}) {
   }
   return response.json();
 }
+// The B2C escalation module uses the same session, cache and error handling.
+export { request as apiRequest };
+// Fetches a protected file with the session token and hands it to the browser as a download.
+export async function downloadProtectedFile(path, filename) {
+  const response = await fetch(`${apiFor(path)}${path}`, { headers: { Authorization: `Bearer ${token()}` } });
+  if (!response.ok) {
+    if (isExpiredSessionResponse(response.status, path, Boolean(token()))) endExpiredSession();
+    const body = await response.json().catch(() => ({}));
+    throw Object.assign(new Error(body.message || `Download failed (${response.status})`), { status: response.status });
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const link = Object.assign(document.createElement('a'), { href: url, download: filename || 'attachment' });
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 export async function login(email, password) { return request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }); }
 export async function getServiceDashboard() { return request('/iplanet/dashboard'); }
 export async function getServiceActivity({ limit = 8, since } = {}) { const params = new URLSearchParams({ limit: String(limit), ...(since ? { since: new Date(since).toISOString() } : {}) }); return request(`/iplanet/activity?${params}`); }
@@ -39,6 +61,9 @@ export async function getServiceReview(id) { return request(`/service/reviews/${
 export async function getEngineers() { return request('/iplanet/engineers'); }
 export async function getCompanies() { return request('/iplanet/companies'); }
 export async function createCompany(payload) { return request('/iplanet/companies', { method: 'POST', body: JSON.stringify(payload) }); }
+export async function getAccountRequests(status = 'pending') { return request(`/iplanet/account-requests?status=${encodeURIComponent(status)}`); }
+export async function approveAccountRequest(id, companyId) { return request(`/iplanet/account-requests/${id}/approve`, { method: 'POST', body: JSON.stringify({ companyId }) }); }
+export async function rejectAccountRequest(id) { return request(`/iplanet/account-requests/${id}/reject`, { method: 'POST', body: JSON.stringify({}) }); }
 export async function getServiceCentres() { return request('/iplanet/service-centres'); }
 // Google Business Profile (all calls go through the backend; no Google credentials in the browser)
 export async function getGoogleBusinessStatus() { return request('/google-business/status'); }

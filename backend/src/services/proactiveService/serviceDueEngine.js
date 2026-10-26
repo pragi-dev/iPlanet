@@ -12,7 +12,8 @@ import {
 const ACTIVE_TICKET_STATUSES = ['Open', 'Engineer Assigned', 'Engineer Accepted', 'In Progress', 'Waiting for Parts'];
 const ACTIONABLE_BY_TEAM = ['Open', 'Contacted', 'Remind Later', 'Scheduled'];
 const COMPLETED_WINDOW_DAYS = 30;
-const NON_SERVICE_CATEGORIES = ['Buyback', 'E-Waste'];
+// 'Buyback' and 'E-Waste' are the names used before the two were combined.
+const NON_SERVICE_CATEGORIES = ['Buyback / E-Waste', 'Buyback', 'E-Waste'];
 
 export class ProactiveServiceError extends Error {
   constructor(status, message) { super(message); this.status = status; }

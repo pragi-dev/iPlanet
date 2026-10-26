@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Bell, CalendarClock, ChevronLeft, FilePlus2, KeyRound, Laptop, LogOut, Search, ShieldCheck, Sparkles, Ticket, UserRoundPlus } from 'lucide-react';
+import { Bell, CalendarClock, ChevronLeft, FilePlus2, KeyRound, Laptop, LogOut, Plus, Search, ShieldCheck, Sparkles, Ticket } from 'lucide-react';
 import { Shell } from './components';
-import { getCoverage, getDevice, getDeviceServicePlan, getDevices, getMyReviews, getProfile, getServiceRecommendations, getTickets } from './api';
+import { getCoverage, getDevice, getDeviceServicePlan, getDevices, getProfile, getReviewPeriods, getServiceRecommendations, getTickets } from './api';
 import { NotRequiredDialog, ScheduleLaterDialog } from './ServiceRecommendations';
 import {
   ActivityFeed, AttentionFeed, Avatar, Badge, Button, CalmState, DashboardHeader, DashboardSection, DeviceIcon, DisclosureRow, EmptyState, ErrorState, FilterBar, FilterSelect, HealthRing, InfoList, Insight, JourneyTrack,
@@ -64,24 +64,24 @@ function serviceAttention(recommendations) {
   return pending.map(item => {
     const status = customerStatus(item);
     return { key: `svc-${item._id}`, tone: 'warning', category: status.label, meta: item.stage === 'Scheduled' ? `Scheduled ${formatDate(item.scheduledDate)}` : dueLabel(item.daysUntil),
-      title: [item.device.model, item.device.employeeName].filter(Boolean).join(' · '),
+      title: item.device.model,
       reason: item.stage === 'Scheduled' ? 'iPlanet Service has scheduled preventive service. Confirm it by raising the request.' : `Preventive service recommended for ${formatDate(item.nextServiceDate)}. Last serviced ${formatDate(item.lastServiceDate, 'never on record')}.`,
       context: [item.device.serialNumber, `Warranty ${item.coverage.warrantyStatus || 'not on record'}`, `AMC ${item.coverage.amcStatus || 'not on record'}`].join(' · '),
       action: { label: 'Review', to: `/corporate/service-recommendations?followUp=${item._id}` } };
   });
 }
 
-function corporateAttention({ tickets, devices, reviewedIds }) {
+function corporateAttention({ tickets, devices, reviewMonths }) {
   const items = [];
   tickets.filter(slaRisk).sort((a, b) => new Date(a.slaTargetAt) - new Date(b.slaTargetAt)).forEach(ticket => {
     const risk = slaRisk(ticket);
     items.push({ key: `sla-${ticket._id}`, tone: riskTone(risk), category: riskLabel(risk), meta: slaMeta(ticket), title: `${ticket.ticketId} · ${ticket.issueType || 'Service request'}`,
-      reason: requestReason(ticket), context: [ticket.deviceId?.model, ticket.deviceId?.serialNumber, ticket.deviceId?.employeeName].filter(Boolean).join(' · '),
+      reason: requestReason(ticket), context: [ticket.deviceId?.model, ticket.deviceId?.serialNumber].filter(Boolean).join(' · '),
       action: { label: 'Track request', to: `/corporate/service-requests/${ticket._id}` } });
   });
   recurringIssues(tickets).forEach(group => {
     items.push({ key: `rec-${group.deviceId}-${group.issueType}`, tone: 'warning', category: 'Recurring issue', meta: `Last reported ${formatRelative(new Date(group.lastAt))}`,
-      title: [group.device?.model || 'Device', group.device?.employeeName].filter(Boolean).join(' · '),
+      title: group.device?.model || 'Device',
       reason: `${pluralize(group.count, `${group.issueType.toLowerCase()} request`)} in the last 90 days.`,
       context: group.device?.serialNumber, action: { label: 'View device', to: `/corporate/devices/${group.deviceId}` } });
   });
@@ -92,26 +92,19 @@ function corporateAttention({ tickets, devices, reviewedIds }) {
     const days = daysUntil(date);
     items.push({ key: `cov-${device._id}`, tone: 'warning', category: 'Coverage expiring', meta: days !== null && days >= 0 ? `In ${pluralize(days, 'day')}` : null, title: device.model,
       reason: date ? `${kind} ends on ${formatDate(date)}. Renew to keep repairs and parts covered.` : `${kind} is expiring soon. Renew to keep repairs and parts covered.`,
-      context: [device.serialNumber, device.employeeName].filter(Boolean).join(' · '), action: { label: 'Review coverage', to: `/corporate/devices/${device._id}` } });
+      context: device.serialNumber, action: { label: 'Review coverage', to: `/corporate/devices/${device._id}` } });
   } else if (expiringDevices > 1) {
     const [first] = expiring;
     items.push({ key: 'cov-many', tone: 'warning', category: 'Coverage expiring', title: `${expiringDevices} devices`,
       reason: `Warranty or AMC is expiring soon${first.date ? ` — the first ends on ${formatDate(first.date)} (${first.device.model})` : ''}.`,
       action: { label: 'Review coverage', to: '/corporate/warranty?filter=Expiring%20Soon' } });
   }
-  const unassigned = devices.filter(device => device.deviceAllocationStatus === 'Unassigned');
-  if (unassigned.length) items.push({ key: 'unassigned', tone: 'info', category: 'Unassigned devices',
-    title: unassigned.length === 1 ? `${unassigned[0].model} is not assigned to an employee` : `${unassigned.length} devices are not assigned to employees`,
-    reason: 'Assign them so service requests can be traced to the person using the device.',
-    context: unassigned.length > 1 ? unassigned.slice(0, 3).map(device => device.model).join(', ') + (unassigned.length > 3 ? ` and ${unassigned.length - 3} more` : '') : unassigned[0].serialNumber,
-    action: { label: unassigned.length === 1 ? 'Assign device' : 'Assign devices', to: '/corporate/unassigned-devices' } });
-  if (reviewedIds) {
-    const awaiting = tickets.filter(ticket => ticket.status === 'Closed' && !reviewedIds.has(String(ticket._id)));
-    if (awaiting.length === 1) items.push({ key: 'review', tone: 'info', category: 'Your feedback', title: `${awaiting[0].ticketId} · ${awaiting[0].issueType || 'Service request'}`,
-      reason: 'This request is closed. Rate the service to let iPlanet know how it went.', context: awaiting[0].deviceId?.model, action: { label: 'Rate service', to: `/corporate/reviews/${awaiting[0]._id}` } });
-    if (awaiting.length > 1) items.push({ key: 'review', tone: 'info', category: 'Your feedback', title: `${awaiting.length} closed requests`,
-      reason: 'These requests are closed. Rate the service to let iPlanet know how it went.', action: { label: 'Rate service', to: '/corporate/reviews' } });
-  }
+  // Ended months with closed requests that the organization hasn't rated yet.
+  const awaiting = (reviewMonths || []).filter(month => month.reviewable);
+  if (awaiting.length === 1) items.push({ key: 'review', tone: 'info', category: 'Your feedback', title: `Rate your ${awaiting[0].label} service`,
+    reason: `${awaiting[0].ticketCount} service request${awaiting[0].ticketCount === 1 ? ' was' : 's were'} closed in ${awaiting[0].label}. Tell iPlanet how the month went.`, action: { label: `Rate ${awaiting[0].label}`, to: `/corporate/reviews/${awaiting[0].period}` } });
+  if (awaiting.length > 1) items.push({ key: 'review', tone: 'info', category: 'Your feedback', title: `${awaiting.length} months to rate`,
+    reason: `Tell iPlanet how ${awaiting.map(month => month.label).join(', ')} went.`, action: { label: 'Rate service', to: '/corporate/reviews' } });
   return items.sort((a, b) => toneRank[a.tone] - toneRank[b.tone]);
 }
 
@@ -129,7 +122,7 @@ export function Dashboard() {
   // The ticket list re-evaluates SLA state server-side before it is returned.
   const main = useAsync(getTickets, []);
   const coverage = useAsync(getCoverage, []);
-  const reviews = useAsync(getMyReviews, []);
+  const reviewMonths = useAsync(getReviewPeriods, []);
   const service = useAsync(getServiceRecommendations, []);
 
   if (main.loading && !main.data) return <Shell title="Overview"><PageSkeleton kpis={3} /></Shell>;
@@ -146,8 +139,7 @@ export function Dashboard() {
   const openRecommendations = recommendations.filter(item => canRespond(item) && item.status !== 'Remind Later');
   const serviceDue = recommendations.filter(serviceNeedsAttention).length;
   const health = fleetHealth({ devices, tickets, recommendations });
-  const reviewedIds = reviews.data ? new Set(reviews.data.map(review => idOf(review.ticketId))) : null;
-  const attention = coverageReady ? [...corporateAttention({ tickets, devices, reviewedIds }), ...serviceAttention(recommendations)].sort((a, b) => toneRank[a.tone] - toneRank[b.tone]) : [];
+  const attention = coverageReady ? [...corporateAttention({ tickets, devices, reviewMonths: reviewMonths.data }), ...serviceAttention(recommendations)].sort((a, b) => toneRank[a.tone] - toneRank[b.tone]) : [];
   const recent = [...tickets].sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt)).slice(0, 5);
   const [cluster] = issueClusters(tickets);
   const ringTone = health.total && health.healthy / health.total < 0.6 ? 'warning' : 'success';
@@ -178,7 +170,7 @@ export function Dashboard() {
                 { label: 'In service', value: health.inService, hint: atRisk.length ? `${atRisk.length} at SLA risk` : 'With iPlanet now', tone: atRisk.length ? 'warning' : undefined, to: '/corporate/service-requests' },
                 { label: 'Need attention', value: health.attention, hint: 'Issue, coverage or service due', tone: health.attention ? 'warning' : undefined },
                 { label: 'Service recommended', value: service.data ? openRecommendations.length : '—', hint: service.error ? 'Unavailable' : serviceDue ? `${serviceDue} due now` : 'Preventive service', tone: serviceDue ? 'warning' : undefined, to: '/corporate/service-recommendations' },
-                { label: 'Unassigned', value: health.unassigned, hint: 'No employee yet', to: health.unassigned ? '/corporate/unassigned-devices' : undefined },
+                { label: 'Unassigned', value: health.unassigned, hint: 'No employee yet', to: health.unassigned ? '/corporate/devices?allocation=Unassigned' : undefined },
               ]} />
               <p className="cc-coverage-line">
                 <Link to="/corporate/warranty?filter=Covered"><span>Covered</span><strong>{devices.filter(device => device.coverageStatus === 'Covered').length}</strong></Link>
@@ -199,7 +191,7 @@ export function Dashboard() {
           <DashboardSection className="cc-order-3" title="Recent service" actions={tickets.length ? <Button variant="ghost" size="sm" to="/corporate/service-requests">View all</Button> : null}>
             <ActivityFeed
               items={recent.map(ticket => ({ key: ticket._id, to: `/corporate/service-requests/${ticket._id}`, title: <><span className="mono">{ticket.ticketId}</span><span>{ticket.issueType || 'Service request'}</span></>,
-                subtitle: [ticket.deviceId?.model, ticket.deviceId?.employeeName || ticket.deviceId?.serialNumber].filter(Boolean).join(' · '), status: ticket.status, time: ticket.updatedAt || ticket.createdAt }))}
+                subtitle: [ticket.deviceId?.model, ticket.deviceId?.serialNumber].filter(Boolean).join(' · '), status: ticket.status, time: ticket.updatedAt || ticket.createdAt }))}
               empty={<div className="cc-panel"><EmptyState compact icon={Ticket} title="No service requests yet" description="When your organization raises a request, its progress will appear here." action={<Button size="sm" variant="primary" icon={FilePlus2} to="/corporate/raise-request">Raise service request</Button>} /></div>} />
           </DashboardSection>
         </div>
@@ -253,7 +245,7 @@ export function Devices() {
   const [params] = useSearchParams();
   const [search, setSearch] = useState(params.get('search') || '');
   const [query, setQuery] = useState(search);
-  const [allocation, setAllocation] = useState('All');
+  const [allocation, setAllocation] = useState(['Assigned', 'Unassigned'].includes(params.get('allocation')) ? params.get('allocation') : 'All');
   const [warranty, setWarranty] = useState('All');
   useEffect(() => { setSearch(params.get('search') || ''); setQuery(params.get('search') || ''); }, [params]);
   useEffect(() => { const timer = window.setTimeout(() => setQuery(search), 250); return () => window.clearTimeout(timer); }, [search]);
@@ -263,15 +255,15 @@ export function Devices() {
   const warrantyOptions = [...new Set(all.map(device => device.warrantyStatus).filter(Boolean))];
 
   return <Shell title="Devices">
-    <PageHeader title="Devices" description="Manage and monitor your organization's registered devices." actions={<><Button icon={UserRoundPlus} to="/corporate/unassigned-devices">Assign device</Button><Button variant="primary" icon={FilePlus2} to="/corporate/raise-request">Raise request</Button></>} />
+    <PageHeader title="Devices" description="Manage and monitor your organization's registered devices." actions={<><Button variant="primary" icon={Plus} to="/corporate/devices/add">Add Device</Button><Button variant="primary" icon={FilePlus2} to="/corporate/raise-request">Raise request</Button></>} />
     <TableCard
-      columns={8}
+      columns={7}
       loading={state.loading && !state.data}
       error={state.error && friendlyError(state.error)}
       errorTitle="Unable to load devices"
       onRetry={state.reload}
       toolbar={<FilterBar summary={state.data ? `${devices.length} device${devices.length === 1 ? '' : 's'}` : null}>
-        <SearchInput value={search} onChange={setSearch} placeholder="Search serial, model, employee or asset ID" label="Search devices" />
+        <SearchInput value={search} onChange={setSearch} placeholder="Search serial, model or asset ID" label="Search devices" />
         <FilterSelect label="Assignment" value={allocation} onChange={setAllocation} options={['Assigned', 'Unassigned']} allLabel="All assignments" />
         <FilterSelect label="Warranty" value={warranty} onChange={setWarranty} options={warrantyOptions} allLabel="All warranty" />
       </FilterBar>}
@@ -279,14 +271,13 @@ export function Devices() {
       empty={<EmptyState icon={Laptop} title={query || allocation !== 'All' || warranty !== 'All' ? 'No devices match your search' : 'No devices registered yet'} description={query || allocation !== 'All' || warranty !== 'All' ? 'Try a different search term or clear the filters.' : 'Devices enrolled by iPlanet Service for your organization will appear here.'} />}
     >
       <table className="table">
-        <thead><tr><th>Device</th><th>Serial number</th><th>Employee</th><th>Location</th><th>Warranty</th><th>AMC</th><th>Status</th><th><span className="sr-only">Action</span></th></tr></thead>
+        <thead><tr><th>Device</th><th>Serial number</th><th>Location</th><th>Warranty</th><th>AMC</th><th>Status</th><th><span className="sr-only">Action</span></th></tr></thead>
         <tbody>{devices.map(device => <tr key={device._id} className="row-clickable" onClick={event => { if (!event.target.closest('a')) navigate(`/corporate/devices/${device._id}`); }}>
           <td><div className="person-cell"><span className="thumb"><DeviceIcon type={device.deviceType} model={device.model} size={16} /></span><div><Link className="cell-link" to={`/corporate/devices/${device._id}`}>{device.model}</Link><span className="cell-sub">{[device.assetId, device.deviceType].filter(Boolean).join(' · ')}</span></div></div></td>
           <td className="mono cell-nowrap">{device.serialNumber}</td>
-          <td>{device.employeeName ? <><span className="cell-primary">{device.employeeName}</span><span className="cell-sub">{[device.department, device.employeeId].filter(Boolean).join(' · ')}</span></> : <span className="text-muted">Not assigned</span>}</td>
           <td>{device.location || '—'}</td>
-          <td className="cell-nowrap"><Badge>{device.warrantyStatus}</Badge><span className="cell-sub">{device.warrantyExpiry ? `Ends ${formatDate(device.warrantyExpiry)}` : ''}</span></td>
-          <td className="cell-nowrap"><Badge>{device.amcStatus}</Badge><span className="cell-sub">{device.amcExpiry ? `Ends ${formatDate(device.amcExpiry)}` : ''}</span></td>
+          <td className="cell-nowrap"><Badge>{device.warrantyStatus || 'Not recorded'}</Badge><span className="cell-sub">{device.warrantyExpiry ? `Ends ${formatDate(device.warrantyExpiry)}` : ''}</span></td>
+          <td className="cell-nowrap"><Badge>{device.amcStatus || 'Not recorded'}</Badge><span className="cell-sub">{device.amcExpiry ? `Ends ${formatDate(device.amcExpiry)}` : ''}</span></td>
           <td className="cell-nowrap"><Badge dot>{device.deviceAllocationStatus || 'Assigned'}</Badge>{device.deviceStatus && <span className="cell-sub">{device.deviceStatus}</span>}</td>
           <td className="cell-right"><RowAction to={`/corporate/devices/${device._id}`} /></td>
         </tr>)}</tbody>
@@ -310,7 +301,7 @@ function deviceLifecycle(device, tickets, activeTicket) {
   const lastResolved = resolved.reduce((latest, ticket) => (!latest || new Date(ticket.updatedAt) > new Date(latest.updatedAt) ? ticket : latest), null);
   return [
     { key: 'enrolled', label: 'Enrolled', state: !assigned && !activeTicket ? 'current' : 'done', meta: !assigned && !activeTicket ? 'Awaiting assignment' : device.purchaseDate ? `Purchased ${formatDate(device.purchaseDate)}` : undefined },
-    { key: 'assigned', label: 'Assigned', state: assigned ? 'done' : 'upcoming', meta: assigned ? device.employeeName : 'Not assigned yet' },
+    { key: 'assigned', label: 'Assigned', state: assigned ? 'done' : 'upcoming', meta: assigned ? 'In use' : 'Not assigned yet' },
     { key: 'service', label: 'In service', state: activeTicket ? (activeTicket.status === 'Waiting for Parts' ? 'hold' : 'current') : tickets.length ? 'done' : 'skip', meta: activeTicket ? `${activeTicket.ticketId} · ${activeTicket.status}` : tickets.length ? pluralize(tickets.length, 'request') : 'No service so far' },
     { key: 'repaired', label: 'Repaired', state: lastResolved && !activeTicket ? 'done' : activeTicket ? 'upcoming' : 'skip', meta: lastResolved ? `Last ${formatDate(lastResolved.updatedAt)}` : undefined },
     { key: 'active', label: 'Active', state: assigned && !activeTicket ? 'current' : 'upcoming', meta: assigned && !activeTicket ? 'In use' : undefined },
@@ -327,12 +318,11 @@ function deviceNextAction(device, activeTicket, plan) {
   if (plan && canRespond(plan) && ['Due', 'Overdue', 'Reminder Due'].includes(plan.status)) return { tone: plan.status === 'Overdue' ? 'critical' : 'warning', eyebrow: 'Preventive service', title: plan.status === 'Overdue' ? 'Preventive service is overdue' : 'Preventive service is due',
     description: `Recommended ${formatDate(plan.nextServiceDate)} (${dueLabel(plan.daysUntil).toLowerCase()}). Last service ${formatDate(plan.lastServiceDate, 'not on record')}.`,
     actions: [{ label: plan.stage === 'Scheduled' ? 'Confirm request' : 'Request service', icon: FilePlus2, to: `/corporate/raise-request?serviceFollowUp=${plan._id}` }] };
-  if (device.deviceAllocationStatus === 'Unassigned') return { tone: 'info', title: 'Assign this device to an employee', description: 'Assigned devices can be traced to the person using them when service is needed.', actions: [{ label: 'Assign device', icon: UserRoundPlus, to: '/corporate/unassigned-devices' }] };
   const covered = ['Active', 'Expiring Soon'].includes(device.warrantyStatus) || ['Active', 'Expiring Soon'].includes(device.amcStatus);
   if (!covered && (device.warrantyStatus || device.amcStatus)) return { tone: 'warning', eyebrow: 'Coverage', title: 'No active warranty or AMC', description: `Warranty ${String(device.warrantyStatus || 'not on record').toLowerCase()} · AMC ${String(device.amcStatus || 'not on record').toLowerCase()}.`, actions: [{ label: 'View coverage', icon: ShieldCheck, to: '/corporate/warranty' }] };
   const expiring = coverageExpiring(device);
   if (expiring.length) return { tone: 'warning', eyebrow: 'Coverage', title: `${expiring.map(item => item.kind).join(' and ')} expiring soon`, description: expiring.map(item => `${item.kind} ends ${formatDate(item.date)}`).join(' · '), actions: [{ label: 'View coverage', icon: ShieldCheck, to: '/corporate/warranty?filter=Expiring%20Soon' }] };
-  return { tone: 'success', eyebrow: 'Status', title: 'Operating normally', description: `No open service requests. Assigned to ${device.employeeName || 'an employee'}.` };
+  return { tone: 'success', eyebrow: 'Status', title: 'Operating normally', description: 'No open service requests.' };
 }
 
 export function DeviceDetail() {
@@ -380,7 +370,6 @@ export function DeviceDetail() {
         ['Serial number', <span className="mono">{device.serialNumber}</span>],
         ['Asset ID', device.assetId || <span className="text-muted">Not on record</span>],
         ['Corporate', user.company || <span className="text-muted">Not on record</span>],
-        ['Employee', device.employeeName ? <>{device.employeeName}{device.employeeId && <small>{device.employeeId}</small>}</> : <span className="text-muted">Not assigned</span>],
         ['Location', device.location || <span className="text-muted">Not on record</span>],
         ['Warranty', coverageLine(device.warrantyStatus, device.warrantyExpiry)],
         ['AMC', coverageLine(device.amcStatus, device.amcExpiry)],
@@ -426,7 +415,7 @@ export function DeviceDetail() {
         </div>
       </Section>
       <Section title="Device record" description="Hardware and purchase details">
-        <InfoList columns={2} items={[['Model', device.model], ['Device type', device.deviceType], ['Purchase date', formatDate(device.purchaseDate, '')], ['Department', device.department], ['Employee ID', device.employeeId], ['Last service', formatDate(plan?.lastServiceDate, '')]]} />
+        <InfoList columns={2} items={[['Model', device.model], ['Device type', device.deviceType], ['Purchase date', formatDate(device.purchaseDate, '')], ['Department', device.department], ['Last service', formatDate(plan?.lastServiceDate, '')]]} />
       </Section>
     </Surface>
     {planDialog === 'later' && plan && <ScheduleLaterDialog item={plan} onClose={() => setPlanDialog(null)} onDone={() => { setPlanDialog(null); servicePlan.reload(); }} />}

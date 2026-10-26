@@ -20,6 +20,18 @@ export function auth(req, res, next) {
   try { req.user = jwt.verify(token, jwtSecret()); next(); }
   catch { res.status(401).json({ message: 'Session expired' }); }
 }
+// B2C-only staff ('b2c_staff') may sign in and use the B2C escalation API, but
+// no B2B endpoint: several B2B routes only check that a user is signed in.
+export const B2C_ONLY_ROLE = 'b2c_staff';
+export function restrictB2COnlyStaff(req, res, next) {
+  if (/^\/(b2c|auth|health|internal)(\/|$)/.test(req.path)) return next();
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return next();
+  try {
+    if (jwt.verify(token, jwtSecret()).role === B2C_ONLY_ROLE) return res.status(403).json({ message: 'This account can only access B2C escalations.' });
+  } catch { /* the route's own auth check reports invalid tokens */ }
+  next();
+}
 export function allowRoles(...roles) {
   return (req, res, next) => roles.includes(req.user.role) ? next() : res.status(403).json({ message: 'This account is not allowed to access this area' });
 }

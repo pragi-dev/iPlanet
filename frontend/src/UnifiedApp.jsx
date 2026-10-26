@@ -1,6 +1,8 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowRight, Eye, EyeOff, Laptop, ShieldCheck, Sparkles, Wrench } from 'lucide-react';
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { ArrowRight, Eye, EyeOff, Sparkles } from 'lucide-react';
+import { AuthLayout, WorkspaceSwitch } from './auth/AuthLayout';
+import { workspaceFrom } from './auth/workspace';
 import { AICustomerSupportPanel } from './corporate/AICustomerSupportPanel';
 import { getDevice, getTicket, login, warmUpApi } from './corporate/api';
 import { clearRequestCache } from './ui/requestCache';
@@ -20,9 +22,10 @@ const Devices = page(corporatePages, 'Devices');
 const DeviceDetail = page(corporatePages, 'DeviceDetail');
 const Tickets = page(corporatePages, 'Tickets');
 const Profile = page(corporatePages, 'Profile');
-const UnassignedDevices = page(corporateExtras, 'UnassignedDevices');
 const CorporateNotifications = page(corporateExtras, 'Notifications');
 const RequestEnhanced = page(() => import('./corporate/RequestEnhanced'), 'RequestEnhanced');
+const AddDevices = page(() => import('./corporate/AddDevices'), 'AddDevices');
+const CorporateReports = page(() => import('./corporate/CorporateReports'), 'CorporateReports');
 const TicketDetailEnhanced = page(() => import('./corporate/TicketDetailEnhanced'), 'TicketDetailEnhanced');
 const CoverageEnhanced = page(() => import('./corporate/CoverageEnhanced'), 'CoverageEnhanced');
 const ReviewPage = page(reviewPages, 'ReviewPage');
@@ -42,6 +45,14 @@ const InternalReviewDetail = page(internalReviews, 'InternalReviewDetail');
 const GoogleBusinessProfile = page(() => import('./service/GoogleBusinessProfile'), 'GoogleBusinessProfile');
 const ProactiveService = page(() => import('./service/ProactiveService'), 'ProactiveService');
 const ServiceRecommendations = page(() => import('./corporate/ServiceRecommendations'), 'ServiceRecommendations');
+const B2CDashboard = page(() => import('./b2c/B2CDashboard'), 'B2CDashboard');
+const B2CQueue = page(() => import('./b2c/B2CQueue'), 'B2CQueue');
+const B2CTicketDetail = page(() => import('./b2c/B2CTicketDetail'), 'B2CTicketDetail');
+const B2CReports = page(() => import('./b2c/B2CReports'), 'B2CReports');
+const B2CIntegrations = page(() => import('./b2c/B2CIntegrations'), 'B2CIntegrations');
+const B2CSettings = page(() => import('./b2c/B2CSettings'), 'B2CSettings');
+const B2CNotifications = page(() => import('./b2c/B2CNotifications'), 'B2CNotifications');
+const SignUp = page(() => import('./auth/SignUp'), 'SignUp');
 
 function RouteLoading() {
   return <div className="route-loading" role="status" aria-live="polite"><span className="sr-only">Loading page…</span><span className="route-loading-bar" aria-hidden="true" /></div>;
@@ -51,6 +62,10 @@ const TOKEN_KEY = 'iplanet_token';
 const USER_KEY = 'iplanet_user';
 const corporateHome = '/corporate/dashboard';
 const serviceHome = '/service/dashboard';
+const b2cHome = '/b2c';
+// B2C-only staff ('b2c_staff') have no B2B pages; the API refuses their B2B requests too.
+const B2C_ONLY_ROLE = 'b2c_staff';
+const homeFor = user => (user?.role === 'iplanet_service' ? serviceHome : user?.role === B2C_ONLY_ROLE ? b2cHome : corporateHome);
 
 function readUser() {
   try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null'); } catch { return null; }
@@ -70,8 +85,9 @@ function Login() {
     corporate: { label: 'Corporate Admin', email: 'karthik.raj@democorporation.in' },
     service: { label: 'iPlanet Service', email: 'service@iplanet.local' },
   };
-  const [profile, setProfile] = useState('corporate');
-  const [email, setEmail] = useState('karthik.raj@democorporation.in');
+  const [searchParams] = useSearchParams();
+  const [profile, setProfile] = useState(() => workspaceFrom(searchParams));
+  const [email, setEmail] = useState(() => profiles[workspaceFrom(searchParams)].email);
   const [password, setPassword] = useState('Demo@123');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -86,7 +102,7 @@ function Login() {
       clearRequestCache();
       localStorage.setItem(TOKEN_KEY, result.token);
       localStorage.setItem(USER_KEY, JSON.stringify(result.user));
-      navigate(result.user.role === 'iplanet_service' ? serviceHome : corporateHome, { replace: true });
+      navigate(homeFor(result.user), { replace: true });
     } catch (loginError) {
       setError(loginError.message || 'Unable to sign in. Please try again.');
     } finally {
@@ -95,39 +111,13 @@ function Login() {
   };
   const selectProfile = nextProfile => { setProfile(nextProfile); setEmail(profiles[nextProfile].email); setError(''); };
   const [showPassword, setShowPassword] = useState(false);
-  const highlights = [
-    { icon: Wrench, title: 'Raise & track service', text: 'Log a repair and follow it to resolution.' },
-    { icon: ShieldCheck, title: 'Manage coverage', text: 'Warranty and AMC status for every device.' },
-    { icon: Laptop, title: 'Run operations', text: 'Queues, engineers and reports in one view.' },
-  ];
-  return <main className="login">
-    <header className="login-top">
-      <div className="login-brand"><span className="login-brand-mark" aria-hidden="true">i</span><span><strong>iPlanet</strong> Self-care Portal</span></div>
-    </header>
-
-    <div className="login-main">
-      <section className="login-intro">
-        <p className="login-eyebrow">Self-Care &amp; Service Operations</p>
-        <h1>Device care, handled.</h1>
-        <p className="login-lede">Raise and track service, manage coverage, and run service operations — all from one place.</p>
-        <ul className="login-highlights">
-          {highlights.map(({ icon: Icon, title, text }) => <li key={title}>
-            <span className="login-highlight-icon" aria-hidden="true"><Icon size={18} /></span>
-            <span className="login-highlight-text"><strong>{title}</strong><span>{text}</span></span>
-          </li>)}
-        </ul>
-      </section>
-
+  return <AuthLayout>
       <form className="login-card" onSubmit={submit} noValidate>
         <div className="login-card-head">
           <h2>Sign in</h2>
           <p>{profile === 'corporate' ? 'Access your organisation’s devices and service requests.' : 'Access the iPlanet service operations console.'}</p>
         </div>
-        <div className="login-segmented" role="group" aria-label="Workspace" data-active={profile}>
-          <span className="login-segmented-thumb" aria-hidden="true" />
-          <button type="button" aria-pressed={profile === 'corporate'} onClick={() => selectProfile('corporate')}>Corporate Self-Care</button>
-          <button type="button" aria-pressed={profile === 'service'} onClick={() => selectProfile('service')}>iPlanet Service</button>
-        </div>
+        <WorkspaceSwitch value={profile} onChange={selectProfile} />
         <div className="login-fields">
           <label className="login-float">
             <input type="email" autoComplete="username" placeholder=" " value={email} onChange={event => setEmail(event.target.value)} required />
@@ -141,15 +131,10 @@ function Login() {
         </div>
         {error && <InlineAlert title="Sign-in failed">{error}</InlineAlert>}
         <button className="login-submit" type="submit" disabled={busy || !email || !password}>{busy ? <><span className="login-spinner" aria-hidden="true" />Signing in…</> : <>Sign in<ArrowRight size={17} aria-hidden="true" /></>}</button>
+        <p className="login-switch">Don’t have an account? <Link to={`/signup${profile === 'service' ? '?workspace=service' : ''}`}>Sign up</Link></p>
         <p className="login-note"><span>Access is managed by your administrator.</span><span>Demo password <strong>Demo@123</strong></span></p>
       </form>
-    </div>
-
-    <footer className="login-foot">
-      <span>Copyright © {new Date().getFullYear()} iPlanet. All rights reserved.</span>
-      <span>Corporate Self-Care · iPlanet Service</span>
-    </footer>
-  </main>;
+  </AuthLayout>;
 }
 
 // Re-checks the session on every visit to /login. Deciding this once when the
@@ -159,12 +144,18 @@ function LoginRoute() {
   return sessionIsValid() ? <RoleAlias corporate={corporateHome} service={serviceHome} /> : <Login />;
 }
 
+// Signed-in users have no use for sign-up and go to their portal instead.
+function SignUpRoute() {
+  return sessionIsValid() ? <RoleAlias corporate={corporateHome} service={serviceHome} /> : <SignUp />;
+}
+
 // Downloads the signed-in portal's page code in idle time so opening a page
 // doesn't wait for its chunk. Runs once per portal per session.
 const prefetchedPortals = new Set();
 const portalChunks = {
   corporate_admin: [corporatePages, corporateExtras, reviewPages, () => import('./corporate/RequestEnhanced'), () => import('./corporate/TicketDetailEnhanced'), () => import('./corporate/CoverageEnhanced'), () => import('./corporate/ServiceRecommendations')],
   iplanet_service: [servicePages, serviceExtras, internalReviews, () => import('./service/companyQueue'), () => import('./service/OperationalTicketDetail'), () => import('./service/ProactiveService'), () => import('./service/enrollment'), () => import('./service/coverage')],
+  [B2C_ONLY_ROLE]: [() => import('./b2c/B2CQueue'), () => import('./b2c/B2CTicketDetail'), () => import('./b2c/B2CReports')],
 };
 function usePrefetchPortal(role) {
   useEffect(() => {
@@ -181,7 +172,19 @@ function Protected({ role, children }) {
   const valid = sessionIsValid();
   usePrefetchPortal(valid && user?.role === role ? role : null);
   if (!valid) return <Navigate to="/login" replace />;
-  if (user.role !== role) return <Navigate to={user.role === 'iplanet_service' ? serviceHome : corporateHome} replace />;
+  if (user.role !== role) return <Navigate to={homeFor(user)} replace />;
+  return children;
+}
+
+// B2C pages are open to B2C-only staff and to iPlanet Service accounts. The API
+// checks the B2C role on every request, so a Service account without one sees
+// the "no access" state rather than a redirect (its role may be granted after sign-in).
+function B2CProtected({ children }) {
+  const user = readUser();
+  const valid = sessionIsValid();
+  usePrefetchPortal(valid && user?.role === B2C_ONLY_ROLE ? B2C_ONLY_ROLE : null);
+  if (!valid) return <Navigate to="/login" replace />;
+  if (![B2C_ONLY_ROLE, 'iplanet_service'].includes(user.role)) return <Navigate to={homeFor(user)} replace />;
   return children;
 }
 
@@ -189,6 +192,7 @@ function RoleAlias({ corporate, service }) {
   const user = readUser();
   const location = useLocation();
   if (!sessionIsValid()) return <Navigate to="/login" replace />;
+  if (user?.role === B2C_ONLY_ROLE) return <Navigate to={b2cHome} replace />;
   return <Navigate to={`${user?.role === 'iplanet_service' ? service : corporate}${location.search}`} replace />;
 }
 
@@ -196,6 +200,7 @@ function RoleDetailAlias({ corporateBase, serviceBase }) {
   const { id } = useParams();
   const user = readUser();
   if (!sessionIsValid()) return <Navigate to="/login" replace />;
+  if (user?.role === B2C_ONLY_ROLE) return <Navigate to={b2cHome} replace />;
   if (user?.role === 'iplanet_service') return <Navigate to={serviceBase ? `${serviceBase}/${id}` : serviceHome} replace />;
   return <Navigate to={`${corporateBase}/${id}`} replace />;
 }
@@ -240,8 +245,10 @@ function CorporateRoutes() {
   return <>
     <Route path="/corporate/dashboard" element={<Protected role="corporate_admin"><Dashboard /></Protected>} />
     <Route path="/corporate/devices" element={<Protected role="corporate_admin"><Devices /></Protected>} />
+    <Route path="/corporate/devices/add" element={<Protected role="corporate_admin"><AddDevices /></Protected>} />
     <Route path="/corporate/devices/:id" element={<Protected role="corporate_admin"><DeviceDetail /></Protected>} />
-    <Route path="/corporate/unassigned-devices" element={<Protected role="corporate_admin"><UnassignedDevices /></Protected>} />
+    {/* The Unassigned Devices page was removed; old links open the device list filtered to unassigned devices. */}
+    <Route path="/corporate/unassigned-devices" element={<Navigate to="/corporate/devices?allocation=Unassigned" replace />} />
     <Route path="/corporate/service-requests" element={<Protected role="corporate_admin"><Tickets /></Protected>} />
     <Route path="/corporate/service-requests/:id" element={<Protected role="corporate_admin"><TicketDetailEnhanced /></Protected>} />
     <Route path="/corporate/raise-request" element={<Protected role="corporate_admin"><RequestEnhanced /></Protected>} />
@@ -250,7 +257,8 @@ function CorporateRoutes() {
     <Route path="/corporate/notifications" element={<Protected role="corporate_admin"><CorporateNotifications /></Protected>} />
     <Route path="/corporate/profile" element={<Protected role="corporate_admin"><Profile /></Protected>} />
     <Route path="/corporate/reviews" element={<Protected role="corporate_admin"><CorporateReviews /></Protected>} />
-    <Route path="/corporate/reviews/:ticketId" element={<Protected role="corporate_admin"><ReviewPage /></Protected>} />
+    <Route path="/corporate/reports" element={<Protected role="corporate_admin"><CorporateReports /></Protected>} />
+    <Route path="/corporate/reviews/:periodKey" element={<Protected role="corporate_admin"><ReviewPage /></Protected>} />
   </>;
 }
 
@@ -273,35 +281,52 @@ function ServiceRoutes() {
   </>;
 }
 
+function B2CRoutes() {
+  return <>
+    <Route path="/b2c" element={<B2CProtected><B2CDashboard /></B2CProtected>} />
+    <Route path="/b2c/tickets" element={<B2CProtected><B2CQueue /></B2CProtected>} />
+    <Route path="/b2c/tickets/:id" element={<B2CProtected><B2CTicketDetail /></B2CProtected>} />
+    <Route path="/b2c/reports" element={<B2CProtected><B2CReports /></B2CProtected>} />
+    <Route path="/b2c/integrations" element={<B2CProtected><B2CIntegrations /></B2CProtected>} />
+    <Route path="/b2c/settings" element={<B2CProtected><B2CSettings /></B2CProtected>} />
+    <Route path="/b2c/notifications" element={<B2CProtected><B2CNotifications /></B2CProtected>} />
+  </>;
+}
+
 export default function UnifiedApp() {
-  return <BrowserRouter>
-    <AIAssistantProvider>
-      <Suspense fallback={<RouteLoading />}>
-      <Routes>
-        <Route path="/" element={<Navigate to="/login" replace />} />
-        <Route path="/login" element={<LoginRoute />} />
-        {CorporateRoutes()}
-        {ServiceRoutes()}
-        <Route path="/dashboard" element={<RoleAlias corporate={corporateHome} service={serviceHome} />} />
-        <Route path="/devices" element={<RoleAlias corporate="/corporate/devices" service={serviceHome} />} />
-        <Route path="/devices/:id" element={<RoleDetailAlias corporateBase="/corporate/devices" serviceBase={null} />} />
-        <Route path="/unassigned-devices" element={<RoleAlias corporate="/corporate/unassigned-devices" service={serviceHome} />} />
-        <Route path="/request" element={<RoleAlias corporate="/corporate/raise-request" service={serviceHome} />} />
-        <Route path="/coverage" element={<RoleAlias corporate="/corporate/warranty" service="/service/warranty" />} />
-        <Route path="/notifications" element={<RoleAlias corporate="/corporate/notifications" service="/service/notifications" />} />
-        <Route path="/profile" element={<RoleAlias corporate="/corporate/profile" service="/service/settings" />} />
-        <Route path="/my-tickets" element={<RoleAlias corporate="/corporate/service-requests" service="/service/tickets" />} />
-        <Route path="/enrollment" element={<RoleAlias corporate={corporateHome} service="/service/device-enrollment" />} />
-        <Route path="/engineers" element={<RoleAlias corporate={corporateHome} service="/service/engineers" />} />
-        <Route path="/reports" element={<RoleAlias corporate={corporateHome} service="/service/reports" />} />
-        <Route path="/escalation-matrix" element={<RoleAlias corporate={corporateHome} service="/service/escalation" />} />
-        <Route path="/tickets" element={<RoleAlias corporate="/corporate/service-requests" service="/service/tickets" />} />
-        <Route path="/tickets/:id" element={<RoleDetailAlias corporateBase="/corporate/service-requests" serviceBase="/service/tickets" />} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
-      </Routes>
-      </Suspense>
-    </AIAssistantProvider>
-  </BrowserRouter>;
+  return <BrowserRouter><AppRoutes /></BrowserRouter>;
+}
+
+// Every portal route, without the router itself (tests render it in a MemoryRouter).
+export function AppRoutes() {
+  return <AIAssistantProvider>
+    <Suspense fallback={<RouteLoading />}>
+    <Routes>
+      <Route path="/" element={<Navigate to="/login" replace />} />
+      <Route path="/login" element={<LoginRoute />} />
+      <Route path="/signup" element={<SignUpRoute />} />
+      {CorporateRoutes()}
+      {ServiceRoutes()}
+      {B2CRoutes()}
+      <Route path="/dashboard" element={<RoleAlias corporate={corporateHome} service={serviceHome} />} />
+      <Route path="/devices" element={<RoleAlias corporate="/corporate/devices" service={serviceHome} />} />
+      <Route path="/devices/:id" element={<RoleDetailAlias corporateBase="/corporate/devices" serviceBase={null} />} />
+      <Route path="/unassigned-devices" element={<RoleAlias corporate="/corporate/devices?allocation=Unassigned" service={serviceHome} />} />
+      <Route path="/request" element={<RoleAlias corporate="/corporate/raise-request" service={serviceHome} />} />
+      <Route path="/coverage" element={<RoleAlias corporate="/corporate/warranty" service="/service/warranty" />} />
+      <Route path="/notifications" element={<RoleAlias corporate="/corporate/notifications" service="/service/notifications" />} />
+      <Route path="/profile" element={<RoleAlias corporate="/corporate/profile" service="/service/settings" />} />
+      <Route path="/my-tickets" element={<RoleAlias corporate="/corporate/service-requests" service="/service/tickets" />} />
+      <Route path="/enrollment" element={<RoleAlias corporate={corporateHome} service="/service/device-enrollment" />} />
+      <Route path="/engineers" element={<RoleAlias corporate={corporateHome} service="/service/engineers" />} />
+      <Route path="/reports" element={<RoleAlias corporate={corporateHome} service="/service/reports" />} />
+      <Route path="/escalation-matrix" element={<RoleAlias corporate={corporateHome} service="/service/escalation" />} />
+      <Route path="/tickets" element={<RoleAlias corporate="/corporate/service-requests" service="/service/tickets" />} />
+      <Route path="/tickets/:id" element={<RoleDetailAlias corporateBase="/corporate/service-requests" serviceBase="/service/tickets" />} />
+      <Route path="*" element={<Navigate to="/login" replace />} />
+    </Routes>
+    </Suspense>
+  </AIAssistantProvider>;
 }
 
 export { logout };

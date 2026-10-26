@@ -1,0 +1,48 @@
+/* B2C escalation pages. Built on the shared tokens and components; these rules
+   only cover layouts the B2B pages don't have (email threads, settings rows). */
+
+.b2c-count-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.b2c-count-list li { display: flex; justify-content: space-between; gap: var(--space-3); padding: 10px 0; border-top: 1px solid var(--color-divider); font-size: 14px; }
+.b2c-count-list li:first-child { border-top: 0; }
+.b2c-count-list strong { font-variant-numeric: tabular-nums; }
+
+.b2c-pager { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-3); padding: var(--space-3) var(--space-5); border-top: 1px solid var(--color-divider); }
+.b2c-cell-ref { max-width: 320px; }
+.b2c-cell-ref .cell-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b2c-more-actions { gap: var(--space-1); }
+
+.b2c-thread { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-4); }
+.b2c-message { display: grid; gap: var(--space-2); padding: var(--space-4) var(--space-5); border-radius: var(--radius-lg); border: 1px solid var(--color-border); background: var(--color-surface); min-width: 0; }
+.b2c-message-outbound { background: var(--color-fill); border-color: transparent; margin-left: var(--space-8); }
+.b2c-message-head { display: flex; align-items: flex-start; gap: var(--space-3); }
+.b2c-message-head > div { display: grid; gap: 2px; flex: 1; min-width: 0; }
+.b2c-message-head strong { overflow-wrap: anywhere; }
+.b2c-message-icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--color-accent-soft); color: var(--color-accent-text); flex: none; }
+.b2c-message-outbound .b2c-message-icon { background: var(--color-neutral-soft); color: var(--color-text-secondary); }
+.b2c-message-status { display: flex; gap: var(--space-1); flex-wrap: wrap; justify-content: flex-end; }
+.b2c-message-subject { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+.b2c-message-body { font-size: 14px; overflow-wrap: anywhere; max-height: 420px; overflow: auto; }
+.b2c-attachments { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.b2c-attachments .btn span { margin-left: 4px; }
+.b2c-attachment-rejected { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--color-warning-text); }
+
+.b2c-test-label { font-size: 12px; font-weight: 600; color: var(--color-warning-text); background: var(--color-warning-soft); border-radius: var(--radius-sm); padding: 4px 8px; width: fit-content; }
+.b2c-device-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
+.b2c-device-list li { display: grid; gap: 2px; }
+.b2c-chip-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.b2c-chip-list li { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: var(--radius-pill); background: var(--color-fill); font-size: 13px; }
+.b2c-path-editor { border: 0; padding: 0; margin: 0; display: grid; gap: var(--space-2); }
+
+.b2c-settings-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3); padding-bottom: var(--space-4); border-bottom: 1px solid var(--color-divider); }
+.b2c-settings-row .field { min-width: 140px; flex: 1 1 140px; }
+.b2c-settings-row .b2c-wide { flex: 2 1 260px; }
+.b2c-save-bar { display: grid; gap: var(--space-3); }
+.b2c-template { display: grid; gap: var(--space-3); padding-bottom: var(--space-5); border-bottom: 1px solid var(--color-divider); }
+.b2c-outbox { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
+.b2c-outbox li { display: grid; gap: 2px; padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-fill); }
+.b2c-outbox p { max-height: 120px; overflow: auto; }
+
+@media (max-width: 767px) {
+  .b2c-message-outbound { margin-left: 0; }
+  .b2c-message { padding: var(--space-4); }
+}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Camera, CheckCircle2, FilePlus2, HeartPulse, ImagePlus, Pencil, Recycle, RefreshCcw, Search, Trash2, Wrench, BadgeIndianRupee } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Camera, CheckCircle2, FilePlus2, HeartPulse, ImagePlus, Pencil, Recycle, RefreshCcw, Search, Trash2, Wrench } from 'lucide-react';
 import { Shell } from './components';
 import { createTicket, getAiPreparedRequest, getDevices, getServiceRecommendation, getTickets, uploadAnnotatedImages, uploadImages } from './api';
 import { ImageAnnotator } from './ImageAnnotator';
@@ -9,11 +9,13 @@ import { Badge, Button, Card, CoverageTiles, DeviceIcon, EmptyState, ErrorState,
 const locations = ['Chennai', 'Coimbatore', 'Bengaluru', 'Madurai'];
 const issueTypes = ['Screen / Display', 'Battery', 'Charging', 'Keyboard', 'Trackpad', 'Camera', 'Speaker', 'Software', 'Performance', 'Physical Damage', 'Other'];
 const priorities = ['Low', 'Medium', 'High', 'Critical'];
+// Buyback and E-Waste are raised together; older requests may still carry either name on its own.
+const BUYBACK_EWASTE = 'Buyback / E-Waste';
+const LEGACY_BUYBACK_EWASTE = ['Buyback', 'E-Waste'];
 const categories = [
   { value: 'Service', icon: Wrench, hint: 'Repair or diagnose a device' },
   { value: 'Health Camp', icon: HeartPulse, hint: 'On-site device health check' },
-  { value: 'Buyback', icon: BadgeIndianRupee, hint: 'Trade in a device' },
-  { value: 'E-Waste', icon: Recycle, hint: 'Responsible disposal' },
+  { value: BUYBACK_EWASTE, icon: Recycle, hint: 'Trade in or responsibly dispose of devices' },
 ];
 // The fifth stage, Submit, is reached when the request is created.
 const steps = ['Identify device', 'Request details', 'Evidence', 'Review', 'Submit'];
@@ -24,6 +26,20 @@ function todayInIndia() {
   const value = Object.fromEntries(parts.filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
   return `${value.year}-${value.month}-${value.day}`;
 }
+
+function addDays(isoDate, days) {
+  const date = new Date(`${isoDate}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+// Health camps and buyback / e-waste pickups are on-site visits for a batch of devices,
+// so they need a device count and advance notice instead of an issue type and priority.
+const ON_SITE_LEAD_DAYS = { 'Health Camp': 4, [BUYBACK_EWASTE]: 2 };
+const ON_SITE_CATEGORIES = Object.keys(ON_SITE_LEAD_DAYS);
+const ON_SITE_MAX_DEVICES = 1000;
+const earliestServiceDate = category => addDays(todayInIndia(), ON_SITE_LEAD_DAYS[category] || 0);
+const validDeviceCount = value => Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= ON_SITE_MAX_DEVICES;
 
 const annotatedName = file => `annotated-${file.name}`;
 // The server accepts up to 5 photos of 5 MB each per upload.
@@ -86,7 +102,7 @@ export function RequestEnhanced() {
   const [annotated, setAnnotated] = useState([]);
   const [editing, setEditing] = useState(null);
   const [scanOpen, setScanOpen] = useState(false);
-  const [form, setForm] = useState({ category: 'Service', issueType: 'Screen / Display', description: '', location: 'Chennai', preferredServiceDate: todayInIndia(), priority: 'Medium', deviceId: '' });
+  const [form, setForm] = useState({ category: 'Service', issueType: 'Screen / Display', description: '', location: 'Chennai', preferredServiceDate: todayInIndia(), priority: 'Medium', deviceId: '', deviceCount: '' });
   const [step, setStep] = useState(0);
   const [touched, setTouched] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -108,7 +124,7 @@ export function RequestEnhanced() {
     if (!match) return;
     setDevice(match);
     setSerial(match.serialNumber);
-    setForm(current => ({ ...current, ...aiRequest, deviceId: match._id, preferredServiceDate: aiRequest.preferredServiceDate || '', location: locations.includes(aiRequest.location) ? aiRequest.location : current.location }));
+    setForm(current => ({ ...current, ...aiRequest, ...(LEGACY_BUYBACK_EWASTE.includes(aiRequest.category) ? { category: BUYBACK_EWASTE } : {}), deviceId: match._id, preferredServiceDate: aiRequest.preferredServiceDate || '', location: locations.includes(aiRequest.location) ? aiRequest.location : current.location }));
     setStep(1);
   }, [aiRequest, devices]);
   useEffect(() => {
@@ -152,7 +168,7 @@ export function RequestEnhanced() {
   const suggestions = useMemo(() => {
     const term = serial.trim().toLowerCase();
     if (!devices || device || term.length < 2) return [];
-    return devices.filter(item => [item.serialNumber, item.model, item.assetId, item.employeeName].some(value => String(value || '').toLowerCase().includes(term))).slice(0, 6);
+    return devices.filter(item => [item.serialNumber, item.model, item.assetId].some(value => String(value || '').toLowerCase().includes(term))).slice(0, 6);
   }, [devices, serial, device]);
 
   const chooseFiles = event => {
@@ -176,20 +192,31 @@ export function RequestEnhanced() {
   const removeFile = file => { setFiles(current => current.filter(item => item !== file)); setAnnotated(current => current.filter(item => item.name !== annotatedName(file))); };
   const saveAnnotation = file => { setAnnotated(current => [...current.filter(item => item.name !== file.name), file]); setEditing(null); };
 
-  const canContinue = [Boolean(form.deviceId), Boolean(form.description.trim()), true, Boolean(form.deviceId && form.description.trim())];
+  const isOnSiteRequest = ON_SITE_CATEGORIES.includes(form.category);
+  const minServiceDate = earliestServiceDate(form.category);
+  const deviceCountError = isOnSiteRequest && !validDeviceCount(form.deviceCount) ? `Enter the number of devices (1 to ${ON_SITE_MAX_DEVICES}).` : undefined;
+  const serviceDateError = isOnSiteRequest && !(form.preferredServiceDate >= minServiceDate) ? `${form.category} requests need ${ON_SITE_LEAD_DAYS[form.category]} days' notice. Choose ${formatDate(minServiceDate)} or later.` : undefined;
+  const detailsValid = Boolean(form.description.trim()) && !deviceCountError && !serviceDateError;
+  const chooseCategory = category => setForm(current => {
+    const earliest = earliestServiceDate(category);
+    return { ...current, category, preferredServiceDate: current.preferredServiceDate && current.preferredServiceDate >= earliest ? current.preferredServiceDate : earliest };
+  });
+  const canContinue = [Boolean(form.deviceId), detailsValid, true, Boolean(form.deviceId) && detailsValid];
   const next = () => { if (!canContinue[step]) { setTouched(true); return; } setTouched(false); setStep(current => Math.min(lastEditableStep, current + 1)); };
   const existingRequest = device ? openTickets.find(ticket => idOf(ticket.deviceId) === String(device._id)) : null;
   const linkedRecommendation = recommendation && canRespond(recommendation) && form.deviceId === recommendation.deviceId ? recommendation : null;
   const back = () => setStep(current => Math.max(0, current - 1));
 
   const submit = async () => {
-    if (!form.deviceId || !form.description.trim() || submitting) return;
+    if (!canContinue[3] || submitting) return;
     setSubmitting(true);
     setError('');
     let ticket;
     try {
       // The recommendation link is only sent while the request is still for the recommended device.
-      ticket = await createTicket({ ...form, ...(linkedRecommendation ? { serviceFollowUpId: linkedRecommendation._id } : {}) });
+      const { deviceCount, ...details } = form;
+      // An on-site visit has no single issue, so it is recorded at Low priority; a health camp gets its own issue type.
+      ticket = await createTicket({ ...details, ...(isOnSiteRequest ? { issueType: form.category === 'Health Camp' ? 'Health Camp' : 'Other', priority: 'Low', deviceCount: Number(deviceCount) } : {}), ...(linkedRecommendation ? { serviceFollowUpId: linkedRecommendation._id } : {}) });
     } catch (submitError) {
       setError(friendlyError(submitError, 'Unable to submit your request. Please try again.'));
       setSubmitting(false);
@@ -207,7 +234,7 @@ export function RequestEnhanced() {
     setSubmitting(false);
   };
 
-  const reset = () => { setDone(null); setDevice(null); setSerial(''); setFiles([]); setAnnotated([]); setForm(current => ({ ...current, description: '', deviceId: '', preferredServiceDate: todayInIndia() })); setStep(0); setAiRequest(null); setRecommendation(null); setError('');
+  const reset = () => { setDone(null); setDevice(null); setSerial(''); setFiles([]); setAnnotated([]); setForm(current => ({ ...current, description: '', deviceId: '', deviceCount: '', preferredServiceDate: earliestServiceDate(current.category) })); setStep(0); setAiRequest(null); setRecommendation(null); setError('');
     // Drop ?conversationId / ?serviceFollowUp, or the previous draft would be loaded again.
     navigate('/corporate/raise-request', { replace: true, state: null });
   };
@@ -253,7 +280,7 @@ export function RequestEnhanced() {
           {step === 0 && (loadError ? <ErrorState compact title="Unable to load your devices" message={friendlyError(loadError)} onRetry={loadDevices} />
             : !devices ? <div className="stack-12"><Skeleton height={46} /><Skeleton height={80} /></div>
             : <div className="stack-24">
-              <Field label="Serial number" hint="You can also search by model, asset ID or employee." error={touched && !form.deviceId ? 'Select a device to continue.' : undefined}>
+              <Field label="Serial number" hint="You can also search by model or asset ID." error={touched && !form.deviceId ? 'Select a device to continue.' : undefined}>
                 {props => <div className="lookup-control">
                   <div className="lookup-input"><Search size={17} aria-hidden="true" /><input {...props} className="mono-input" value={serial} onChange={event => lookup(event.target.value)} placeholder="e.g. C02ZK3C1ABCD" autoComplete="off" data-autofocus /></div>
                   <Button icon={Camera} className="btn-lg" onClick={() => setScanOpen(true)}>Scan</Button>
@@ -268,28 +295,30 @@ export function RequestEnhanced() {
                 {existingRequest && <InlineAlert tone="warning" title={`This device already has an open request: ${existingRequest.ticketId}`} action={<Link className="btn btn-secondary btn-sm" to={`/corporate/service-requests/${existingRequest._id}`}>View request</Link>}>
                   {existingRequest.issueType} · {existingRequest.status}. You can still raise a separate request if this is a different issue.
                 </InlineAlert>}
-                <InfoList columns={2} items={[['Device type', device.deviceType], ['Asset ID', device.assetId], ['Employee', device.employeeName || 'Unassigned'], ['Location', device.location]]} />
+                <InfoList columns={2} items={[['Device type', device.deviceType], ['Asset ID', device.assetId], ['Location', device.location]]} />
                 <CoverageTiles device={device} />
               </div> : suggestions.length > 0 ? <div className="stack-8">
                 <p className="subheading" style={{ margin: 0 }}>Matching devices</p>
                 <div className="device-options" role="listbox" aria-label="Matching devices">{suggestions.map(item => <button type="button" role="option" aria-selected="false" key={item._id} className="device-option" onClick={() => { setSerial(item.serialNumber); selectDevice(item); }}>
-                  <span><strong>{item.model}</strong><span><span className="mono">{item.serialNumber}</span> · {item.employeeName || 'Unassigned'}</span></span><ArrowRight size={16} aria-hidden="true" />
+                  <span><strong>{item.model}</strong><span><span className="mono">{item.serialNumber}</span>{item.location ? ` · ${item.location}` : ''}</span></span><ArrowRight size={16} aria-hidden="true" />
                 </button>)}</div>
               </div> : serial.trim().length >= 2 ? <EmptyState compact icon={Search} title="No device found" description="Check the serial number, or scan the barcode on the device." /> : null}
             </div>)}
 
           {step === 1 && <div className="stack-24">
             <div className="field"><span className="field-label">Request type</span>
-              <div className="choice-grid" role="group" aria-label="Request type">{categories.map(item => <button type="button" key={item.value} className="choice" aria-pressed={form.category === item.value} onClick={() => setForm({ ...form, category: item.value })}><item.icon size={20} aria-hidden="true" /><strong>{item.value}</strong><span>{item.hint}</span></button>)}</div>
+              <div className="choice-grid" role="group" aria-label="Request type">{categories.map(item => <button type="button" key={item.value} className="choice" aria-pressed={form.category === item.value} onClick={() => chooseCategory(item.value)}><item.icon size={20} aria-hidden="true" /><strong>{item.value}</strong><span>{item.hint}</span></button>)}</div>
             </div>
             <div className="form-grid">
-              <Field label="Issue type">{props => <select {...props} value={form.issueType} onChange={event => setForm({ ...form, issueType: event.target.value })}>{issueTypes.map(item => <option key={item}>{item}</option>)}</select>}</Field>
-              <Field label="Priority" hint="Sets the resolution target.">{props => <select {...props} value={form.priority} onChange={event => setForm({ ...form, priority: event.target.value })}>{priorities.map(item => <option key={item}>{item}</option>)}</select>}</Field>
+              {isOnSiteRequest ? <Field label="Number of devices" required hint={form.category === 'Health Camp' ? 'How many devices should be checked at the camp.' : 'How many devices to trade in or dispose of.'} error={touched ? deviceCountError : undefined}>
+                {props => <input {...props} type="number" inputMode="numeric" min={1} max={ON_SITE_MAX_DEVICES} step={1} required value={form.deviceCount} onChange={event => setForm({ ...form, deviceCount: event.target.value })} placeholder="e.g. 25" />}
+              </Field> : <Field label="Issue type">{props => <select {...props} value={form.issueType} onChange={event => setForm({ ...form, issueType: event.target.value })}>{issueTypes.map(item => <option key={item}>{item}</option>)}</select>}</Field>}
+              {!isOnSiteRequest && <Field label="Priority" hint="Sets the resolution target.">{props => <select {...props} value={form.priority} onChange={event => setForm({ ...form, priority: event.target.value })}>{priorities.map(item => <option key={item}>{item}</option>)}</select>}</Field>}
+              <Field label="Service location">{props => <select {...props} value={form.location} onChange={event => setForm({ ...form, location: event.target.value })}>{locations.map(item => <option key={item}>{item}</option>)}</select>}</Field>
+              <Field label="Preferred service date" required={isOnSiteRequest} hint={isOnSiteRequest ? `${form.category} requests need ${ON_SITE_LEAD_DAYS[form.category]} days' notice.` : undefined} error={touched ? serviceDateError : undefined}>{props => <input {...props} type="date" min={minServiceDate} value={form.preferredServiceDate} onChange={event => setForm({ ...form, preferredServiceDate: event.target.value })} />}</Field>
               <Field className="span-2" label="Description" required hint="What is happening, when it started, and anything you've tried." error={touched && !form.description.trim() ? 'Describe the issue to continue.' : undefined}>
                 {props => <textarea {...props} required maxLength={4000} value={form.description} onChange={event => setForm({ ...form, description: event.target.value })} placeholder="e.g. The display flickers after waking from sleep. Started last week." />}
               </Field>
-              <Field label="Service location">{props => <select {...props} value={form.location} onChange={event => setForm({ ...form, location: event.target.value })}>{locations.map(item => <option key={item}>{item}</option>)}</select>}</Field>
-              <Field label="Preferred service date">{props => <input {...props} type="date" min={todayInIndia()} value={form.preferredServiceDate} onChange={event => setForm({ ...form, preferredServiceDate: event.target.value })} />}</Field>
             </div>
           </div>}
 
@@ -305,9 +334,9 @@ export function RequestEnhanced() {
 
           {step === 3 && <div className="review-summary">
             <div className="review-section"><div className="review-section-head"><h3>Device</h3><Button size="sm" variant="ghost" onClick={() => setStep(0)}>Edit</Button></div>
-              <InfoList columns={2} items={[['Device', device?.model], ['Serial number', <span className="mono">{device?.serialNumber}</span>], ['Employee', device?.employeeName || 'Unassigned'], ['Coverage', device ? `${device.warrantyStatus} warranty · ${device.amcStatus} AMC` : '']]} /></div>
+              <InfoList columns={2} items={[['Device', device?.model], ['Serial number', <span className="mono">{device?.serialNumber}</span>], ['Location', device?.location], ['Coverage', device ? `${device.warrantyStatus || 'Unknown'} warranty · ${device.amcStatus || 'No'} AMC` : '']]} /></div>
             <div className="review-section"><div className="review-section-head"><h3>Details</h3><Button size="sm" variant="ghost" onClick={() => setStep(1)}>Edit</Button></div>
-              <InfoList columns={2} items={[['Request type', form.category], ['Issue type', form.issueType], ['Priority', <Badge>{form.priority}</Badge>], ['Location', form.location], ['Preferred date', formatDate(form.preferredServiceDate, 'No preference')]]} />
+              <InfoList columns={2} items={[['Request type', form.category], ...(isOnSiteRequest ? [['Number of devices', form.deviceCount]] : [['Issue type', form.issueType], ['Priority', <Badge>{form.priority}</Badge>]]), ['Location', form.location], ['Preferred date', formatDate(form.preferredServiceDate, 'No preference')]]} />
               <p className="description-text" style={{ marginTop: 8 }}>{form.description}</p></div>
             <div className="review-section"><div className="review-section-head"><h3>Evidence</h3><Button size="sm" variant="ghost" onClick={() => setStep(2)}>Edit</Button></div>
               <p className="text-muted">{files.length ? `${files.length} photo${files.length === 1 ? '' : 's'}${annotated.length ? `, ${annotated.length} marked` : ''}` : 'No photos attached'}</p></div>

@@ -1,10 +1,10 @@
 import { getProviderReply } from './providers/providerRouter.js';
 import { indiaToday } from './serviceDate.js';
 
-export const REQUEST_CATEGORIES = ['Service', 'Health Camp', 'Buyback', 'E-Waste'];
+export const REQUEST_CATEGORIES = ['Service', 'Health Camp', 'Buyback / E-Waste'];
 export const REQUEST_ISSUE_TYPES = ['Screen / Display', 'Battery', 'Charging', 'Keyboard', 'Trackpad', 'Camera', 'Speaker', 'Software', 'Performance', 'Physical Damage', 'Other'];
 
-const requestSystemPrompt = `You understand corporate Apple-device service requests. Return ONLY one JSON object with intent, workflowSignal, category, issueType, description, preferredServiceDateIntent, symptoms. workflowSignal is one of: resolved, failed, explicit_service, unsafe, unknown. Allowed categories: Service, Health Camp, Buyback, E-Waste. Allowed issueType: Screen / Display, Battery, Charging, Keyboard, Trackpad, Camera, Speaker, Software, Performance, Physical Damage, Other. Return the customer's date words, never a calculated date. Never invent device, serial, company, coverage, IDs, location, or dates. Use null for unknown values.`;
+const requestSystemPrompt = `You understand corporate Apple-device service requests. Return ONLY one JSON object with intent, workflowSignal, category, issueType, description, preferredServiceDateIntent, symptoms. workflowSignal is one of: resolved, failed, explicit_service, unsafe, unknown. Allowed categories: Service, Health Camp, Buyback / E-Waste. Allowed issueType: Screen / Display, Battery, Charging, Keyboard, Trackpad, Camera, Speaker, Software, Performance, Physical Damage, Other. Return the customer's date words, never a calculated date. Never invent device, serial, company, coverage, IDs, location, or dates. Use null for unknown values.`;
 
 function jsonObject(text) {
   const value = String(text || '').replace(/```(?:json)?/gi, '').replace(/```/g, '');

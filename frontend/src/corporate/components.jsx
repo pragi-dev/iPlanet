@@ -1,23 +1,14 @@
-import { Bell, CalendarClock, FilePlus2, Laptop, LayoutDashboard, MessageSquareText, Search, ShieldCheck, Sparkles, Ticket, UserRound, UserRoundPlus } from 'lucide-react';
+import { BarChart3, Bell, CalendarClock, FilePlus2, Laptop, LayoutDashboard, MessageSquareText, Search, ShieldCheck, Sparkles, Ticket, UserRound } from 'lucide-react';
 import { AppShell, Badge as UIBadge, EmptyState, PageHeader, RowAction, KPI } from '../ui';
 import { getDevices, getNotificationUnreadCount, getTickets } from './api';
 
-// Command-bar index: the organization's own service requests, devices and the
-// employees those devices are assigned to. Nothing beyond these API results.
+// Command-bar index: the organization's own service requests and devices.
+// Nothing beyond these API results. Employee details are not shown in the portals.
 async function loadCommandIndex() {
   const [tickets, devices] = await Promise.all([getTickets(), getDevices()]);
-  const employees = new Map();
-  devices.forEach(device => {
-    if (!device.employeeName) return;
-    const key = device.employeeId || device.employeeName;
-    const entry = employees.get(key) || { name: device.employeeName, employeeId: device.employeeId, department: device.department, count: 0 };
-    entry.count += 1;
-    employees.set(key, entry);
-  });
   return [
     ...tickets.map(ticket => ({ id: `t-${ticket._id}`, group: 'Service requests', icon: Ticket, mono: true, title: ticket.ticketId, subtitle: [ticket.issueType, ticket.deviceId?.model, ticket.status].filter(Boolean).join(' · '), keywords: [ticket.deviceId?.serialNumber, ticket.location, ticket.assignedEngineer, ticket.category].join(' '), to: `/corporate/service-requests/${ticket._id}` })),
-    ...devices.map(device => ({ id: `d-${device._id}`, group: 'Devices', icon: Laptop, title: device.model, subtitle: [device.serialNumber, device.employeeName || 'Unassigned', device.location].filter(Boolean).join(' · '), keywords: [device.assetId, device.employeeId, device.department, device.deviceType].join(' '), to: `/corporate/devices/${device._id}` })),
-    ...[...employees.values()].map(person => ({ id: `e-${person.employeeId || person.name}`, group: 'Employees', icon: UserRound, title: person.name, subtitle: [person.employeeId, person.department, `${person.count} device${person.count === 1 ? '' : 's'}`].filter(Boolean).join(' · '), to: `/corporate/devices?search=${encodeURIComponent(person.name)}` })),
+    ...devices.map(device => ({ id: `d-${device._id}`, group: 'Devices', icon: Laptop, title: device.model, subtitle: [device.serialNumber, device.location].filter(Boolean).join(' · '), keywords: [device.assetId, device.department, device.deviceType].join(' '), to: `/corporate/devices/${device._id}` })),
   ];
 }
 
@@ -35,10 +26,9 @@ export const corporatePortal = {
     actions: [
       { id: 'a-raise', icon: FilePlus2, title: 'Raise service request', keywords: 'new create repair ticket', to: '/corporate/raise-request' },
       { id: 'a-find', icon: Search, title: 'Find a device', keywords: 'serial model employee search', to: '/corporate/devices' },
-      { id: 'a-coverage', icon: ShieldCheck, title: 'Check coverage', keywords: 'warranty amc expiry', to: '/corporate/warranty' },
+      { id: 'a-coverage', icon: ShieldCheck, title: 'Check coverage', keywords: 'warranty amc expiry expiring expired', to: '/corporate/warranty' },
       { id: 'a-service', icon: CalendarClock, title: 'Review recommended service', keywords: 'preventive maintenance due service recommended', to: '/corporate/service-recommendations' },
-      { id: 'a-track', icon: Ticket, title: 'Track service requests', keywords: 'status tickets progress', to: '/corporate/service-requests' },
-      { id: 'a-unassigned', icon: UserRoundPlus, title: 'Assign a device to an employee', keywords: 'unassigned allocate', to: '/corporate/unassigned-devices' },
+      { id: 'a-track', icon: Ticket, title: 'Track service requests', keywords: 'status tickets progress open', to: '/corporate/service-requests' },
       { id: 'a-ai', icon: Sparkles, title: 'Ask AI Support', keywords: 'help troubleshoot chat assistant', run: 'ai' },
     ],
   },
@@ -46,7 +36,6 @@ export const corporatePortal = {
     { label: 'Overview', items: [{ to: '/corporate/dashboard', icon: LayoutDashboard, label: 'Overview' }] },
     { label: 'Devices', items: [
       { to: '/corporate/devices', icon: Laptop, label: 'Devices' },
-      { to: '/corporate/unassigned-devices', icon: UserRoundPlus, label: 'Unassigned Devices' },
     ] },
     { label: 'Service', items: [
       { to: '/corporate/service-requests', icon: Ticket, label: 'Service Requests' },
@@ -59,6 +48,7 @@ export const corporatePortal = {
     { label: 'Communication', items: [
       { to: '/corporate/notifications', icon: Bell, label: 'Notifications', badge: 'unread' },
       { to: '/corporate/reviews', icon: MessageSquareText, label: 'Reviews' },
+      { to: '/corporate/reports', icon: BarChart3, label: 'Reports' },
     ] },
     { label: 'Support', items: [{ action: 'ai', icon: Sparkles, label: 'AI Support' }] },
     { label: 'Account', items: [{ to: '/corporate/profile', icon: UserRound, label: 'Profile' }] },

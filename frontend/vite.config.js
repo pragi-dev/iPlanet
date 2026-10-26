@@ -13,6 +13,8 @@ export default defineConfig({
     strictPort: true,
     allowedHosts: ['.loca.lt', '.localtunnel.me', '.devtunnels.ms', '.app.github.dev'],
     proxy: {
+      // Listed before '/api' so B2C calls reach the separate B2C server.
+      '/api/b2c': { target: process.env.B2C_DEV_TARGET || 'http://localhost:5100', changeOrigin: true },
       '/api': { target: 'http://localhost:5000', changeOrigin: true },
       '/uploads': { target: 'http://localhost:5000', changeOrigin: true }
     }

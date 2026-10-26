@@ -3,3 +3,7 @@ dist/
 backend/.env
 uploads/*
 !uploads/.gitkeep
+# B2C customer email attachments (default B2C_ATTACHMENT_DIR)
+backend/storage/
+# Local MongoDB data directory
+data/

@@ -12,7 +12,7 @@ import {
 // Corporate Admin can actually do: ask AI Support, rate a closed request, or
 // raise a new request for the device.
 function customerNextAction(data, ai) {
-  const { ticket, reviewEligible, reviewSubmitted, escalationContact } = data;
+  const { ticket, reviewEligible, reviewSubmitted, reviewPeriod, escalationContact } = data;
   const engineer = ticket.assignedEngineer;
   const help = ai.available ? [{ label: 'Get help', icon: Sparkles, onClick: ai.open, secondary: true }] : [];
   let next;
@@ -33,12 +33,12 @@ function customerNextAction(data, ai) {
       next = { tone: 'warning', eyebrow: 'On hold', title: 'Waiting for replacement parts', description: 'The repair resumes as soon as the parts arrive.', actions: help };
       break;
     case 'Completed':
-      next = { tone: 'success', eyebrow: 'Repair completed', title: 'Your device has been repaired', description: 'iPlanet Service will close the request, and you will then be asked to rate the service.', actions: [] };
+      next = { tone: 'success', eyebrow: 'Repair completed', title: 'Your device has been repaired', description: 'iPlanet Service will close the request. Requests closed in a month are rated together once that month ends.', actions: [] };
       break;
     default:
       next = reviewEligible
-        ? { tone: 'info', eyebrow: 'Your feedback', title: 'How was the service?', description: 'This request is closed. Rating it helps the iPlanet service team improve.', actions: [{ label: 'Rate service', icon: Star, to: `/corporate/reviews/${ticket._id}` }] }
-        : { tone: reviewSubmitted ? 'success' : 'neutral', eyebrow: 'Closed', title: reviewSubmitted ? 'Request closed · thanks for your review' : 'Request closed', description: 'If the issue comes back, raise a new request for this device.', actions: ticket.deviceId?._id ? [{ label: 'Raise new request', icon: FilePlus2, to: `/corporate/raise-request?device=${ticket.deviceId._id}`, secondary: true }] : [] };
+        ? { tone: 'info', eyebrow: 'Your feedback', title: `How was the service in ${reviewPeriod.label}?`, description: `This request is part of your ${reviewPeriod.label} review, which covers every request closed that month.`, actions: [{ label: `Rate ${reviewPeriod.label}`, icon: Star, to: `/corporate/reviews/${reviewPeriod.period}` }] }
+        : { tone: reviewSubmitted ? 'success' : 'neutral', eyebrow: 'Closed', title: reviewSubmitted ? 'Request closed · thanks for your review' : 'Request closed', description: reviewPeriod && !reviewPeriod.ended && !reviewSubmitted ? `If the issue comes back, raise a new request for this device. You can rate ${reviewPeriod.label} once the month ends.` : 'If the issue comes back, raise a new request for this device.', actions: ticket.deviceId?._id ? [{ label: 'Raise new request', icon: FilePlus2, to: `/corporate/raise-request?device=${ticket.deviceId._id}`, secondary: true }] : [] };
   }
   const risk = slaRisk(ticket);
   if (risk) {
@@ -87,7 +87,7 @@ export function TicketDetailEnhanced() {
           <Section stacked title="Issue" description={ticket.category ? `${ticket.category} request` : undefined}>
             <div className="stack-16">
               <p className="description-text">{ticket.description || 'No description provided.'}</p>
-              <InfoList columns={2} items={[['Priority', ticket.priority], ['Service location', ticket.location], ['Preferred date', formatDate(ticket.preferredServiceDate, '')], ['Service centre', ticket.serviceCentreId?.name], ['Raised', formatDateTime(ticket.createdAt, '')], ['Expected turnaround', formatTat(ticket.expectedTAT)]]} />
+              <InfoList columns={2} items={[['Priority', ticket.priority], ['Service location', ticket.location], ['Preferred date', formatDate(ticket.preferredServiceDate, '')], ...(ticket.deviceCount ? [['Number of devices', ticket.deviceCount]] : []), ['Service centre', ticket.serviceCentreId?.name], ['Raised', formatDateTime(ticket.createdAt, '')], ['Expected turnaround', formatTat(ticket.expectedTAT)]]} />
             </div>
           </Section>
           <Section stacked title="Device">
@@ -96,7 +96,7 @@ export function TicketDetailEnhanced() {
                 <div className="person-cell"><span className="thumb thumb-lg"><DeviceIcon type={device.deviceType} model={device.model} /></span><div><strong>{device.model || 'Device'}</strong><span className="cell-sub mono">{device.serialNumber}</span></div></div>
                 {device._id && <Link className="row-action" to={`/corporate/devices/${device._id}`}>View device passport</Link>}
               </div>
-              <InfoList columns={2} items={[['Asset ID', device.assetId], ['Employee', device.employeeName]]} />
+              <InfoList columns={2} items={[['Asset ID', device.assetId]]} />
               <CoverageTiles device={device} />
             </div>
           </Section>
