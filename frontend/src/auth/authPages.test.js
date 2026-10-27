@@ -46,7 +46,7 @@ test('Sign in shows a Sign up link that keeps the selected workspace', async () 
 test('Sign in offers B2C Escalations as its own workspace, without Sign up', async () => {
   const b2c = await render('/login?workspace=b2c');
   assert.equal(pressed(b2c), 'B2C Escalations');
-  assert.match(b2c, /value="b2c\.admin@iplanet\.local"/, 'the B2C admin profile is preselected');
+  assert.ok(!/b2c\.admin@iplanet\.local|Demo@123/.test(b2c), 'no demo account is offered: production has none');
   assert.ok(!hrefs(b2c).some(link => link.href.startsWith('/signup')), 'B2C accounts are created by an administrator');
 
   const signup = await render('/signup?workspace=b2c');

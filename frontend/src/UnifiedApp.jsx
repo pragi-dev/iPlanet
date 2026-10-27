@@ -85,14 +85,15 @@ function sessionIsValid() {
 
 function Login() {
   const profiles = {
-    corporate: { label: 'Corporate Admin', email: 'karthik.raj@democorporation.in' },
-    service: { label: 'iPlanet Service', email: 'service@iplanet.local' },
-    b2c: { label: 'B2C Escalations', email: 'b2c.admin@iplanet.local' },
+    corporate: { label: 'Corporate Admin', email: 'karthik.raj@democorporation.in', password: 'Demo@123' },
+    service: { label: 'iPlanet Service', email: 'service@iplanet.local', password: 'Demo@123' },
+    // No demo account: B2C staff are created by an administrator, and production has no B2C demo accounts.
+    b2c: { label: 'B2C Escalations', email: '', password: '' },
   };
   const [searchParams] = useSearchParams();
   const [profile, setProfile] = useState(() => signInWorkspaceFrom(searchParams));
   const [email, setEmail] = useState(() => profiles[signInWorkspaceFrom(searchParams)].email);
-  const [password, setPassword] = useState('Demo@123');
+  const [password, setPassword] = useState(() => profiles[signInWorkspaceFrom(searchParams)].password);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
@@ -113,7 +114,7 @@ function Login() {
       setBusy(false);
     }
   };
-  const selectProfile = nextProfile => { setProfile(nextProfile); setEmail(profiles[nextProfile].email); setError(''); };
+  const selectProfile = nextProfile => { setProfile(nextProfile); setEmail(profiles[nextProfile].email); setPassword(profiles[nextProfile].password); setError(''); };
   const [showPassword, setShowPassword] = useState(false);
   return <AuthLayout>
       <form className="login-card" onSubmit={submit} noValidate>
@@ -138,7 +139,7 @@ function Login() {
         {profile === 'b2c'
           ? <p className="login-switch">B2C accounts are created by your B2C administrator.</p>
           : <p className="login-switch">Don’t have an account? <Link to={`/signup${profile === 'service' ? '?workspace=service' : ''}`}>Sign up</Link></p>}
-        <p className="login-note"><span>Access is managed by your administrator.</span><span>Demo password <strong>Demo@123</strong></span></p>
+        <p className="login-note"><span>Access is managed by your administrator.</span>{profile !== 'b2c' && <span>Demo password <strong>Demo@123</strong></span>}</p>
       </form>
   </AuthLayout>;
 }
