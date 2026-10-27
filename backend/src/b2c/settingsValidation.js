@@ -27,7 +27,7 @@ export function validateSettingsUpdate(input = {}, current = {}, user = {}) {
       if (!/^[a-z0-9-]{2,40}$/.test(key)) fail('Inbox keys use lowercase letters, digits and hyphens.');
       const address = normaliseAddress(inbox.address);
       if (!address) fail(`Inbox "${key}" needs a valid email address.`);
-      if (!['test', 'microsoft_graph'].includes(inbox.provider)) fail(`Inbox "${key}" has an unsupported provider.`);
+      if (!['test', 'microsoft_graph', 'imap'].includes(inbox.provider)) fail(`Inbox "${key}" has an unsupported provider.`);
       const defaultCategory = inbox.defaultCategory || null;
       if (defaultCategory && !CATEGORIES.includes(defaultCategory)) fail(`Inbox "${key}" has an invalid default category.`);
       return { key, address, displayName: text(inbox.displayName, 80, 'Inbox name'), provider: inbox.provider, defaultCategory, defaultRegion: text(inbox.defaultRegion, 80, 'Default region'), enabled: bool(inbox.enabled) };

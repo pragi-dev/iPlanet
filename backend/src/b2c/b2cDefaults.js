@@ -25,11 +25,16 @@ export const DEFAULT_IDENTIFIER_RULES = [
   { key: 'serial-labelled', type: 'serialNumber', label: 'Serial number written after a "Serial No / S/N" label', pattern: '\\b(?:serial\\s*(?:no\\.?|number|#)?|s\\/n)\\s*[:#-]?\\s*([A-Z0-9]{8,14})\\b', flags: 'i', enabled: true, confirmed: false },
 ];
 
-export const TEMPLATE_KEYS = ['acknowledgement', 'clarification', 'final_resolution'];
+export const TEMPLATE_KEYS = ['acknowledgement', 'clarification', 'final_resolution', 'registration_request'];
 export const DEFAULT_TEMPLATES = [
-  { key: 'acknowledgement', label: 'Acknowledgement (sent automatically)', subject: 'We have received your email', body: 'Dear {{customerName}},\n\nThank you for writing to us. Your concern has been registered under reference {{reference}}.\n\nPlease keep {{reference}} in the subject line if you reply to this email.\n\nThis is an automated acknowledgement.', approved: false },
+  // The ticket number is in [brackets] in the subject so replies thread to the ticket.
+  // The serial number line is left out when no verified serial number is known.
+  { key: 'acknowledgement', label: 'Acknowledgement (sent automatically)', subject: 'Support Request Received – Ticket [{{ticketNumber}}]', body: 'Dear {{customerName}},\n\nWe have received your support request and created a support ticket.\n\nTicket Number: {{ticketNumber}}\nDevice Serial Number: {{serialNumber}}\nIssue Summary: {{issueSummary}}\n\nOur support team will review your request and follow the applicable support process. Please mention your ticket number in any further communication regarding this issue.\n\nThank you for contacting our support team.\n\nRegards,\n{{companyName}} Support Team', approved: false },
   { key: 'clarification', label: 'Clarification request', subject: 'Additional information required', body: 'Dear {{customerName}},\n\n{{message}}\n\nPlease reply to this email and keep {{reference}} in the subject line.', approved: false },
   { key: 'final_resolution', label: 'Final customer communication', subject: 'Update on your concern', body: 'Dear {{customerName}},\n\n{{message}}\n\nReference: {{reference}}', approved: false },
+  // Sent when the sender cannot be matched to a registered customer. The link carries a
+  // single-use token issued as the email is sent; it is never stored with the message.
+  { key: 'registration_request', label: 'Customer registration request (sent automatically)', subject: 'Customer Registration Required – Complete Your Details', body: 'Dear Customer,\n\nThank you for contacting our support team.\n\nWe could not confidently match your customer and device details with our existing records. To help us process your support request, please complete the customer and mobile purchase registration form using the secure link below.\n\nComplete your registration: {{registrationLink}}\n\nThe link can be used once and expires on {{linkExpiry}}.\n\nPlease provide accurate customer and purchase information so that we can identify your registered device and direct your request to the appropriate regional support team.\n\nAfter you submit the form, our system will validate your information and continue processing your support request.\n\nIf you believe your details are already registered, please contact our support team rather than submitting duplicate information.\n\nRegards,\n{{companyName}} Support Team', approved: false },
 ];
 
 export function defaultSettings({ testInboxAddress }) {

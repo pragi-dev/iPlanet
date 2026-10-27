@@ -942,6 +942,9 @@ button.chip:hover { background: var(--color-fill-strong); }
   transition: transform 240ms var(--ease);
 }
 .login-segmented[data-active='service'] .login-segmented-thumb { transform: translateX(100%); }
+.login-segmented[data-count='3'] { grid-template-columns: 1fr 1fr 1fr; }
+.login-segmented[data-count='3'] .login-segmented-thumb { width: calc((100% - 6px) / 3); }
+.login-segmented[data-count='3'][data-active='b2c'] .login-segmented-thumb { transform: translateX(200%); }
 .login-segmented button {
   position: relative; z-index: 1; height: 34px; padding: 0 10px; border: 0; border-radius: var(--radius-sm); background: transparent;
   font-size: 13px; font-weight: 500; color: var(--color-text-secondary); white-space: nowrap; transition: color 180ms var(--ease);

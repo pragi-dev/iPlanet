@@ -2,7 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowRight, Eye, EyeOff, Sparkles } from 'lucide-react';
 import { AuthLayout, WorkspaceSwitch } from './auth/AuthLayout';
-import { workspaceFrom } from './auth/workspace';
+import { signInWorkspaceFrom } from './auth/workspace';
 import { AICustomerSupportPanel } from './corporate/AICustomerSupportPanel';
 import { getDevice, getTicket, login, warmUpApi } from './corporate/api';
 import { clearRequestCache } from './ui/requestCache';
@@ -53,6 +53,9 @@ const B2CIntegrations = page(() => import('./b2c/B2CIntegrations'), 'B2CIntegrat
 const B2CSettings = page(() => import('./b2c/B2CSettings'), 'B2CSettings');
 const B2CNotifications = page(() => import('./b2c/B2CNotifications'), 'B2CNotifications');
 const SignUp = page(() => import('./auth/SignUp'), 'SignUp');
+const B2CRegistrations = page(() => import('./b2c/B2CRegistrations'), 'B2CRegistrations');
+// Public: reached from the customer registration email, no sign-in.
+const CustomerRegistration = page(() => import('./b2c/CustomerRegistration'), 'CustomerRegistration');
 
 function RouteLoading() {
   return <div className="route-loading" role="status" aria-live="polite"><span className="sr-only">Loading page…</span><span className="route-loading-bar" aria-hidden="true" /></div>;
@@ -84,10 +87,11 @@ function Login() {
   const profiles = {
     corporate: { label: 'Corporate Admin', email: 'karthik.raj@democorporation.in' },
     service: { label: 'iPlanet Service', email: 'service@iplanet.local' },
+    b2c: { label: 'B2C Escalations', email: 'b2c.admin@iplanet.local' },
   };
   const [searchParams] = useSearchParams();
-  const [profile, setProfile] = useState(() => workspaceFrom(searchParams));
-  const [email, setEmail] = useState(() => profiles[workspaceFrom(searchParams)].email);
+  const [profile, setProfile] = useState(() => signInWorkspaceFrom(searchParams));
+  const [email, setEmail] = useState(() => profiles[signInWorkspaceFrom(searchParams)].email);
   const [password, setPassword] = useState('Demo@123');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -115,9 +119,9 @@ function Login() {
       <form className="login-card" onSubmit={submit} noValidate>
         <div className="login-card-head">
           <h2>Sign in</h2>
-          <p>{profile === 'corporate' ? 'Access your organisation’s devices and service requests.' : 'Access the iPlanet service operations console.'}</p>
+          <p>{profile === 'corporate' ? 'Access your organisation’s devices and service requests.' : profile === 'b2c' ? 'Access the B2C customer escalations desk.' : 'Access the iPlanet service operations console.'}</p>
         </div>
-        <WorkspaceSwitch value={profile} onChange={selectProfile} />
+        <WorkspaceSwitch value={profile} onChange={selectProfile} includeB2C />
         <div className="login-fields">
           <label className="login-float">
             <input type="email" autoComplete="username" placeholder=" " value={email} onChange={event => setEmail(event.target.value)} required />
@@ -131,7 +135,9 @@ function Login() {
         </div>
         {error && <InlineAlert title="Sign-in failed">{error}</InlineAlert>}
         <button className="login-submit" type="submit" disabled={busy || !email || !password}>{busy ? <><span className="login-spinner" aria-hidden="true" />Signing in…</> : <>Sign in<ArrowRight size={17} aria-hidden="true" /></>}</button>
-        <p className="login-switch">Don’t have an account? <Link to={`/signup${profile === 'service' ? '?workspace=service' : ''}`}>Sign up</Link></p>
+        {profile === 'b2c'
+          ? <p className="login-switch">B2C accounts are created by your B2C administrator.</p>
+          : <p className="login-switch">Don’t have an account? <Link to={`/signup${profile === 'service' ? '?workspace=service' : ''}`}>Sign up</Link></p>}
         <p className="login-note"><span>Access is managed by your administrator.</span><span>Demo password <strong>Demo@123</strong></span></p>
       </form>
   </AuthLayout>;
@@ -141,7 +147,7 @@ function Login() {
 // app mounted left a stale "signed in" route after sign-out, which rendered a
 // blank page until the browser was refreshed.
 function LoginRoute() {
-  return sessionIsValid() ? <RoleAlias corporate={corporateHome} service={serviceHome} /> : <Login />;
+  return sessionIsValid() ? <Navigate to={homeFor(readUser())} replace /> : <Login />;
 }
 
 // Signed-in users have no use for sign-up and go to their portal instead.
@@ -286,10 +292,13 @@ function B2CRoutes() {
     <Route path="/b2c" element={<B2CProtected><B2CDashboard /></B2CProtected>} />
     <Route path="/b2c/tickets" element={<B2CProtected><B2CQueue /></B2CProtected>} />
     <Route path="/b2c/tickets/:id" element={<B2CProtected><B2CTicketDetail /></B2CProtected>} />
+    <Route path="/b2c/registrations" element={<B2CProtected><B2CRegistrations /></B2CProtected>} />
     <Route path="/b2c/reports" element={<B2CProtected><B2CReports /></B2CProtected>} />
     <Route path="/b2c/integrations" element={<B2CProtected><B2CIntegrations /></B2CProtected>} />
     <Route path="/b2c/settings" element={<B2CProtected><B2CSettings /></B2CProtected>} />
     <Route path="/b2c/notifications" element={<B2CProtected><B2CNotifications /></B2CProtected>} />
+    {/* Customer-facing and public: the server checks the link's token; no portal navigation. */}
+    <Route path="/b2c/customer-registration/:token" element={<CustomerRegistration />} />
   </>;
 }
 

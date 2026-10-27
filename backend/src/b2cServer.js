@@ -4,7 +4,7 @@ import compression from 'compression';
 import mongoose from 'mongoose';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { User, Notification, EscalationRule } from './models.js';
+import { User, Notification, EscalationRule, Device, Customer } from './models.js';
 import { auth, restrictB2COnlyStaff } from './middleware.js';
 import { hashPassword } from './passwords.js';
 import { createCorsMiddleware } from './corsPolicy.js';
@@ -19,6 +19,8 @@ dotenv.config({ path: path.join(__dirname, '../.env') });
 if (!process.env.JWT_SECRET) console.warn('[B2C server] JWT_SECRET is not set; tokens issued by the main API will be rejected.');
 
 const app = express();
+// Behind a proxy (e.g. Render), rate limits need the client address it forwards.
+if (process.env.TRUST_PROXY_HOPS) app.set('trust proxy', Number.parseInt(process.env.TRUST_PROXY_HOPS, 10) || 1);
 app.use(createCorsMiddleware());
 app.use(compression());
 app.use(express.json());
@@ -27,7 +29,9 @@ app.get('/api/health', (_, res) => res.json({ success: true, message: 'B2C API i
 
 // Same in-app notification records as the main API, so the portal bell shows B2C alerts.
 async function notifyUsers({ users, company, ticket, device, type, title, message, serviceCentreId, reviewId, action, priority }) { if (!users.length) return; await Notification.insertMany(users.map(user => ({ user: user._id, company, serviceCentreId, ticket: ticket?._id, device: device?._id, reviewId, portalRole: user.role, type, priority, title, message, action, read: false }))); }
-const b2c = createB2CModule({ User, Notification, EscalationRule, notifyUsers, auth });
+const b2c = createB2CModule({ User, Notification, EscalationRule, Device, Customer, notifyUsers, auth });
+// Public registration links first: the staff router requires a sign-in for everything else.
+app.use('/api/b2c/public', b2c.publicRouter);
 app.use('/api/b2c', b2c.router);
 app.use('/api/internal/b2c', b2c.internalRouter);
 app.use('/api', (req, res) => res.status(404).json({ message: `API endpoint not found: ${req.method} ${req.originalUrl}` }));

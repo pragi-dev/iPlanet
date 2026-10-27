@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { FlaskConical, Mail, PlugZap, RefreshCcw, Send } from 'lucide-react';
 import { Badge, Button, Card, EmptyState, ErrorState, Field, FilterSelect, InfoList, InlineAlert, PageHeader, PageSkeleton, formatDateTime, formatRelative, friendlyError, useAsync } from '../ui';
-import { getB2CHealth, getB2CInbound, getB2COutbound, getB2CTestOutbox, injectB2CTestEmail, retryB2CInbound, retryB2COutbound, runB2CCycle } from './api';
+import { getB2CHealth, getB2CInbound, getB2COutbound, getB2CTestOutbox, injectB2CTestEmail, retryB2CInbound, retryB2COutbound, runB2CCycle, verifyB2CImap } from './api';
 import { B2CShell, NoB2CAccess } from './shared';
 
 const MODES = {
@@ -11,10 +11,11 @@ const MODES = {
   not_configured: ['Not configured', 'neutral'],
   disabled: ['Disabled in this environment', 'neutral'],
 };
-const PROVIDERS = { test: 'Test adapter (in-memory)', microsoft_graph: 'Microsoft 365 (Graph API)', none: 'None' };
+const PROVIDERS = { test: 'Test adapter (in-memory)', microsoft_graph: 'Microsoft 365 (Graph API)', imap: 'IMAP mailbox', none: 'None' };
 const OUTCOMES = {
   ignored_auto_submitted: 'Ignored: automatic reply', ignored_bulk_precedence: 'Ignored: bulk or list mail', ignored_auto_reply_header: 'Ignored: auto-responder', ignored_delivery_report: 'Ignored: delivery report',
   ignored_own_address: 'Ignored: sent from a TCM inbox', ignored_invalid_sender: 'Ignored: no valid sender', ticket_created: 'Escalation created', appended_to_ticket: 'Added to existing escalation',
+  awaiting_registration: 'Waiting for customer registration (no escalation yet)', appended_to_registration: 'Added to a pending registration', ticket_created_after_registration: 'Escalation created after registration', ticket_created_by_staff: 'Escalation created by an admin without registration',
 };
 
 function ModeBadge({ mode }) {
@@ -63,7 +64,8 @@ export function B2CIntegrations() {
       {data.inboxes.map(inbox => <Card key={inbox.key} title={inbox.displayName || inbox.address} description={inbox.address} actions={<ModeBadge mode={inbox.enabled ? inbox.mode : 'disabled'} />}>
         <div className="stack-12">
           <p className="text-small">{PROVIDERS[inbox.provider] || inbox.provider} · {inbox.defaultCategory ? `all mail classed as ${inbox.defaultCategory}` : 'classified by keyword rules'}{inbox.enabled ? '' : ' · polling disabled'}</p>
-          {inbox.provider === 'microsoft_graph' && inbox.mode === 'live' && !inbox.status?.lastSuccessAt && <p className="text-muted text-small">Credentials are configured but no successful call has been made yet.</p>}
+          {!inbox.outbound && <p className="text-muted text-small">Receive only: acknowledgements and other customer emails are recorded on the ticket but not sent.</p>}
+          {['microsoft_graph', 'imap'].includes(inbox.provider) && inbox.mode === 'live' && !inbox.status?.lastSuccessAt && <p className="text-muted text-small">Credentials are configured but no successful call has been made yet.</p>}
           <ConnectorStatus status={inbox.status} mode={inbox.mode} />
           {inbox.status?.details?.fetched !== undefined && <p className="text-muted text-small">Last poll: {inbox.status.details.fetched} fetched, {inbox.status.details.stored} new, {inbox.status.details.duplicates} duplicate.</p>}
         </div>
@@ -74,7 +76,19 @@ export function B2CIntegrations() {
       <Card title="Customer email (outbound)" description="Acknowledgements, clarifications and final emails">
         <ConnectorStatus status={data.outbound} />
       </Card>
+      {data.ackSender && <Card title="Acknowledgement sender" description={data.ackSender.server?.from || 'Company address not set'} actions={<ModeBadge mode={!data.ackSender.enabled ? 'disabled' : data.ackSender.configured ? 'live' : 'not_configured'} />}>
+        <div className="stack-12">
+          {!data.ackSender.enabled
+            ? <p className="text-muted text-small">Off. Acknowledgements are sent by the ticket's inbox where it can send (not IMAP). Set B2C_ACK_EMAIL_ENABLED=true to send them from a company address.</p>
+            : !data.ackSender.configured
+              ? <InlineAlert tone="warning" title="Not configured">{data.ackSender.missing.join(', ')} not set on the server. Acknowledgements fail until this is fixed.</InlineAlert>
+              : <p className="text-small">SMTP {data.ackSender.server.host}:{data.ackSender.server.port} ({data.ackSender.server.security}) · {data.ackSender.unmatchedPolicy === 'sender' ? 'unmatched senders are acknowledged too' : 'only matched customers are acknowledged, at their registered address'}</p>}
+          <ConnectorStatus status={data.ackSender.status} />
+        </div>
+      </Card>}
     </div>
+
+    {data.imap && <ImapPanel imap={data.imap} onDone={refresh} />}
 
     <div className="grid-2">
       <Card title="Processing queues">
@@ -128,14 +142,44 @@ export function B2CIntegrations() {
   </B2CShell>;
 }
 
+// Checks the IMAP login and mailbox folder. Reads nothing; credentials stay on the server.
+function ImapPanel({ imap, onDone }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+  const check = async () => {
+    setBusy(true); setError(''); setResult(null);
+    try { setResult(await verifyB2CImap()); await onDone(); } catch (taskError) { setError(friendlyError(taskError)); } finally { setBusy(false); }
+  };
+  const mode = imap.configured ? 'live' : 'not_configured';
+  return <Card title="IMAP mailbox (incoming email)" description={imap.server.host ? `${imap.server.host}:${imap.server.port} · ${imap.server.secure ? 'SSL/TLS' : 'STARTTLS'} · folder ${imap.server.mailbox} · ${imap.server.user || '—'}` : 'Not set up on the server'} actions={<ModeBadge mode={mode} />}>
+    <div className="grid-2">
+      <div className="stack-12">
+        {imap.missing.length > 0 && <InlineAlert tone="warning" title="IMAP is not ready">{imap.missing.map(name => `${name} is not set`).join('; ')}. Set these on the backend server; they are never entered here.</InlineAlert>}
+        <p className="text-small">{imap.inboxes.length ? `Inboxes read from this mailbox: ${imap.inboxes.join(', ')}.` : 'No inbox reads this mailbox yet. Choose “IMAP mailbox” as the provider in B2C Settings.'}</p>
+        <p className="text-muted text-small">IMAP only reads mail. Customer emails for IMAP inboxes are recorded on the ticket as not sent.</p>
+        <ConnectorStatus status={imap.status} mode={mode} />
+      </div>
+      <div className="stack-12">
+        <div><Button icon={PlugZap} disabled={busy || !imap.configured} onClick={check}>{busy ? 'Checking…' : 'Check connection and login'}</Button></div>
+        {error && <InlineAlert title={error} />}
+        {result && <InlineAlert tone={result.ok ? 'success' : 'critical'} title={result.ok ? result.message : result.error}>{!result.ok && (result.retryable ? 'This looks temporary; try again shortly.' : 'Check the IMAP settings on the server.')}</InlineAlert>}
+      </div>
+    </div>
+  </Card>;
+}
+
 // TEST ADAPTER ONLY: puts an email in a test inbox and runs processing.
 function TestAdapterPanel({ inboxes, onDone }) {
-  const [form, setForm] = useState({ inboxKey: inboxes[0].key, from: 'test.customer.one@example.test', fromName: 'Test Customer One', subject: 'Repair delay', body: 'Hello,\n\nCase ID: TEST-CASE-0001\nMy device repair is delayed.\n' });
+  const [form, setForm] = useState({ inboxKey: inboxes[0].key, from: 'test.customer.one@example.test', fromName: 'Test Customer One', subject: 'Repair delay', body: 'Hello,\n\nCase ID: TEST-CASE-0001\nSerial No: DEMOCHN0001\nMy device repair is delayed.\n' });
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const outbox = useAsync(getB2CTestOutbox, []);
   const set = (key, value) => setForm(current => ({ ...current, [key]: value }));
+  // Only the messages for the escalation the last test email created or updated.
+  const reference = result?.email?.ticket?.reference;
+  const replies = reference ? (outbox.data || []).filter(message => message.subject?.startsWith(`[${reference}]`)) : [];
   const submit = async event => {
     event.preventDefault();
     setBusy(true); setError(''); setResult(null);
@@ -144,7 +188,7 @@ function TestAdapterPanel({ inboxes, onDone }) {
   return <Card title="Test adapter: simulate a customer email" description="For development and acceptance testing only. Nothing here is sent to or received from a real mailbox." actions={<Badge tone="warning"><FlaskConical size={12} aria-hidden="true" /> Test only</Badge>}>
     <div className="grid-2">
       <form className="stack-16" onSubmit={submit}>
-        <p className="text-muted text-small">Test CRM records: case IDs TEST-CASE-0001 / TEST-CASE-0002, serials TESTSERIAL01 / TESTSERIAL02 (TESTSERIALDUP matches two customers), and the matching @example.test addresses.</p>
+        <p className="text-muted text-small">Write the serial number in the body after a label, e.g. “Serial No: DEMOCHN0001”. It is looked up in the device records and the escalation goes to that device's region; without a serial number it goes to triage. Test CRM records: case IDs TEST-CASE-0001 / TEST-CASE-0002 and the matching @example.test addresses.</p>
         <Field label="Test inbox">{props => <select {...props} value={form.inboxKey} onChange={event => set('inboxKey', event.target.value)}>{inboxes.map(inbox => <option key={inbox.key} value={inbox.key}>{inbox.displayName || inbox.address}</option>)}</select>}</Field>
         <div className="grid-2"><Field label="Sender email">{props => <input {...props} type="email" value={form.from} onChange={event => set('from', event.target.value)} required />}</Field><Field label="Sender name">{props => <input {...props} value={form.fromName} onChange={event => set('fromName', event.target.value)} />}</Field></div>
         <Field label="Subject">{props => <input {...props} value={form.subject} onChange={event => set('subject', event.target.value)} />}</Field>
@@ -155,7 +199,9 @@ function TestAdapterPanel({ inboxes, onDone }) {
       </form>
       <div className="stack-12">
         <p className="side-section-title">Test outbox (not delivered)</p>
-        {outbox.data?.length ? <ul className="b2c-outbox">{outbox.data.slice(0, 8).map(message => <li key={message.providerMessageId}><strong>{message.subject}</strong><span className="text-muted text-small">To {message.to} · {formatDateTime(message.sentAt)}</span><p className="text-small description-text">{message.text}</p></li>)}</ul> : <p className="text-muted text-small">No test emails "sent" yet. Acknowledgements appear here once the acknowledgement template is approved.</p>}
+        {!reference ? <p className="text-muted text-small">Send a test email to see what the customer receives for it.</p>
+          : replies.length ? <ul className="b2c-outbox">{replies.map(message => <li key={message.providerMessageId}><strong>{message.subject}</strong><span className="text-muted text-small">To {message.to} · {formatDateTime(message.sentAt)}</span><p className="text-small description-text">{message.text}</p></li>)}</ul>
+          : <p className="text-muted text-small">Nothing "sent" to the customer for {reference} yet. The acknowledgement is held until its template is approved in B2C Settings.</p>}
       </div>
     </div>
   </Card>;

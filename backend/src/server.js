@@ -8,7 +8,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Review, Notification, EscalationRule, CallRecord, AITroubleshootingSession, ServiceFollowUp, AccountRequest, GoogleBusinessIntegration, GoogleBusinessLocationMapping, GoogleBusinessNotificationReceipt } from './models.js';
+import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Review, Notification, EscalationRule, CallRecord, AITroubleshootingSession, ServiceFollowUp, AccountRequest, GoogleBusinessIntegration, GoogleBusinessLocationMapping, GoogleBusinessNotificationReceipt, Customer } from './models.js';
 import { auth, allowRoles, jwtSecret, restrictB2COnlyStaff } from './middleware.js';
 import { hashPassword, verifyPassword, needsRehash } from './passwords.js';
 import { createCorsMiddleware } from './corsPolicy.js';
@@ -48,6 +48,8 @@ const app = express();
 // Behind a proxy (Render, a load balancer) set TRUST_PROXY to the number of proxy hops so
 // req.ip — used by the sign-up rate limit — is the client address rather than the proxy's.
 if (process.env.TRUST_PROXY) app.set('trust proxy', /^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY);
+// Behind a proxy (e.g. Render), rate limits need the client address it forwards.
+if (process.env.TRUST_PROXY_HOPS) app.set('trust proxy', Number.parseInt(process.env.TRUST_PROXY_HOPS, 10) || 1);
 app.use(createCorsMiddleware());
 app.use(compression());
 app.use(express.json());
@@ -62,8 +64,9 @@ app.use('/api/google-business', createGoogleBusinessRouter({ store: createMongoG
 // With B2C_SEPARATE_SERVER=true it runs only in src/b2cServer.js, so the
 // email scheduler never runs in both processes.
 const b2cSeparate = process.env.B2C_SEPARATE_SERVER === 'true';
-const b2c = b2cSeparate ? null : createB2CModule({ User, Notification, EscalationRule, notifyUsers, auth });
+const b2c = b2cSeparate ? null : createB2CModule({ User, Notification, EscalationRule, Device, Customer, notifyUsers, auth });
 if (b2c) {
+  app.use('/api/b2c/public', b2c.publicRouter);
   app.use('/api/b2c', b2c.router);
   app.use('/api/internal/b2c', b2c.internalRouter);
 } else console.info('[B2C] Served by the separate B2C server (B2C_SEPARATE_SERVER=true)');

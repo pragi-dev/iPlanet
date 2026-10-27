@@ -49,10 +49,23 @@ Customer email → TCM inbox
   → otherwise a new B2CEscalation:
        identifiers extracted with the configured patterns
        Service / Retail classified with the configured rules (never guessed)
-       CRM lookup (case ID → serial number → sender email)
-       anything missing or ambiguous → "Pending Triage" (B2C admin queue)
-       otherwise routed to the first level of the category's workflow path
-  → acknowledgement queued; sent only once its template is approved
+       customer matched in the customer records (customers collection) only when two
+         independent details fit the same record: two of name, email and phone, or the
+         email's serial number plus one of them
+       region taken from the device record (devices collection) with the email's serial
+         number (unless it is not the identified customer's); without one, from the
+         matched customer's only device
+       CRM lookup (case ID → the customer's verified serial number → sender email)
+       category or region missing or ambiguous → "Pending Triage" (B2C admin queue)
+       otherwise triage completes automatically and the ticket is routed to the first
+       level of the workflow path in that region (CRM no-match / error and identifier
+       gaps are recorded in the audit log, but do not hold the ticket)
+  → saving classification rules or inboxes re-checks tickets still in triage, so one that
+    now has a category and a region is routed the same way
+  → acknowledgement queued once per ticket; sent only once its template is approved.
+    With B2C_ACK_EMAIL_ENABLED it is sent from the separate company address over SMTP
+    to the matched customer's registered address (see "Acknowledgement from the company
+    address"); otherwise by the inbox (IMAP inboxes are receive-only: recorded as not sent)
 ```
 
 Every step is idempotent. One email always produces one ticket and one
@@ -83,9 +96,10 @@ Business Head → Trainer → CD Team Assistant Manager → Service Excellence L
 
 - Every new ticket's **path** runs through all enabled levels in order, for
   both Service and Retail. An admin can change the path of a single ticket.
-- When exactly one person holds the level for the ticket's region, the ticket
-  is assigned to them. Otherwise it waits in that level's queue until someone
-  takes ownership.
+- The ticket's region is the one on the matched customer's device record (see
+  [Regional routing](#regional-routing-by-device-region)). When exactly one
+  person holds the level for that region, the ticket is assigned to them.
+  Otherwise it waits in that level's queue until someone takes ownership.
 - Actions: take ownership, assign, accept assignment, start work, request
   clarification (emails the customer), reroute to any
   level, complete the repair, approve or return it, close, close without resolution, reopen,
@@ -96,6 +110,125 @@ Business Head → Trainer → CD Team Assistant Manager → Service Excellence L
 - The API enforces every permission. The UI only shows the actions the API
   reports as allowed. Tickets a user may not see return 404.
 - Every change is written to an append-only audit trail (`B2CAuditEvent`).
+
+### Regional routing by device region
+
+An escalation is routed to the region **pre-defined on the device record**: the
+device's `location` field in the portal's own `devices` collection, which is
+where the device was bought. **The serial number has priority**: when the email
+gives a serial number that is on a device record, the ticket gets that device's
+region and is routed, unless the customer details conflict or are ambiguous, or
+an identified customer quotes a serial number that is not theirs. Without a
+serial number, the customer is identified from `customers` and their only
+registered device is used. B2C
+Settings, the CRM, the customer's address, the sender's email domain, the inbox
+and the wording of the email are never used to pick a region. The code is in
+`backend/src/b2c/customerMatch.js` and `deviceRegion.js`, and the lookups in
+`createCustomerDirectory` and `createDeviceDirectory` (`backend/src/b2c/index.js`).
+
+1. **Serial number.** The email's serial number (found by the identifier rules,
+   upper-cased) is looked up in `devices` (exact match, ignoring case only; it
+   must match **exactly one** record). Its `location` becomes the region. Whether
+   the sender is that device's registered customer is recorded as `ownerCheck`
+   (`verified`, `customer_not_matched`, `other_customer` or `not_registered`).
+   An **identified** customer's ticket is routed by it only when it is
+   `verified`; `other_customer` or `not_registered` goes to triage
+   (`serial_customer_conflict`). An unidentified sender's ticket is still routed
+   by it (`customer_not_matched`), and the ticket page shows a notice. Another
+   owner is never named, and only a `verified` serial number is quoted in the
+   acknowledgement or used for the CRM.
+2. **Customer.** The email offers up to three details: **name** (the sender's
+   display name, or a labelled line such as "Name:" / "Customer name:"),
+   **email** (the sender's address and any address in the message) and
+   **phone** (after a label such as "Mobile:", or in `+` form; compared as
+   digits, so `+91 90000 00002`, `09000000002` and `9000000002` are the same;
+   other country codes are kept, so they never compare equal). Emails are
+   compared trimmed and case-insensitively; names whole, ignoring only spacing
+   and letter case (no partial matches). Records are looked up by email and
+   phone; a name is only compared with the records found, never searched.
+   A customer is identified only when **at least two details fit the same
+   record**, or the email's serial number is registered on that record and one
+   detail fits it. Each field counts once. The sender is not assumed to be the
+   purchaser: a relative writing for them is matched by the customer's details
+   in the message. Each purchase is its own customer record, so records with
+   the same email and mobile number are one person with several devices.
+
+   | Details | Outcome (`customerMatch.status`) |
+   | --- | --- |
+   | Two or three fit one person, nothing contradicts | `matched` (`method` `contact_details` or `serial_and_contact`; `matchedBy` lists them) |
+   | Only one fits anyone | `insufficient` → triage `customer_match_insufficient` |
+   | Details point to different people (e.g. email → A, phone → B), or a third detail contradicts the two that agree | `conflict` → triage `customer_identifiers_conflict` |
+   | More than one person qualifies | `ambiguous` → triage `customer_ambiguous` |
+   | Nothing fits | `not_found` → triage `customer_not_found` (without a serial number) |
+
+   The match decides who gets the acknowledgement, and, when the email has no
+   serial number, the device: the matched customer's only registered device.
+   With several devices, or no matched customer, the ticket goes to triage.
+3. **Region.** The device's `location` (spaces trimmed) becomes `ticket.region`.
+   A device without a location, a serial number on no device record (or on
+   two), or several serial numbers in the email go to triage.
+4. **Assignment.** The ticket goes to the first workflow level (Cluster Manager
+   by default). Staff are matched as before: people holding that level whose
+   `b2cRegions` include the region, or who have no region restriction. Region
+   names must be spelled the same as on the devices (`b2c:staff --regions`).
+   Exactly one such person → assigned to them. More than one → that level's
+   regional queue. **Nobody** → triage with `no_regional_assignee`, so a
+   configuration gap is visible. The later levels (RBH, Trainer, CD Team AM,
+   Service Excellence Lead) are unchanged.
+
+The customer match is stored on the ticket as `customerMatch` (status, method,
+the details that matched, the customer's ID and name; nothing for an
+unidentified, ambiguous or conflicting match). The region outcome is stored as `regionAssignment` (status, region,
+source, reason, the serial number used, the serial number in the email, device
+id and model). Both are written to the audit trail (`region_identified` /
+`region_not_identified`, with the match method or status, the details that
+matched and the device record id, but never the name, email address or phone
+number). The `routed` entry records the region, its source and whether the
+assignment was `automatic` (the only eligible person), `manual` (chosen in
+triage) or `queue` (waiting in the level's regional queue).
+The CRM is searched with a serial number only when it is the matched customer's,
+so quoting someone else's serial number never brings their CRM record onto the
+ticket.
+
+| Situation | Outcome (`regionAssignment.status` · triage reason) |
+| --- | --- |
+| Serial number on a device record with a location, registered to the identified customer | `automatic`; routed in that region · `ownerCheck: verified` |
+| Same, sender not identified (not found / one detail only) | `automatic`; routed in that region · `ownerCheck: customer_not_matched` |
+| Serial number not the identified customer's (another's, or nobody's) | `unresolved` · `serial_customer_conflict` |
+| Serial number given, but details conflict or fit several people | `unresolved` · `customer_identifiers_conflict` / `customer_ambiguous` |
+| No serial number, customer matched, one registered device | `automatic`; routed by that device · `ownerCheck: verified` |
+| No serial number, customer matched, several registered devices | `unresolved` · `customer_device_ambiguous` |
+| No serial number, no customer matches | `unresolved` · `customer_not_found` |
+| No serial number, only one detail matches | `unresolved` · `customer_match_insufficient` |
+| No serial number, contact details match two people / different people | `unresolved` · `customer_ambiguous` / `customer_identifiers_conflict` |
+| Device has no location | `unresolved` · `device_region_missing` |
+| Serial number not in `devices` | `unresolved` · `serial_not_found` |
+| Matched customer's registered serial number not in `devices` | `unresolved` · `registered_device_not_found` |
+| Serial number on two device records (different letter case) | `unresolved` · `multiple_device_matches` |
+| Several serial numbers in the email, or a malformed one | `unresolved` · `multiple_serial_numbers` / `serial_number_invalid` |
+| Region known, nobody holds the first level there | `automatic` · `no_regional_assignee` |
+| Database lookup fails | The email is retried with backoff; the ticket stays `pending` and is never routed without a region |
+
+Because the serial number has priority, an unidentified sender who knows a
+device's serial number can have a ticket routed to its region. That decides only the queue: the
+sender sees nothing about the device's owner, the acknowledgement goes by the
+customer match, and staff see the owner check on the ticket.
+
+**Manual review (B2C admin, Complete triage).** The admin sees the reason, the
+customer match and the device found. Completing triage matches the customer and
+looks the device up again, so an added serial number, or a customer or device
+registered since, is used. Otherwise the admin
+chooses one of the regions that exist on device records. Choosing a region that
+differs from the device's, or choosing one when none was identified, requires a
+**reason**. The ticket is then marked `manual` with the admin's name, and an
+audit entry `region_set` records the previous outcome. The admin may also pick
+the first-level assignee; the API checks that the person holds that level for
+the region.
+
+**Retries never undo decisions.** The region is evaluated only while the ticket
+is in triage and not yet routed. Reprocessing the email, a CRM retry, or a later
+change to the customer or device records never changes a routed ticket's region, assignee,
+workflow level or status, and never repeats the routing.
 
 ### SLA escalation (same process as B2B)
 
@@ -169,6 +302,11 @@ can be applied without a deploy:
 | Validation mode | `next_level` |
 | Customer email templates | Generic placeholder wording, **not approved**. Nothing is sent until an admin approves each template |
 
+An inbox's stored `defaultRegion` is no longer used for routing (the region is
+the region on the device record) and is no longer shown on the settings page.
+Tickets created before device-region routing keep their region and have no
+`regionAssignment`; no migration is needed.
+
 **Credentials and limits** come from environment variables (backend only; never
 stored in MongoDB or sent to the browser):
 
@@ -177,17 +315,183 @@ stored in MongoDB or sent to the browser):
 | `B2C_EMAIL_POLL_MINUTES` | `2` | In-process poll interval; `0` disables (use the cron endpoint) |
 | `B2C_CRON_SECRET` | – | Enables `POST /api/internal/b2c/run` with `Authorization: Bearer <secret>` |
 | `B2C_GRAPH_TENANT_ID`, `B2C_GRAPH_CLIENT_ID`, `B2C_GRAPH_CLIENT_SECRET` | – | Microsoft Graph mailbox connector |
+| `IMAP_HOST`, `IMAP_USER`, `IMAP_PASS` | – (all required) | Mailbox read by inboxes with provider `imap`, e.g. MilesWeb `mail.aavoraa.com`. `IMAP_PASS` is secret |
+| `IMAP_PORT`, `IMAP_SECURE`, `IMAP_MAILBOX`, `IMAP_MAX_MESSAGE_MB` | `993`, `true` on 993, `INBOX`, `40` | IMAP connection and limits |
+| `IMAP_CONNECTION_TIMEOUT_MS`, `IMAP_SOCKET_TIMEOUT_MS` | `15000`, `60000` | IMAP timeouts |
+| `B2C_ACK_EMAIL_ENABLED` | `false` | `true` sends acknowledgements from the company address below. Keep `false` in development and tests |
+| `B2C_ACK_FROM_EMAIL`, `B2C_ACK_FROM_NAME` | — | Sender address and display name, e.g. `noreply@aavoraa.com`, `iPlanet Support` |
+| `B2C_ACK_COMPANY_NAME` | `iPlanet` | `{{companyName}}` in the template |
+| `B2C_ACK_SMTP_HOST`, `B2C_ACK_SMTP_PORT`, `B2C_ACK_SMTP_SECURE` | —, `465`, `true` on 465 | SMTP server; `587` requires STARTTLS. TLS 1.2 or later |
+| `B2C_ACK_SMTP_USER`, `B2C_ACK_SMTP_PASS` | — | The sending mailbox's own login (**never the IMAP account**). Password in the hosting dashboard only |
+| `B2C_ACK_SMTP_TIMEOUT_MS` | `20000` | Connection and socket timeout |
+| `B2C_ACK_UNMATCHED_POLICY` | `verified` | `verified`: only matched customers are acknowledged; `sender`: unmatched senders too |
 | `B2C_CRM_PROVIDER` | `none` | `none` or `test`. A live value is added with the TCM CRM adapter |
 | `B2C_CRM_TIMEOUT_MS` | `15000` | CRM lookup timeout |
 | `B2C_ALLOW_TEST_ADAPTERS` | `false` | Test adapters are off when `NODE_ENV=production` unless this is `true` (staging only) |
 | `B2C_TEST_INBOX_ADDRESS` | `escalations@b2c-inbox.test` | Address of the seeded test inbox |
 | `B2C_REFERENCE_PREFIX` | `B2C` | Reference format `PREFIX-YYYY-NNNNNN` |
-| `B2C_MESSAGE_ID_DOMAIN` | `sabora.local` | Domain in outbound `Message-ID`s |
+| `B2C_MESSAGE_ID_DOMAIN` | `sabora.local` | Domain in outbound `Message-ID`s (Graph and test inboxes) |
 | `B2C_ATTACHMENT_DIR` | `backend/storage/b2c-attachments` | Attachment storage; **use a persistent disk in production** |
 | `B2C_MAX_ATTACHMENT_MB`, `B2C_MAX_ATTACHMENTS` | `10`, `10` | Per-file and per-email limits |
 | `B2C_MAX_PROCESSING_ATTEMPTS`, `B2C_MAX_SEND_ATTEMPTS`, `B2C_MAX_CRM_ATTEMPTS` | `5` | Retries before parking as failed |
 | `B2C_POLL_BATCH_SIZE` | `25` | Messages fetched per inbox per poll |
 | `B2C_DEMO_ACCOUNTS` | `true` | Local demo staff (`b2c.<role>@iplanet.local` / `Demo@123`); never created when `NODE_ENV=production` |
+
+### Incoming email from a MilesWeb mailbox (IMAP)
+
+B2C reads mail that arrives at a MilesWeb address (for example
+`test1@aavoraa.com`) over IMAP with the `imap` inbox provider
+(`connectors/imapEmailAdapter.js`, using `imapflow` and `mailparser`). IMAP only
+reads mail. Acknowledgements are sent by a separate SMTP account (see
+[Acknowledgement from the company address](#acknowledgement-from-the-company-address)).
+
+1. Set `IMAP_HOST`, `IMAP_USER` and `IMAP_PASS` on the server that runs B2C
+   processing (the `iplanet-b2c` service when `B2C_SEPARATE_SERVER=true`).
+   Port `993` (SSL/TLS) and folder `INBOX` are the defaults; port `143` uses
+   STARTTLS and refuses to log in without it. On startup the server logs
+   whether IMAP is configured and names any missing variable (never values).
+2. In **B2C Settings → Inboxes**, add an inbox with **Provider: IMAP mailbox**,
+   the mailbox address (it must be the address the server logs in as), and
+   **Poll this inbox** ticked.
+3. On **Integration Health → IMAP mailbox**, use **Check connection and login**.
+   It signs in and opens the folder; it reads and changes nothing. Each admin
+   gets 5 checks per 15 minutes (repeated failed logins can get the server IP
+   blocked), and every check is recorded in the audit log.
+4. Every poll (`B2C_EMAIL_POLL_MINUTES`) fetches unread messages, oldest first,
+   up to `B2C_POLL_BATCH_SIZE`. Messages are downloaded with `BODY.PEEK`, so
+   they stay unread until the ticket pipeline has stored them, and are then
+   marked read (`\Seen`). Anything already read in the mailbox is ignored, so
+   **an email someone opens in webmail before the poll will not become a
+   ticket.** Leave the mailbox to the poller, or mark a message unread again to
+   have it imported.
+5. Everything after fetching is the existing pipeline: de-duplication by
+   Message-ID, auto-reply and bounce filtering, attachment checks, threading of
+   replies (the `[B2C-YYYY-NNNNNN]` reference or `In-Reply-To`), CRM lookup,
+   classification, regional routing and SLA tracking.
+
+The provider message id is `<UIDVALIDITY>:<UID>`. Messages over
+`IMAP_MAX_MESSAGE_MB` (40) are imported from their headers only, with a note in
+the body. A failed login is reported on Integration Health and is not retried
+in a tight loop: polls happen only on the schedule. Errors are shown in our own
+wording (for example "IMAP login failed. Check the mailbox user name and
+password."), never the server's reply.
+
+#### IMAP inboxes are receive-only
+
+IMAP cannot send mail, so an IMAP inbox sends no customer email of its own. When
+the [company acknowledgement sender](#acknowledgement-from-the-company-address)
+is enabled, acknowledgements for every inbox are sent by it instead, and what
+follows applies only to clarification requests and final messages. Otherwise,
+acknowledgements, clarification requests and final messages for its tickets are
+still created in the outbound queue
+(`b2coutboundemails`), once per ticket as before, but the processing cycle marks
+them `skipped` (`heldReason: receive_only_inbox`) instead of sending them. The
+ticket's `acknowledgement.status` becomes `skipped`, the ticket timeline shows
+"Not sent — inbox is receive-only (IMAP)", and the audit log records
+`email_not_sent`. Ticket status, routing and SLA are unaffected. Staff must
+contact the customer by other means, or use a Microsoft 365 (Graph) inbox,
+which reads and sends.
+
+Settings saved before this change may carry an `outboundProvider: 'smtp'` on
+an inbox; it is removed on startup (`ensureB2CIndexes`) and ignored on save.
+Customer emails of an IMAP inbox that were queued or held before the upgrade
+are marked `skipped` on the next cycle.
+
+### Acknowledgement from the company address
+
+Every new escalation gets one acknowledgement, sent from a separate company
+address (for example `noreply@aavoraa.com`) over authenticated SMTP with TLS
+(`connectors/smtpAckSender.js`, using `nodemailer`). It is a different account
+from the IMAP inbox, with its own credentials. The customer's address is never
+used as the sender. Replies go to the escalation inbox (`Reply-To`), and the
+subject carries `[B2C-YYYY-NNNNNN]`, so a reply threads to the ticket.
+
+**When it is sent.** After the email has been processed, the customer matched,
+the ticket saved and its reference generated. Nothing is queued if the ticket
+cannot be created: the email is retried, and the acknowledgement is queued by the
+run that creates the ticket.
+
+**When an engineer is assigned.** Every ticket with an assigned engineer must be
+acknowledged. When an engineer is assigned (automatic routing, Complete triage,
+Assign, Take ownership or Reroute) and the acknowledgement was not sent earlier
+(receive-only inbox, customer not verified, or invalid address), it is tried
+again through the company sender. By then the sender may have been turned on, or
+triage may have identified the customer. The retry has its own dedupe key
+(`ack:<ticket id>:assigned`), so it is queued at most once and never resends a
+delivered acknowledgement. The recipient rules below still apply: under policy
+`verified`, a customer who is still unverified is not acknowledged.
+
+**Who receives it.**
+
+| Customer match | `B2C_ACK_UNMATCHED_POLICY=verified` (default) | `sender` |
+| --- | --- | --- |
+| Matched | The address the email **came from** (also when a relative wrote) | Same |
+| Not found, one detail only, ambiguous or conflicting | Not sent: `acknowledgement.status: skipped`, reason `customer_not_verified` | The address the email came from |
+
+The address in the customer records is never used as the recipient: it may be out
+of date, and a reply to the sender is what they expect.
+
+**Content.** The approved `acknowledgement` template (B2C Settings → Templates).
+The default wording is:
+
+```
+Subject: Support Request Received – Ticket [{{ticketNumber}}]
+
+Dear {{customerName}},
+We have received your support request and created a support ticket.
+Ticket Number: {{ticketNumber}}
+Device Serial Number: {{serialNumber}}
+Issue Summary: {{issueSummary}}
+...
+Regards,
+{{companyName}} Support Team
+```
+
+`{{customerName}}` is the registered name of a matched customer writing from their
+registered address, otherwise the sender's display name, or "Customer".
+`{{serialNumber}}` is only a serial number verified as the customer's registered
+device, and, when the sender is not writing from the registered address, only if
+their email quoted it; otherwise that line is left out. So a relative or dealer is
+never told anything from the customer records that they did not give. `{{issueSummary}}` is the email's subject, or the start of its text. No
+SLA or resolution time is promised. The email is plain text (no HTML), with no
+attachments, internal notes or other customers' data. Line breaks are removed
+from the subject, and recipients are validated, so no header can be injected.
+
+As before, a template must be **approved** by a B2C admin before anything is
+sent. Until then the acknowledgement waits as `held`. Settings created before
+this change keep their stored wording; replace it in B2C Settings with the text
+above if wanted.
+
+**Exactly one per ticket.** The outbound record has the unique key
+`ack:<ticket id>`, and a ticket that already has one, or was decided not to get
+one, is left alone when the email is reprocessed. States: `queued` → `sent`, or
+`held` (template not approved), `retrying` (with backoff 1, 5, 15, 30 and 60 minutes),
+`failed` (after `B2C_MAX_SEND_ATTEMPTS`, or at once for a permanent error such as
+a failed login or a refused recipient). Failed ones are listed on **Integration
+Health** and can be retried by an admin. The ticket's own status and routing are
+never affected.
+
+**What "sent" means.** The SMTP server accepted the message (a 2xx reply, kept
+as `responseCode`, with the `Message-ID` as `providerMessageId`). Delivery to
+the customer's mailbox is not confirmed. The Message-ID is saved before sending
+and reused on a retry. If the connection drops after the server accepted a
+message, the retry can send it twice; mail clients can recognise the duplicate by
+its Message-ID, but SMTP cannot guarantee exactly-once delivery.
+
+**Setting it up.**
+
+1. Create the sending mailbox (for example `noreply@aavoraa.com`) in MilesWeb
+   cPanel, with its own password.
+2. Set the `B2C_ACK_*` variables (below) on the server that runs B2C processing
+   (`iplanet-b2c` on Render), with `B2C_ACK_SMTP_PASS` entered in the Render
+   dashboard only. Then set `B2C_ACK_EMAIL_ENABLED=true`. On startup the server
+   logs the sender and server, or names any missing variable (never values).
+3. Approve the acknowledgement template in B2C Settings.
+4. DNS for the sending domain: the SPF record must allow the mail server, DKIM
+   signing should be on for the domain in cPanel, and a DMARC record is
+   recommended. Without them acknowledgements may land in spam or be rejected.
+5. **Integration Health → Acknowledgement sender** shows whether it is enabled
+   and configured, and the result of the last send.
 
 ## API endpoints
 
@@ -200,19 +504,23 @@ All routes are under `/api/b2c`. They need a signed-in `b2c_staff` or
 | `GET /me` | Current user's B2C role and regions |
 | `GET /dashboard` | Counts, distributions, recent activity (+ health counts for admins) |
 | `GET /staff` | B2C staff for assignment pickers |
-| `GET /tickets` | Queue: `status`, `category`, `region`, `level`, `assignee` (`me`/`unassigned`/id), `queue=validation`, `ageing`, `from`, `to`, `search`, `sort`, `order`, `page`, `limit` |
+| `GET /tickets` | Queue: `status`, `category`, `region` (device region), `regionStatus` (`automatic`/`manual`/`unresolved`/`pending`), `level`, `assignee` (`me`/`unassigned`/id), `queue=validation`, `ageing`, `from`, `to`, `search`, `sort`, `order`, `page`, `limit` |
 | `GET /tickets/:id` | Ticket, email conversation, audit trail, allowed actions |
-| `POST /tickets/:id/actions/:action` | Workflow actions (see above) |
+| `POST /tickets/:id/actions/:action` | Workflow actions (see above). `complete_triage` takes `category`, `region` (an active configured region), `regionReason` (required when the region is chosen rather than identified), optional `userId` (first-level assignee), `identifiers`, `rerunCrm`, `note` |
 | `GET /tickets/:id/attachments/:key` | Attachment download (always `Content-Disposition: attachment`, audited) |
 | `GET /reports` | By region, category, status, level, ageing, resolution time, monthly |
 | `GET /notifications`, `GET /notifications/unread-count`, `PATCH /notifications/:id/read`, `PATCH /notifications/read-all` | B2C notifications |
 | `GET /settings`, `PUT /settings` *(admin)* | Business-rule configuration |
 | `GET /integrations/health` *(admin)* | Inbox, CRM, outbound and scheduler status, queue counts |
 | `POST /integrations/run` *(admin)* | Run one processing cycle now |
+| `POST /integrations/imap/verify` *(admin)* | IMAP connection, login and mailbox-folder check; reads and changes nothing. Rate limited |
 | `GET /inbound`, `POST /inbound/:id/retry` *(admin)* | Failed / ignored inbound emails |
-| `GET /outbound`, `POST /outbound/:id/retry` *(admin)* | Held / failed customer emails |
+| `GET /outbound`, `POST /outbound/:id/retry` *(admin)* | Held / failed customer emails (`?status=skipped` lists those not sent for receive-only inboxes) |
 | `POST /test-adapter/inbound`, `GET /test-adapter/outbox` *(admin)* | **Test adapter only**; 404 when disabled |
 | `POST /api/internal/b2c/run` | External cron trigger (bearer secret; 404 when unset) |
+| `POST /tickets/:id/actions/send_registration` *(admin)* | Send or resend the customer registration link; triage only, rate limited |
+| `GET /registrations`, `GET /registrations/:id`, `POST /registrations/:id/actions/resend\|create_ticket` *(admin)* | Emails waiting for customer registration, which have no ticket yet ([b2c-customer-registration.md](b2c-customer-registration.md)) |
+| `GET` / `POST /api/b2c/public/registration/:token`, `POST …/:token/renew` | **Public**, token only: the customer registration form ([b2c-customer-registration.md](b2c-customer-registration.md)) |
 
 ## Data (MongoDB)
 
@@ -224,11 +532,12 @@ are unset for all B2B accounts. No migration of existing documents is needed.
 | --- | --- |
 | `b2csettings` | One `default` document of business rules |
 | `b2cinboundemails` | Normalised received emails, attachment metadata, processing state |
-| `b2cescalations` | Tickets: identifiers, CRM-mapped customer/devices/cases, workflow, validation, resolution |
-| `b2coutboundemails` | Customer emails with send state (queued / held / retrying / sent / failed) |
+| `b2cescalations` | Tickets: identifiers, CRM-mapped customer/devices/cases, device region (`regionAssignment`), workflow, validation, resolution |
+| `b2coutboundemails` | Customer emails with send state (queued / held / retrying / sent / failed / skipped) |
 | `b2cauditevents` | Append-only audit trail |
 | `b2cintegrationstatuses` | Last success/error per connector |
 | `b2ccounters` | Yearly reference sequence |
+| `b2cregistrationrequests` | Customer registration links (token hash only), their state and the submitted details |
 
 Only the mapped CRM fields are stored. Raw CRM responses are never persisted
 or logged.
@@ -293,6 +602,11 @@ cd backend
 npm run test:b2c        # unit tests + end-to-end flow against a throwaway MongoDB database
 ```
 
+`b2cRegistration.test.js` covers customer registration: no ticket before registration, links, the form, verification, creating the ticket once the registration is saved, and recovery from failures at each step.
+
+IMAP tests (`connectors/imapEmailAdapter.test.js` and the `IMAP:` flow tests) use a mocked
+server: no MilesWeb credentials are needed and nothing is read from a real mailbox.
+
 The flow suite connects to `mongodb://127.0.0.1:27017` (override with
 `B2C_TEST_MONGODB_URI`), uses a uniquely named database that it drops
 afterwards, and is skipped if MongoDB is unreachable.
@@ -303,11 +617,14 @@ afterwards, and is skipped if MongoDB is unreachable.
 | --- | --- |
 | Confirmation of the email provider (Microsoft 365 assumed; Gmail/IMAP would need another adapter behind the same interface) and the four inbox addresses | Live inbound/outbound email |
 | Graph app registration credentials and mailbox access policy | Live email |
+| MilesWeb mailbox password (`IMAP_PASS`) on the B2C server | Incoming email over IMAP |
 | CRM API documentation, credentials, environment URLs and field mapping | Live CRM lookup (the `crmConnector.js` contract lists what the adapter must return) |
 | Approved identifier formats (case ID, serial number, others) | Confirming or replacing the placeholder patterns |
 | Service vs Retail classification rules (per-inbox defaults and/or keywords) | Automatic classification; until then tickets go to triage |
-| Region list and staff-to-region mapping | Regional queues and auto-assignment |
+| Which Cluster Manager (and other level staff) covers each region, using the region names on the device records | Auto-assignment: a region nobody covers goes to triage |
+| Device records with serial number and region (`location`) in the `devices` collection | Automatic routing: an unknown serial number goes to triage |
 | Workflow paths per category and the validation rule | Routing beyond the proposed default |
 | Approved wording for the acknowledgement, clarification and final emails | Any customer email being sent |
 | Confirmation of SLA targets and escalation rules for B2C | B2C currently uses the B2B targets and rules |
 | Data retention period for emails and attachments | A retention job (none exists yet) |
+| Approved wording for the registration request email, the link lifetime, and who reviews registrations that fail verification | Sending registration links (`B2C_REGISTRATION_ENABLED`) |

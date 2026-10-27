@@ -46,3 +46,33 @@
   .b2c-message-outbound { margin-left: 0; }
   .b2c-message { padding: var(--space-4); }
 }
+
+/* Customer registration page (public, reached from the registration email). */
+.b2c-register { min-height: 100vh; background: var(--color-background); color: var(--color-text-primary); display: flex; flex-direction: column; }
+.b2c-register-top { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--color-divider); background: var(--color-surface); font-size: 15px; }
+.b2c-register-body { width: 100%; max-width: 760px; margin: 0 auto; padding: var(--space-8) 16px var(--space-10); }
+.b2c-register-card { display: grid; gap: var(--space-5); padding: var(--space-6); border-radius: var(--radius-lg); border: 1px solid var(--color-border); background: var(--color-surface); min-width: 0; }
+.b2c-register-intro { display: grid; gap: var(--space-2); }
+.b2c-register-intro h1, .b2c-register-outcome h1 { margin: 0; font-size: 24px; line-height: 1.25; }
+.b2c-register-intro p, .b2c-register-outcome p { margin: 0; }
+.b2c-register-eyebrow { display: inline-flex; align-items: center; gap: 6px; color: var(--color-success-text); font-size: 13px; font-weight: 500; }
+.b2c-register-section { border: 0; margin: 0; padding: var(--space-4) 0 0; border-top: 1px solid var(--color-divider); min-width: 0; }
+.b2c-register-section legend { padding: 0; margin-bottom: var(--space-3); font-weight: 600; font-size: 15px; }
+.b2c-register-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+.b2c-register-grid .field input, .b2c-register-grid .field select { width: 100%; }
+.b2c-register-confirm { display: flex; align-items: flex-start; gap: var(--space-2); font-size: 14px; line-height: 1.45; }
+.b2c-register-confirm input { margin-top: 3px; flex: none; }
+.b2c-register-outcome { justify-items: start; }
+.b2c-register-outcome-icon { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; background: var(--color-fill); }
+.b2c-register-success .b2c-register-outcome-icon { background: var(--color-success-soft); color: var(--color-success-text); }
+.b2c-register-warning .b2c-register-outcome-icon { background: var(--color-warning-soft); color: var(--color-warning-text); }
+.b2c-register-critical .b2c-register-outcome-icon { background: var(--color-error-soft); color: var(--color-error-text); }
+.b2c-register-info .b2c-register-outcome-icon { color: var(--color-info-text); }
+@media (max-width: 640px) {
+  .b2c-register-body { padding-top: var(--space-5); }
+  .b2c-register-card { padding: var(--space-5) var(--space-4); }
+  .b2c-register-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Registration state on the escalation page. */
+.b2c-registration-panel { display: grid; gap: var(--space-3); }

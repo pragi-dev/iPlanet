@@ -7,7 +7,7 @@ import { B2CShell, IDENTIFIER_LABELS, NoB2CAccess } from './shared';
 // B2C administrators maintain the rules TCM confirms here. Nothing on this
 // page is a TCM-approved default: rules show whether they are confirmed and
 // templates whether their wording is approved.
-const PLACEHOLDERS = '{{reference}}, {{customerName}}, {{subject}}, {{category}}, {{message}}';
+const PLACEHOLDERS = '{{reference}} (or {{ticketNumber}}), {{customerName}}, {{subject}}, {{issueSummary}}, {{category}}, {{message}}, {{companyName}}, {{serialNumber}} (a line using it is left out when no verified serial number is known), and in the registration request only {{registrationLink}} and {{linkExpiry}}';
 
 function useSection(initial, key, onSaved) {
   const [value, setValue] = useState(initial);
@@ -59,9 +59,8 @@ function SettingsForm({ settings, onSaved }) {
           <Field label="Key">{props => <input {...props} value={inbox.key} onChange={event => inboxes.setValue(update(inboxes.value, index, { key: event.target.value }))} />}</Field>
           <Field label="Mailbox address">{props => <input {...props} type="email" value={inbox.address} onChange={event => inboxes.setValue(update(inboxes.value, index, { address: event.target.value }))} />}</Field>
           <Field label="Name">{props => <input {...props} value={inbox.displayName} onChange={event => inboxes.setValue(update(inboxes.value, index, { displayName: event.target.value }))} />}</Field>
-          <Field label="Provider">{props => <select {...props} value={inbox.provider} onChange={event => inboxes.setValue(update(inboxes.value, index, { provider: event.target.value }))}><option value="test">Test adapter</option><option value="microsoft_graph">Microsoft 365 (Graph)</option></select>}</Field>
+          <Field label="Provider">{props => <select {...props} value={inbox.provider} onChange={event => inboxes.setValue(update(inboxes.value, index, { provider: event.target.value }))}><option value="test">Test adapter</option><option value="microsoft_graph">Microsoft 365 (Graph)</option><option value="imap">IMAP mailbox (e.g. MilesWeb) — receive only</option></select>}</Field>
           <Field label="Category for this inbox" hint="Only if TCM confirms the inbox handles one category.">{props => <select {...props} value={inbox.defaultCategory || ''} onChange={event => inboxes.setValue(update(inboxes.value, index, { defaultCategory: event.target.value || null }))}><option value="">Use keyword rules</option><option>Service</option><option>Retail</option></select>}</Field>
-          <Field label="Default region">{props => <input {...props} value={inbox.defaultRegion} onChange={event => inboxes.setValue(update(inboxes.value, index, { defaultRegion: event.target.value }))} />}</Field>
           <label className="row text-small"><input type="checkbox" checked={inbox.enabled} onChange={event => inboxes.setValue(update(inboxes.value, index, { enabled: event.target.checked }))} />Poll this inbox</label>
           <Button size="sm" variant="ghost" icon={Trash2} onClick={() => inboxes.setValue(inboxes.value.filter((_, other) => other !== index))}>Remove</Button>
         </div>)}

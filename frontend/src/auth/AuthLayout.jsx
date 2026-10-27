@@ -31,16 +31,17 @@ export function AuthLayout({ children }) {
 
     <footer className="login-foot">
       <span>Copyright © {new Date().getFullYear()} iPlanet. All rights reserved.</span>
-      <span>Corporate Self-Care · iPlanet Service</span>
+      <span>Corporate Self-Care · iPlanet Service · B2C Escalations</span>
     </footer>
   </main>;
 }
 
-// Corporate Self-Care / iPlanet Service switch shared by both cards.
-export function WorkspaceSwitch({ value, onChange }) {
-  return <div className="login-segmented" role="group" aria-label="Workspace" data-active={value}>
+// Corporate Self-Care / iPlanet Service switch shared by both cards; Sign in adds B2C Escalations.
+export function WorkspaceSwitch({ value, onChange, includeB2C = false }) {
+  return <div className="login-segmented" role="group" aria-label="Workspace" data-active={value} data-count={includeB2C ? 3 : 2}>
     <span className="login-segmented-thumb" aria-hidden="true" />
     <button type="button" aria-pressed={value === 'corporate'} onClick={() => onChange('corporate')}>Corporate Self-Care</button>
     <button type="button" aria-pressed={value === 'service'} onClick={() => onChange('service')}>iPlanet Service</button>
+    {includeB2C && <button type="button" aria-pressed={value === 'b2c'} onClick={() => onChange('b2c')}>B2C Escalations</button>}
   </div>;
 }
