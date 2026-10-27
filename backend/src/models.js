@@ -1,6 +1,10 @@
 import mongoose from 'mongoose';
 
-const userSchema = new mongoose.Schema({ name: String, email: { type: String, unique: true }, password: { type: String, select: false }, role: { type: String, default: 'corporate_admin' }, company: String, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, phone: String });
+const userSchema = new mongoose.Schema({ name: String, email: { type: String, unique: true }, password: { type: String, select: false }, role: { type: String, default: 'corporate_admin' }, company: String, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, phone: String,
+  // B2C escalation access: 'b2c_admin' or a workflow level key (see b2c/b2cDefaults.js). Held by
+  // 'b2c_staff' accounts (B2C only) or by iplanet_service accounts that also work B2C escalations.
+  // Unset for every B2B-only account. Regions limit which level queues the user sees; empty means all.
+  b2cRole: { type: String, default: null }, b2cRegions: { type: [String], default: undefined } });
 const companySchema = new mongoose.Schema({ name: { type: String, unique: true }, companyId: { type: String, unique: true }, contactName: String, contactEmail: String, phone: String, location: String });
 const serviceCentreSchema = new mongoose.Schema({
   serviceCentreId: { type: String, unique: true, sparse: true },
@@ -108,6 +112,24 @@ const notificationSchema = new mongoose.Schema({ user: { type: mongoose.Schema.T
 const timelineSchema = new mongoose.Schema({ ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' }, status: String, message: String, note: String, updatedBy: String, userRole: String, timestamp: { type: Date, default: Date.now } });
 const callRecordSchema = new mongoose.Schema({ ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket', required: true }, agentUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, agentName: String, ticketNumber: String, customerName: String, customerPhone: String, outcome: { type: String, enum: ['Issue Resolved Remotely', 'Customer Needs Further Assistance', 'Engineer Visit Required', 'Customer Unavailable', 'Call Back Required'], default: 'Customer Unavailable' }, notes: String, callStatus: { type: String, default: 'Call Attempted' } }, { timestamps: true });
 const aiSupportSessionSchema = new mongoose.Schema({ ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' }, customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, preparedRequest: { type: Object }, sessionId: { type: String, unique: true, required: true }, issueContext: { type: Object, default: {} }, messages: [{ role: { type: String, enum: ['user', 'assistant'], required: true }, content: { type: String, required: true }, timestamp: { type: Date, default: Date.now } }], troubleshootingSteps: [{ step: String, outcome: String, timestamp: { type: Date, default: Date.now } }], customerResponses: [{ response: String, timestamp: { type: Date, default: Date.now } }], result: { type: String, default: 'In Progress' }, status: { type: String, default: 'In Progress' }, escalationStatus: { type: String, enum: ['Not Escalated', 'Recommended Service Assistance', 'Resolved'], default: 'Not Escalated' }, providerAvailable: { type: Boolean, default: false }, providerStatus: String, feedback: { promptedAt: Date, rating: { type: Number, min: 1, max: 5 }, comment: { type: String, trim: true, maxlength: 2000 }, submittedAt: Date } }, { timestamps: true });
+// MongoDB has no auto-increment, so sequence numbers come from an atomic $inc
+// on a per-key counter document.
+const counterSchema = new mongoose.Schema({ key: { type: String, required: true, unique: true }, seq: { type: Number, default: 0 } });
+const Counter = mongoose.model('Counter', counterSchema);
+const customerSchema = new mongoose.Schema({
+  customerId: { type: Number, unique: true, immutable: true },
+  name: { type: String, required: true, trim: true },
+  mobileNumber: { type: String, required: true, trim: true, match: /^\+?[0-9]{10,15}$/ },
+  email: { type: String, trim: true, lowercase: true, match: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ },
+  deviceSerialNumber: { type: String, required: true, trim: true, index: true },
+}, { timestamps: true });
+// Runs after validation, so a rejected customer doesn't use up a number.
+customerSchema.pre('save', async function assignCustomerId() {
+  if (!this.isNew || this.customerId != null) return;
+  const counter = await Counter.findOneAndUpdate({ key: 'customer' }, { $inc: { seq: 1 } }, { upsert: true, new: true });
+  this.customerId = counter.seq;
+});
+customerSchema.index({ mobileNumber: 1 });
 // Indexes for the queries every portal page runs (lists by company, status,
 // device, engineer, recipient and time).
 deviceSchema.index({ companyId: 1 });
@@ -137,3 +159,4 @@ export const EscalationRule = mongoose.model('EscalationRule', escalationRuleSch
 export const ServiceFollowUp = mongoose.model('ServiceFollowUp', serviceFollowUpSchema);
 export const CallRecord = mongoose.model('CallRecord', callRecordSchema);
 export const AITroubleshootingSession = mongoose.model('AITroubleshootingSession', aiSupportSessionSchema);
+export const Customer = mongoose.model('Customer', customerSchema);

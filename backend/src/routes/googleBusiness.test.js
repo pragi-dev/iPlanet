@@ -15,6 +15,9 @@ import { createGoogleBusinessOAuthState, encryptGoogleBusinessToken, decryptGoog
 
 const JWT_SECRET = 'test-jwt-secret';
 process.env.JWT_SECRET = JWT_SECRET;
+// The auth module loads the developer's .env on import. Its token key must not
+// replace the test secret the router encrypts with (ENV sets none, so JWT_SECRET applies).
+delete process.env.GOOGLE_BUSINESS_TOKEN_ENCRYPTION_KEY;
 const ENV = {
   GOOGLE_CLIENT_ID: 'test-client', GOOGLE_CLIENT_SECRET: 'test-secret', GOOGLE_REDIRECT_URI: 'https://api.example.test/api/google-business/callback',
   GOOGLE_BUSINESS_SCOPE: 'https://www.googleapis.com/auth/business.manage', JWT_SECRET, GOOGLE_BUSINESS_RETURN_URL: 'https://portal.example.test/service/reviews/google',

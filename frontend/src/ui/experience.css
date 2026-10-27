@@ -75,6 +75,7 @@
 .journey-current .journey-dot::after, .journey-hold .journey-dot::after { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--color-accent); }
 .journey-current .journey-label { color: var(--color-text-primary); font-weight: 600; }
 .journey-current .journey-meta { color: var(--color-text-secondary); }
+.journey-flag { font-size: 12px; font-weight: 500; color: var(--color-accent); }
 .journey-hold .journey-dot { border-color: var(--color-warning); }
 .journey-hold .journey-dot::after { background: var(--color-warning); }
 .journey-hold .journey-label { color: var(--color-warning-text); font-weight: 600; }

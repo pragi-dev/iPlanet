@@ -69,7 +69,7 @@ export function JourneyTrack({ steps, label, orientation = 'vertical' }) {
     {steps.map(step => <li key={step.key || step.label} className={`journey-step journey-${step.state}`} aria-current={step.state === 'current' || step.state === 'hold' ? 'step' : undefined}>
       <span className="journey-dot" aria-hidden="true">{step.state === 'done' && <Check size={12} strokeWidth={3} />}</span>
       <span className="journey-text">
-        <span className="journey-label">{step.label}{step.state === 'hold' && <span className="sr-only"> (on hold)</span>}{step.state === 'current' && <span className="sr-only"> (current stage)</span>}</span>
+        <span className="journey-label">{step.label}{step.state === 'hold' && <span className="sr-only"> (on hold)</span>}{step.state === 'current' && <span className="journey-flag"> (current stage)</span>}</span>
         {step.meta && <span className="journey-meta">{step.meta}</span>}
       </span>
     </li>)}

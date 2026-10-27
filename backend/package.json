@@ -5,10 +5,16 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
+    "b2c:dev": "node --watch src/b2cServer.js",
+    "b2c:start": "node src/b2cServer.js",
     "seed": "node src/seed.js",
     "seed:demo": "node src/seed.js --reset-demo",
+    "seed:customers": "node src/seedCustomers.js",
     "test:ai": "node --test src/ai/aiEngine.test.js",
     "test:proactive": "node --test src/services/proactiveService/serviceStatus.test.js",
+    "test:b2c": "node --test src/b2c/b2cUnits.test.js src/b2c/connectors/imapEmailAdapter.test.js src/b2c/b2cFlow.test.js src/b2c/b2cRegistration.test.js",
+    "b2c:staff": "node src/b2c/b2cStaffCli.js",
+    "b2c:premature-tickets": "node src/b2c/prematureTicketsCli.js",
     "test:google": "node --test src/routes/googleBusiness.test.js src/integrations/googleBusinessProfile/googleBusinessProfileErrors.test.js src/integrations/googleBusinessProfile/googleBusinessProfileProvider.test.js"
   },
   "dependencies": {
@@ -17,8 +23,11 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^5.1.0",
+    "imapflow": "2.3.0",
     "jsonwebtoken": "^9.0.2",
+    "mailparser": "3.9.37",
     "mongoose": "^8.18.0",
-    "multer": "^2.0.2"
+    "multer": "^2.0.2",
+    "nodemailer": "10.0.16"
   }
 }

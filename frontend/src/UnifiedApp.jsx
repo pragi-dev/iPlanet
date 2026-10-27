@@ -42,6 +42,16 @@ const InternalReviewDetail = page(internalReviews, 'InternalReviewDetail');
 const GoogleBusinessProfile = page(() => import('./service/GoogleBusinessProfile'), 'GoogleBusinessProfile');
 const ProactiveService = page(() => import('./service/ProactiveService'), 'ProactiveService');
 const ServiceRecommendations = page(() => import('./corporate/ServiceRecommendations'), 'ServiceRecommendations');
+const B2CDashboard = page(() => import('./b2c/B2CDashboard'), 'B2CDashboard');
+const B2CQueue = page(() => import('./b2c/B2CQueue'), 'B2CQueue');
+const B2CTicketDetail = page(() => import('./b2c/B2CTicketDetail'), 'B2CTicketDetail');
+const B2CReports = page(() => import('./b2c/B2CReports'), 'B2CReports');
+const B2CIntegrations = page(() => import('./b2c/B2CIntegrations'), 'B2CIntegrations');
+const B2CSettings = page(() => import('./b2c/B2CSettings'), 'B2CSettings');
+const B2CNotifications = page(() => import('./b2c/B2CNotifications'), 'B2CNotifications');
+const B2CRegistrations = page(() => import('./b2c/B2CRegistrations'), 'B2CRegistrations');
+// Public: reached from the customer registration email, no sign-in.
+const CustomerRegistration = page(() => import('./b2c/CustomerRegistration'), 'CustomerRegistration');
 
 function RouteLoading() {
   return <div className="route-loading" role="status" aria-live="polite"><span className="sr-only">Loading page…</span><span className="route-loading-bar" aria-hidden="true" /></div>;
@@ -51,6 +61,10 @@ const TOKEN_KEY = 'iplanet_token';
 const USER_KEY = 'iplanet_user';
 const corporateHome = '/corporate/dashboard';
 const serviceHome = '/service/dashboard';
+const b2cHome = '/b2c';
+// B2C-only staff ('b2c_staff') have no B2B pages; the API refuses their B2B requests too.
+const B2C_ONLY_ROLE = 'b2c_staff';
+const homeFor = user => (user?.role === 'iplanet_service' ? serviceHome : user?.role === B2C_ONLY_ROLE ? b2cHome : corporateHome);
 
 function readUser() {
   try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null'); } catch { return null; }
@@ -86,7 +100,7 @@ function Login() {
       clearRequestCache();
       localStorage.setItem(TOKEN_KEY, result.token);
       localStorage.setItem(USER_KEY, JSON.stringify(result.user));
-      navigate(result.user.role === 'iplanet_service' ? serviceHome : corporateHome, { replace: true });
+      navigate(homeFor(result.user), { replace: true });
     } catch (loginError) {
       setError(loginError.message || 'Unable to sign in. Please try again.');
     } finally {
@@ -165,6 +179,7 @@ const prefetchedPortals = new Set();
 const portalChunks = {
   corporate_admin: [corporatePages, corporateExtras, reviewPages, () => import('./corporate/RequestEnhanced'), () => import('./corporate/TicketDetailEnhanced'), () => import('./corporate/CoverageEnhanced'), () => import('./corporate/ServiceRecommendations')],
   iplanet_service: [servicePages, serviceExtras, internalReviews, () => import('./service/companyQueue'), () => import('./service/OperationalTicketDetail'), () => import('./service/ProactiveService'), () => import('./service/enrollment'), () => import('./service/coverage')],
+  [B2C_ONLY_ROLE]: [() => import('./b2c/B2CQueue'), () => import('./b2c/B2CTicketDetail'), () => import('./b2c/B2CReports')],
 };
 function usePrefetchPortal(role) {
   useEffect(() => {
@@ -181,7 +196,19 @@ function Protected({ role, children }) {
   const valid = sessionIsValid();
   usePrefetchPortal(valid && user?.role === role ? role : null);
   if (!valid) return <Navigate to="/login" replace />;
-  if (user.role !== role) return <Navigate to={user.role === 'iplanet_service' ? serviceHome : corporateHome} replace />;
+  if (user.role !== role) return <Navigate to={homeFor(user)} replace />;
+  return children;
+}
+
+// B2C pages are open to B2C-only staff and to iPlanet Service accounts. The API
+// checks the B2C role on every request, so a Service account without one sees
+// the "no access" state rather than a redirect (its role may be granted after sign-in).
+function B2CProtected({ children }) {
+  const user = readUser();
+  const valid = sessionIsValid();
+  usePrefetchPortal(valid && user?.role === B2C_ONLY_ROLE ? B2C_ONLY_ROLE : null);
+  if (!valid) return <Navigate to="/login" replace />;
+  if (![B2C_ONLY_ROLE, 'iplanet_service'].includes(user.role)) return <Navigate to={homeFor(user)} replace />;
   return children;
 }
 
@@ -189,6 +216,7 @@ function RoleAlias({ corporate, service }) {
   const user = readUser();
   const location = useLocation();
   if (!sessionIsValid()) return <Navigate to="/login" replace />;
+  if (user?.role === B2C_ONLY_ROLE) return <Navigate to={b2cHome} replace />;
   return <Navigate to={`${user?.role === 'iplanet_service' ? service : corporate}${location.search}`} replace />;
 }
 
@@ -196,6 +224,7 @@ function RoleDetailAlias({ corporateBase, serviceBase }) {
   const { id } = useParams();
   const user = readUser();
   if (!sessionIsValid()) return <Navigate to="/login" replace />;
+  if (user?.role === B2C_ONLY_ROLE) return <Navigate to={b2cHome} replace />;
   if (user?.role === 'iplanet_service') return <Navigate to={serviceBase ? `${serviceBase}/${id}` : serviceHome} replace />;
   return <Navigate to={`${corporateBase}/${id}`} replace />;
 }
@@ -273,6 +302,21 @@ function ServiceRoutes() {
   </>;
 }
 
+function B2CRoutes() {
+  return <>
+    <Route path="/b2c" element={<B2CProtected><B2CDashboard /></B2CProtected>} />
+    <Route path="/b2c/tickets" element={<B2CProtected><B2CQueue /></B2CProtected>} />
+    <Route path="/b2c/tickets/:id" element={<B2CProtected><B2CTicketDetail /></B2CProtected>} />
+    <Route path="/b2c/registrations" element={<B2CProtected><B2CRegistrations /></B2CProtected>} />
+    <Route path="/b2c/reports" element={<B2CProtected><B2CReports /></B2CProtected>} />
+    <Route path="/b2c/integrations" element={<B2CProtected><B2CIntegrations /></B2CProtected>} />
+    <Route path="/b2c/settings" element={<B2CProtected><B2CSettings /></B2CProtected>} />
+    <Route path="/b2c/notifications" element={<B2CProtected><B2CNotifications /></B2CProtected>} />
+    {/* Customer-facing and public: the server checks the link's token; no portal navigation. */}
+    <Route path="/b2c/customer-registration/:token" element={<CustomerRegistration />} />
+  </>;
+}
+
 export default function UnifiedApp() {
   return <BrowserRouter>
     <AIAssistantProvider>
@@ -282,6 +326,7 @@ export default function UnifiedApp() {
         <Route path="/login" element={<LoginRoute />} />
         {CorporateRoutes()}
         {ServiceRoutes()}
+        {B2CRoutes()}
         <Route path="/dashboard" element={<RoleAlias corporate={corporateHome} service={serviceHome} />} />
         <Route path="/devices" element={<RoleAlias corporate="/corporate/devices" service={serviceHome} />} />
         <Route path="/devices/:id" element={<RoleDetailAlias corporateBase="/corporate/devices" serviceBase={null} />} />

@@ -6,6 +6,7 @@ test('buildGoogleBusinessAuthUrl includes required OAuth parameters', () => {
   const url = buildGoogleBusinessAuthUrl({
     clientId: 'test-client-id',
     redirectUri: 'http://localhost:5000/api/google-business/callback',
+    scope: 'https://www.googleapis.com/auth/business.manage',
     state: JSON.stringify({ companyId: 'company-123', userId: 'user-456' })
   });
 
@@ -40,14 +41,22 @@ test('parseGoogleBusinessState reads encoded OAuth state', () => {
 });
 
 test('buildGoogleBusinessAuthUrl falls back to the active Google OAuth env vars', () => {
-  const url = buildGoogleBusinessAuthUrl({
-    clientId: '',
-    redirectUri: '',
-    state: JSON.stringify({ companyId: 'company-123', userId: 'user-456' }),
-  });
+  // Set here so the result does not depend on the developer's .env.
+  const keys = ['GOOGLE_CLIENT_ID', 'GOOGLE_REDIRECT_URI', 'GOOGLE_BUSINESS_SCOPE'];
+  const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  Object.assign(process.env, { GOOGLE_CLIENT_ID: 'env-client.apps.googleusercontent.com', GOOGLE_REDIRECT_URI: 'https://api.example.test/api/google-business/callback', GOOGLE_BUSINESS_SCOPE: 'https://www.googleapis.com/auth/business.manage' });
+  try {
+    const url = buildGoogleBusinessAuthUrl({
+      clientId: '',
+      redirectUri: '',
+      state: JSON.stringify({ companyId: 'company-123', userId: 'user-456' }),
+    });
 
-  assert.match(url, /client_id=353090434146-5ttsesn1vok7k9kdk1mn2558dco06ioe.apps.googleusercontent.com/);
-  assert.match(url, /redirect_uri=https%3A%2F%2Fiplanet-backend.onrender.com%2Fapi%2Fgoogle-business%2Fcallback/);
+    assert.match(url, /client_id=env-client.apps.googleusercontent.com/);
+    assert.match(url, /redirect_uri=https%3A%2F%2Fapi.example.test%2Fapi%2Fgoogle-business%2Fcallback/);
+  } finally {
+    for (const key of keys) { if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key]; }
+  }
 });
 
 test('Google OAuth token helpers build the expected grant request payloads', async () => {

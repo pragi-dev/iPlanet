@@ -1,6 +1,5 @@
 import dotenv from 'dotenv';
 import express from 'express';
-import cors from 'cors';
 import compression from 'compression';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
@@ -9,9 +8,11 @@ import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Review, Notification, EscalationRule, CallRecord, AITroubleshootingSession, ServiceFollowUp, GoogleBusinessIntegration, GoogleBusinessLocationMapping, GoogleBusinessNotificationReceipt } from './models.js';
-import { auth, allowRoles, jwtSecret } from './middleware.js';
+import { User, Company, ServiceCentre, Device, DeviceMaster, Engineer, Ticket, TicketTimeline, Review, Notification, EscalationRule, CallRecord, AITroubleshootingSession, ServiceFollowUp, GoogleBusinessIntegration, GoogleBusinessLocationMapping, GoogleBusinessNotificationReceipt, Customer } from './models.js';
+import { auth, allowRoles, jwtSecret, restrictB2COnlyStaff } from './middleware.js';
 import { hashPassword, verifyPassword, needsRehash } from './passwords.js';
+import { createCorsMiddleware } from './corsPolicy.js';
+import { computeSlaEscalation, targetHours } from './slaEscalation.js';
 import { createAiSupportRouter } from './routes/aiSupport.js';
 import { createGoogleBusinessRouter } from './routes/googleBusiness.js';
 import { getGoogleBusinessOauthConfig, validateGoogleBusinessOauthConfig } from './integrations/googleBusinessProfile/googleBusinessProfileAuth.js';
@@ -23,6 +24,7 @@ import { understandRequest, understandDeterministicResult, REQUEST_CATEGORIES, R
 import { indiaToday, resolveServiceDateIntent } from './ai/serviceDate.js';
 import { demoEnrollmentDevices } from './demoData.js';
 import { createProactiveEngine, createProactiveScheduler, proactiveConfig, ProactiveServiceError } from './services/proactiveService/index.js';
+import { createB2CModule } from './b2c/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '../.env') });
@@ -38,39 +40,27 @@ fs.mkdirSync(uploadDir, { recursive: true });
 const upload = multer({ dest: uploadDir, limits: { fileSize: 5 * 1024 * 1024 }, fileFilter: (_, file, cb) => cb(null, /^image\//.test(file.mimetype)) });
 const AI_SUPPORT_FALLBACK_MESSAGE = 'AI Support is temporarily unavailable. You can continue the request manually or contact the service team.';
 const app = express();
-const allowedOrigins = new Set((process.env.FRONTEND_URLS || 'http://localhost:5173,http://localhost:5174')
-  .split(',')
-  .map(origin => origin.trim())
-  .filter(Boolean));
-const isAllowedOrigin = origin => {
-  if (!origin) return true;
-  if (allowedOrigins.has(origin)) return true;
-  try {
-    const hostname = new URL(origin).hostname;
-    return ['localhost', '127.0.0.1'].includes(hostname)
-      || hostname.endsWith('.loca.lt')
-      || hostname.endsWith('.localtunnel.me')
-      || hostname.endsWith('.devtunnels.ms')
-      || hostname.endsWith('.app.github.dev')
-      || hostname.endsWith('.vercel.app');
-  } catch {
-    return false;
-  }
-};
-app.use(cors({
-  origin(origin, callback) {
-    // Requests without an Origin header include local health checks and curl.
-    if (isAllowedOrigin(origin)) return callback(null, true);
-    return callback(new Error(`Origin ${origin} is not allowed by CORS`));
-  },
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}));
+// Behind a proxy (e.g. Render), rate limits need the client address it forwards.
+if (process.env.TRUST_PROXY_HOPS) app.set('trust proxy', Number.parseInt(process.env.TRUST_PROXY_HOPS, 10) || 1);
+app.use(createCorsMiddleware());
 app.use(compression());
 app.use(express.json());
 app.use('/uploads', express.static(uploadDir));
+app.use('/api', restrictB2COnlyStaff);
 app.use('/api/ai', auth, createAiSupportRouter());
 app.get('/api/health', (_, res) => res.json({ success: true, message: 'API is running' }));
 app.use('/api/google-business', createGoogleBusinessRouter({ store: createMongoGoogleBusinessStore({ GoogleBusinessIntegration, GoogleBusinessLocationMapping, GoogleBusinessNotificationReceipt, ServiceCentre, User, Notification }), auth, allowRoles }));
+// B2C email escalation management. Separate collections and routes; shares
+// accounts, authentication and in-app notifications with the B2B portal.
+// With B2C_SEPARATE_SERVER=true it runs only in src/b2cServer.js, so the
+// email scheduler never runs in both processes.
+const b2cSeparate = process.env.B2C_SEPARATE_SERVER === 'true';
+const b2c = b2cSeparate ? null : createB2CModule({ User, Notification, EscalationRule, Device, Customer, notifyUsers, auth });
+if (b2c) {
+  app.use('/api/b2c/public', b2c.publicRouter);
+  app.use('/api/b2c', b2c.router);
+  app.use('/api/internal/b2c', b2c.internalRouter);
+} else console.info('[B2C] Served by the separate B2C server (B2C_SEPARATE_SERVER=true)');
 // Six random digits under the current year; createTicketWithUniqueId retries on the rare collision.
 const ticketId = () => `TKT-${new Date().getFullYear()}-${crypto.randomInt(100000, 1000000)}`;
 async function createTicketWithUniqueId(fields) {
@@ -86,7 +76,6 @@ const NOTIFICATION_LIST_LIMIT = 100;
 const TICKET_REQUEST_FIELDS = ['category', 'issueType', 'description', 'location', 'preferredServiceDate', 'priority'];
 const transitions = { Open: ['Engineer Assigned'], 'Engineer Assigned': ['Engineer Accepted'], 'Engineer Accepted': ['In Progress'], 'In Progress': ['Waiting for Parts', 'Completed'], 'Waiting for Parts': ['In Progress'], Completed: ['Closed'], Closed: [] };
 const escalationContacts = { 1: { level: 1, name: 'Service Coordinator', contactName: 'Neha Menon', email: 'service@iplanet.local' }, 2: { level: 2, name: 'Service Manager', contactName: 'Ravi Shah', email: 'manager@iplanet.local' }, 3: { level: 3, name: 'Regional Operations Manager', contactName: 'Kiran Rao', email: 'operations@iplanet.local' } };
-function targetHours(priority = 'Medium') { return { Critical: 4, High: 12, Medium: 24, Low: 48 }[priority] || 24; }
 async function notifyUsers({ users, company, ticket, device, type, title, message, serviceCentreId, reviewId, action, priority }) { if (!users.length) return; await Notification.insertMany(users.map(user => ({ user: user._id, company, serviceCentreId, ticket: ticket?._id, device: device?._id, reviewId, portalRole: user.role, type, priority, title, message, action, read: false }))); }
 async function serviceUsers() { return User.find({ role: 'iplanet_service' }); }
 async function serviceUsersForCentre(serviceCentreId) { return serviceCentreId ? User.find({ role: 'iplanet_service', $or: [{ serviceCentreId }, { serviceCentreId: null }] }) : User.find({ role: 'iplanet_service' }); }
@@ -261,31 +250,12 @@ function activeEscalationRules() {
   return escalationRuleCache.rules;
 }
 const clearEscalationRuleCache = () => { escalationRuleCache = { at: 0, rules: null }; };
-const BREACH_TRIGGERS = ['SLA Breached', 'Critical SLA Breach', 'High Priority SLA Breach'];
-const RISK_TRIGGERS = ['SLA Approaching', 'SLA At Risk'];
-// Of the rules a ticket has reached, the one with the highest escalation level wins, so a
-// generic "All priorities" rule can never downgrade a Critical ticket's escalation.
-const strongestRule = (rules, triggers, elapsedPercent) => rules.filter(rule => triggers.includes(rule.trigger) && elapsedPercent >= rule.slaThreshold).sort((a, b) => b.level - a.level || b.slaThreshold - a.slaThreshold)[0];
+// The calculation lives in slaEscalation.js so B2C escalations follow the same rules.
 async function evaluateEscalation(ticket, createEvents = false) {
   if (!ticket.slaTargetAt || ['Completed', 'Closed'].includes(ticket.status)) return ticket;
-  const now = Date.now();
-  const target = new Date(ticket.slaTargetAt).getTime();
-  const created = new Date(ticket.createdAt).getTime();
-  const elapsedPercent = Math.min(100, Math.max(0, ((now - created) / (target - created)) * 100));
-  const rules = (await activeEscalationRules()).filter(rule => rule.priority === 'All' || rule.priority === ticket.priority);
-  const breachRule = strongestRule(rules, BREACH_TRIGGERS, elapsedPercent);
-  const riskRule = strongestRule(rules, RISK_TRIGGERS, elapsedPercent);
-  const nextStatus = breachRule ? 'SLA Breached' : riskRule ? 'At Risk' : 'Healthy';
-  if (nextStatus === 'Healthy' || ['SLA Breached', 'Escalated'].includes(ticket.escalationStatus) && nextStatus !== 'SLA Breached') return ticket;
-  const rule = breachRule || riskRule;
-  const ruleLevel = rule?.level || (nextStatus === 'SLA Breached' && ticket.priority === 'Critical' ? 3 : nextStatus === 'SLA Breached' ? 2 : 1);
-  const level = Math.max(ruleLevel, ticket.escalationLevel || 0);
-  // Level 2+ breaches are handed to service management, which the dashboards count as escalations.
-  const nextEscalation = nextStatus === 'SLA Breached' && level >= 2 ? 'Escalated' : nextStatus;
-  const reason = nextStatus !== 'SLA Breached' ? 'Resolution SLA approaching' : now >= target ? 'Resolution SLA exceeded' : 'Escalation threshold reached before the SLA deadline';
-  const update = { slaStatus: nextStatus, escalationStatus: nextEscalation, escalationLevel: level, escalationReason: reason, escalatedAt: ticket.escalatedAt || new Date() };
-  if (Object.entries(update).every(([key, value]) => key === 'escalatedAt' ? Boolean(ticket.escalatedAt) : ticket[key] === value)) return ticket;
-  const changed = ticket.slaStatus !== nextStatus || ticket.escalationStatus !== nextEscalation;
+  const escalation = computeSlaEscalation(ticket, await activeEscalationRules());
+  if (!escalation) return ticket;
+  const { update, nextStatus, level, reason, changed } = escalation;
   // Several requests can evaluate the same ticket at once (dashboard + list, two users). The write is
   // conditional on the state this request read, so only the request whose write lands emits events.
   const result = await Ticket.updateOne({ _id: ticket._id, slaStatus: ticket.slaStatus ?? null, escalationStatus: ticket.escalationStatus ?? null, escalationLevel: ticket.escalationLevel ?? null }, { $set: update });
@@ -309,7 +279,8 @@ app.post('/api/auth/login', async (req, res) => {
   if (!user || !verifyPassword(password, user.password)) return res.status(401).json({ message: 'Invalid demo credentials' });
   if (needsRehash(user.password)) await User.updateOne({ _id: user._id }, { password: hashPassword(password) });
   const token = jwt.sign({ id: user._id, name: user.name, email: user.email, role: user.role, companyId: user.companyId, serviceCentreId: user.serviceCentreId }, jwtSecret(), { expiresIn: '8h' });
-  res.json({ token, user: { id: user._id, name: user.name, email: user.email, role: user.role, company: user.company, companyId: user.companyId, serviceCentreId: user.serviceCentreId } });
+  // b2cRole only controls which navigation the portal shows; the B2C API re-reads it from the database on every request.
+  res.json({ token, user: { id: user._id, name: user.name, email: user.email, role: user.role, company: user.company, companyId: user.companyId, serviceCentreId: user.serviceCentreId, b2cRole: user.b2cRole || null } });
 });
 
 const corporateCompany = req => req.user.role === 'corporate_admin' ? { companyId: new mongoose.Types.ObjectId(req.user.companyId) } : {};
@@ -891,4 +862,4 @@ async function ensureDemoAccounts() {
   );
 }
  
-mongoose.connect(process.env.MONGODB_URI).then(async () => { await ensureDemoAccounts(); await ensureDemoEnrollmentDevices(); await ensureEscalationRules(); await ensureServiceCentres(); await ensureReviewIndexes(); await ensureGoogleBusinessIntegrationIndexes(); await ensureGoogleBusinessLocationMappingIndexes(); await GoogleBusinessNotificationReceipt.createIndexes(); await ServiceFollowUp.createIndexes(); proactiveScheduler.start(); app.listen(port, '0.0.0.0', () => console.log(`API running at http://localhost:${port}`)); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });
+mongoose.connect(process.env.MONGODB_URI).then(async () => { await ensureDemoAccounts(); await ensureDemoEnrollmentDevices(); await ensureEscalationRules(); await ensureServiceCentres(); await ensureReviewIndexes(); await ensureGoogleBusinessIntegrationIndexes(); await ensureGoogleBusinessLocationMappingIndexes(); await GoogleBusinessNotificationReceipt.createIndexes(); await ServiceFollowUp.createIndexes(); await b2c?.initialise({ hashPassword }); proactiveScheduler.start(); b2c?.scheduler.start(); app.listen(port, '0.0.0.0', () => console.log(`API running at http://localhost:${port}`)); }).catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });

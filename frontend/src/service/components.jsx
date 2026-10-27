@@ -1,5 +1,5 @@
-import { BarChart3, Bell, Building2, CalendarClock, ClipboardList, Laptop, LayoutDashboard, MessageSquareText, ScanLine, Settings, ShieldAlert, ShieldCheck, Siren, Ticket, UserRound, UserRoundX, UsersRound } from 'lucide-react';
-import { AppShell, Badge as UIBadge, EmptyState, KPI, PageHeader } from '../ui';
+import { BarChart3, Bell, Building2, CalendarClock, ChartPie, ClipboardList, Inbox, Laptop, LayoutDashboard, MailOpen, MessageSquareText, PlugZap, ScanLine, Settings, ShieldAlert, ShieldCheck, Siren, SlidersHorizontal, Ticket, UserPlus, UserRound, UserRoundX, UsersRound } from 'lucide-react';
+import { AppShell, Badge as UIBadge, EmptyState, KPI, PageHeader, readSessionUser } from '../ui';
 import { getCompanies, getCoverage, getEngineers, getServiceNotificationUnreadCount, getServiceTickets } from './api';
 
 // Command-bar index: tickets, engineers, corporates, enrolled devices and the
@@ -65,8 +65,24 @@ export const servicePortal = {
   ],
 };
 
+// iPlanet Service accounts that also hold a B2C escalation role get the B2C
+// pages in their navigation; everyone else sees the navigation unchanged.
+const b2cGroup = admin => ({ label: 'B2C Escalations', items: [
+  { to: '/b2c', end: true, icon: MailOpen, label: 'B2C Overview' },
+  { to: '/b2c/tickets', icon: Inbox, label: 'Escalation Queue', match: ['/b2c/tickets/'] },
+  ...(admin ? [{ to: '/b2c/registrations', icon: UserPlus, label: 'Awaiting Registration' }] : []),
+  { to: '/b2c/reports', icon: ChartPie, label: 'B2C Reports' },
+  ...(admin ? [{ to: '/b2c/integrations', icon: PlugZap, label: 'Integration Health' }, { to: '/b2c/settings', icon: SlidersHorizontal, label: 'B2C Settings' }] : []),
+] });
+const withB2C = admin => ({ ...servicePortal, groups: [...servicePortal.groups.slice(0, -1), b2cGroup(admin), servicePortal.groups.at(-1)] });
+const servicePortalVariants = { none: servicePortal, member: withB2C(false), admin: withB2C(true) };
+export function servicePortalFor(user) {
+  if (!user?.b2cRole) return servicePortalVariants.none;
+  return user.b2cRole === 'b2c_admin' ? servicePortalVariants.admin : servicePortalVariants.member;
+}
+
 export function ServiceShell({ children, title, crumbs }) {
-  return <AppShell config={servicePortal} title={title} crumbs={crumbs}>{children}</AppShell>;
+  return <AppShell config={servicePortalFor(readSessionUser())} title={title} crumbs={crumbs}>{children}</AppShell>;
 }
 
 // Compatibility exports for modules that still import the previous helpers.

@@ -41,3 +41,78 @@ services:
         sync: false
       - key: GOOGLE_PUBSUB_PUSH_SERVICE_ACCOUNT
         sync: false
+      - key: B2C_SEPARATE_SERVER
+        value: 'true'
+  # B2C escalation API and email scheduler, separate from the main API. Same
+  # database; it accepts sign-in tokens from iplanet-backend via the shared JWT_SECRET.
+  - type: web
+    name: iplanet-b2c
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm run b2c:start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: B2C_PORT
+        value: '10000'
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        fromService:
+          type: web
+          name: iplanet-backend
+          envVarKey: JWT_SECRET
+      - key: FRONTEND_URLS
+        sync: false
+      - key: B2C_CRON_SECRET
+        sync: false
+      - key: B2C_ATTACHMENT_DIR
+        sync: false
+      # Incoming B2C email (MilesWeb IMAP, receive only). Enter IMAP_PASS in the Render dashboard.
+      - key: IMAP_HOST
+        value: mail.aavoraa.com
+      - key: IMAP_PORT
+        value: '993'
+      - key: IMAP_SECURE
+        value: 'true'
+      - key: IMAP_USER
+        value: test1@aavoraa.com
+      - key: IMAP_PASS
+        sync: false
+      - key: IMAP_MAILBOX
+        value: INBOX
+      # Customer acknowledgements from a separate company address over SMTP (not the IMAP
+      # account). Off until the business confirms the address: enter B2C_ACK_SMTP_PASS in the
+      # Render dashboard, then set B2C_ACK_EMAIL_ENABLED to true.
+      - key: B2C_ACK_EMAIL_ENABLED
+        value: 'false'
+      - key: B2C_ACK_FROM_EMAIL
+        value: noreply@aavoraa.com
+      - key: B2C_ACK_FROM_NAME
+        value: iPlanet Support
+      - key: B2C_ACK_COMPANY_NAME
+        value: iPlanet
+      - key: B2C_ACK_SMTP_HOST
+        value: mail.aavoraa.com
+      - key: B2C_ACK_SMTP_PORT
+        value: '465'
+      - key: B2C_ACK_SMTP_SECURE
+        value: 'true'
+      - key: B2C_ACK_SMTP_USER
+        value: noreply@aavoraa.com
+      - key: B2C_ACK_SMTP_PASS
+        sync: false
+      - key: B2C_ACK_UNMATCHED_POLICY
+        value: verified
+      # Customer registration links (docs/b2c-customer-registration.md). Off until the business
+      # approves the registration email wording; set the public frontend URL (HTTPS) first.
+      - key: B2C_REGISTRATION_ENABLED
+        value: 'false'
+      - key: B2C_REGISTRATION_PORTAL_URL
+        sync: false
+      - key: B2C_REGISTRATION_TTL_HOURS
+        value: '72'
+      - key: TRUST_PROXY_HOPS
+        value: '1'
