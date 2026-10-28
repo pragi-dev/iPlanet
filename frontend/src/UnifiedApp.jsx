@@ -44,6 +44,7 @@ const InternalReviews = page(internalReviews, 'InternalReviews');
 const InternalReviewDetail = page(internalReviews, 'InternalReviewDetail');
 const GoogleBusinessProfile = page(() => import('./service/GoogleBusinessProfile'), 'GoogleBusinessProfile');
 const ProactiveService = page(() => import('./service/ProactiveService'), 'ProactiveService');
+const EmailRequests = page(() => import('./service/EmailRequests'), 'EmailRequests');
 const ServiceRecommendations = page(() => import('./corporate/ServiceRecommendations'), 'ServiceRecommendations');
 const B2CDashboard = page(() => import('./b2c/B2CDashboard'), 'B2CDashboard');
 const B2CQueue = page(() => import('./b2c/B2CQueue'), 'B2CQueue');
@@ -53,6 +54,7 @@ const B2CIntegrations = page(() => import('./b2c/B2CIntegrations'), 'B2CIntegrat
 const B2CSettings = page(() => import('./b2c/B2CSettings'), 'B2CSettings');
 const B2CNotifications = page(() => import('./b2c/B2CNotifications'), 'B2CNotifications');
 const SignUp = page(() => import('./auth/SignUp'), 'SignUp');
+const TrackTicket = page(() => import('./track/TrackTicket'), 'TrackTicket');
 const B2CRegistrations = page(() => import('./b2c/B2CRegistrations'), 'B2CRegistrations');
 // Public: reached from the customer registration email, no sign-in.
 const CustomerRegistration = page(() => import('./b2c/CustomerRegistration'), 'CustomerRegistration');
@@ -275,6 +277,7 @@ function ServiceRoutes() {
     <Route path="/service/tickets" element={<Protected role="iplanet_service"><MyTickets /></Protected>} />
     <Route path="/service/tickets/:id" element={<Protected role="iplanet_service"><OperationalTicketDetail /></Protected>} />
     <Route path="/service/proactive" element={<Protected role="iplanet_service"><ProactiveService /></Protected>} />
+    <Route path="/service/email-requests" element={<Protected role="iplanet_service"><EmailRequests /></Protected>} />
     <Route path="/service/reviews" element={<Protected role="iplanet_service"><InternalReviews /></Protected>} />
     <Route path="/service/reviews/google" element={<Protected role="iplanet_service"><GoogleBusinessProfile /></Protected>} />
     <Route path="/service/reviews/:reviewId" element={<Protected role="iplanet_service"><InternalReviewDetail /></Protected>} />
@@ -315,6 +318,7 @@ export function AppRoutes() {
       <Route path="/" element={<Navigate to="/login" replace />} />
       <Route path="/login" element={<LoginRoute />} />
       <Route path="/signup" element={<SignUpRoute />} />
+      <Route path="/track/:token" element={<TrackTicket />} />
       {CorporateRoutes()}
       {ServiceRoutes()}
       {B2CRoutes()}

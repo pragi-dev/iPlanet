@@ -14,6 +14,7 @@ import { coverageStatus, normalizeDevice, parseDate } from './deviceRules.js';
 import { DEVICES_SHEET, MAX_IMPORT_ROWS, WorkbookError, readDeviceRows } from './deviceWorkbook.js';
 import { createDeviceRegistrationRouter } from './deviceRoutes.js';
 import { createClaudeColumnMapper } from './columnMapper.js';
+import { DEVICE_SOURCES, deviceSourceCounts } from './deviceSource.js';
 
 const JWT_SECRET = 'device-registration-test-secret';
 process.env.JWT_SECRET = JWT_SECRET;
@@ -183,6 +184,11 @@ let mongoAvailable = true;
 const DB_NAME = `iplanet_device_test_${process.pid}_${Date.now()}`;
 try { await mongoose.connect(process.env.DEVICE_TEST_MONGODB_URI || 'mongodb://127.0.0.1:27017', { dbName: DB_NAME, serverSelectionTimeoutMS: 3000 }); } catch { mongoAvailable = false; }
 const skip = mongoAvailable ? false : 'MongoDB is not reachable (set DEVICE_TEST_MONGODB_URI)';
+after(async () => {
+  if (!mongoAvailable) return;
+  await mongoose.connection.dropDatabase();
+  await mongoose.disconnect();
+});
 
 describe('device registration API', { skip }, () => {
   let server; let base; let companyA; let companyB; let adminA; let adminB; let serviceUser;
@@ -207,11 +213,7 @@ describe('device registration API', { skip }, () => {
     base = `http://127.0.0.1:${server.address().port}`;
   });
 
-  after(async () => {
-    server?.close();
-    await mongoose.connection.dropDatabase();
-    await mongoose.disconnect();
-  });
+  after(() => server?.close());
 
   test('a corporate admin adds a device to their own organization', async () => {
     const response = await call('/api/corporate/devices', { method: 'POST', body: { model: 'MacBook Pro 14', deviceType: 'MacBook', serialNumber: 'c02manual1a', assetId: 'AST-A-100', warrantyExpiry: '2027-06-30', companyId: String(companyB._id) } });
@@ -343,5 +345,72 @@ describe('device registration API', { skip }, () => {
   test('registered devices do not change existing tickets or devices', async () => {
     assert.equal(await Ticket.countDocuments(), 0);
     assert.equal((await Device.findOne({ serialNumber: 'C02EXIST01A' })).assetId, 'AST-A-001');
+  });
+
+  test('Add Manually records MANUAL as the origin, whatever the request says', async () => {
+    const response = await call('/api/corporate/devices', { method: 'POST', body: { model: 'iPad Air', deviceType: 'iPad', serialNumber: 'DMPSOURCE1', deviceSource: 'IPLANET' } });
+    assert.equal(response.status, 201);
+    assert.equal((await Device.findOne({ serialNumber: 'DMPSOURCE1' }).lean()).deviceSource, DEVICE_SOURCES.MANUAL);
+  });
+
+  test('Import Excel records EXCEL_IMPORT as the origin', async () => {
+    const report = await (await upload(await workbook([['Mac mini', 'Mac mini', 'C02SOURCE2A'], ['iPhone 16', 'iPhone', 'F2LSOURCE3B']]))).json();
+    assert.equal((await call(`/api/corporate/devices/import/${report.importId}/confirm`, { method: 'POST' })).status, 201);
+    const saved = await Device.find({ serialNumber: { $in: ['C02SOURCE2A', 'F2LSOURCE3B'] } }).lean();
+    assert.deepEqual(saved.map(device => device.deviceSource), [DEVICE_SOURCES.EXCEL_IMPORT, DEVICE_SOURCES.EXCEL_IMPORT]);
+  });
+
+  test('updating a device does not change its origin', async () => {
+    const device = await Device.findOne({ serialNumber: 'DMPSOURCE1' });
+    device.deviceSource = DEVICE_SOURCES.IPLANET;
+    device.deviceAllocationStatus = 'Assigned';
+    await device.save();
+    await Device.updateOne({ _id: device._id }, { $set: { deviceSource: DEVICE_SOURCES.EXCEL_IMPORT, location: 'Madurai' } });
+    await Device.findOneAndUpdate({ _id: device._id }, { deviceSource: DEVICE_SOURCES.IPLANET });
+    const saved = await Device.findById(device._id).lean();
+    assert.equal(saved.deviceSource, DEVICE_SOURCES.MANUAL);
+    assert.equal(saved.deviceAllocationStatus, 'Assigned', 'other fields still update');
+    assert.equal(saved.location, 'Madurai');
+  });
+});
+
+describe('fleet counts by device origin', { skip }, () => {
+  let orgC; let orgD; let orgEmpty;
+  const scope = company => ({ companyId: new mongoose.Types.ObjectId(String(company._id)) });
+
+  before(async () => {
+    [orgC, orgD, orgEmpty] = await Company.insertMany([{ companyId: 'TEST-ORG-C', name: 'Test Org C' }, { companyId: 'TEST-ORG-D', name: 'Test Org D' }, { companyId: 'TEST-ORG-E', name: 'Test Org E' }]);
+    const device = (serialNumber, companyId, deviceSource) => ({ serialNumber, model: 'MacBook Air', deviceType: 'MacBook', companyId, ...(deviceSource ? { deviceSource } : {}) });
+    await Device.create([
+      device('C02COUNTC01', orgC._id, DEVICE_SOURCES.IPLANET), device('C02COUNTC02', orgC._id, DEVICE_SOURCES.IPLANET), device('C02COUNTC03', orgC._id, DEVICE_SOURCES.IPLANET),
+      device('C02COUNTC04', orgC._id, DEVICE_SOURCES.MANUAL), device('C02COUNTC05', orgC._id, DEVICE_SOURCES.EXCEL_IMPORT),
+      device('C02COUNTC06', orgC._id), // created before origin was recorded
+      device('C02COUNTD01', orgD._id, DEVICE_SOURCES.MANUAL),
+    ]);
+    // A legacy record written outside the model with a value the app does not know.
+    await Device.collection.insertOne({ serialNumber: 'C02COUNTC07', model: 'iPad', deviceType: 'iPad', companyId: orgC._id, deviceSource: 'SOMETHING_ELSE' });
+  });
+
+  test('manually added devices are Other devices and every other device is an iPlanet device', async () => {
+    // 3 enrolled + 1 Excel import + 1 without an origin + 1 with an unknown origin are iPlanet.
+    assert.deepEqual(await deviceSourceCounts(Device, scope(orgC)), { total: 7, iplanet: 6, other: 1 });
+  });
+
+  test('each device is counted once and the total matches the device list', async () => {
+    const counts = await deviceSourceCounts(Device, scope(orgC));
+    assert.equal(counts.iplanet + counts.other, counts.total);
+    assert.equal(counts.total, (await Device.find(scope(orgC))).length);
+  });
+
+  test('counts never include another organization\'s devices', async () => {
+    assert.deepEqual(await deviceSourceCounts(Device, scope(orgD)), { total: 1, iplanet: 0, other: 1 });
+  });
+
+  test('an organization with no devices gets zero counts', async () => {
+    assert.deepEqual(await deviceSourceCounts(Device, scope(orgEmpty)), { total: 0, iplanet: 0, other: 0 });
+  });
+
+  test('the model rejects an origin it does not know', async () => {
+    await assert.rejects(Device.create({ serialNumber: 'C02COUNTX01', model: 'iPad', deviceType: 'iPad', companyId: orgC._id, deviceSource: 'SOMETHING_ELSE' }), mongoose.Error.ValidationError);
   });
 });

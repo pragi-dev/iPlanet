@@ -1,4 +1,4 @@
-import { BarChart3, Bell, Building2, CalendarClock, ChartPie, ClipboardList, Inbox, Laptop, LayoutDashboard, MailOpen, MessageSquareText, PlugZap, ScanLine, Settings, ShieldAlert, ShieldCheck, Siren, SlidersHorizontal, Ticket, UserPlus, UserRound, UserRoundX, UsersRound } from 'lucide-react';
+import { BarChart3, Bell, Building2, CalendarClock, ChartPie, ClipboardList, Inbox, Laptop, LayoutDashboard, Mail, MailOpen, MessageSquareText, PlugZap, ScanLine, Settings, ShieldAlert, ShieldCheck, Siren, SlidersHorizontal, UserPlus, Ticket, UserRound, UserRoundX, UsersRound } from 'lucide-react';
 import { AppShell, Badge as UIBadge, EmptyState, KPI, PageHeader, readSessionUser } from '../ui';
 import { getCompanies, getCoverage, getEngineers, getServiceNotificationUnreadCount, getServiceTickets } from './api';
 
@@ -29,6 +29,7 @@ export const servicePortal = {
       { id: 'a-queue', icon: ClipboardList, title: 'Open ticket queue', keywords: 'tickets list', to: '/service/tickets' },
       { id: 'a-assign', icon: UserRoundX, title: 'Assign engineer to unassigned tickets', keywords: 'unassigned open engineer', to: '/service/tickets?status=Open&assignment=Unassigned' },
       { id: 'a-sla', icon: ShieldAlert, title: 'Review SLA at-risk tickets', keywords: 'sla risk breach escalation', to: '/service/tickets?slaStatus=At%20Risk' },
+      { id: 'a-email', icon: Mail, title: 'Review email requests', keywords: 'email inbox mail claude draft approve', to: '/service/email-requests' },
       { id: 'a-proactive', icon: CalendarClock, title: 'Review proactive service follow-ups', keywords: 'preventive maintenance due overdue service interval', to: '/service/proactive' },
       { id: 'a-enroll', icon: ScanLine, title: 'Enroll a device', keywords: 'serial scan register', to: '/service/device-enrollment' },
       { id: 'a-coverage', icon: ShieldCheck, title: 'Check coverage', keywords: 'warranty amc expiry expiring expired', to: '/service/warranty' },
@@ -40,6 +41,7 @@ export const servicePortal = {
     { label: 'Overview', items: [{ to: '/service/dashboard', icon: LayoutDashboard, label: 'Overview' }] },
     { label: 'Operations', items: [
       { to: '/service/tickets', icon: Ticket, label: 'Tickets' },
+      { to: '/service/email-requests', icon: Mail, label: 'Email Requests' },
       { to: '/service/proactive', icon: CalendarClock, label: 'Proactive Service' },
       { to: '/service/device-enrollment', icon: ScanLine, label: 'Device Enrollment' },
       { to: '/service/engineers', icon: UsersRound, label: 'Engineers' },

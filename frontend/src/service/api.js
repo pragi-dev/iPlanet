@@ -72,6 +72,22 @@ export async function createCompany(payload) { return request('/iplanet/companie
 export async function getAccountRequests(status = 'pending') { return request(`/iplanet/account-requests?status=${encodeURIComponent(status)}`); }
 export async function approveAccountRequest(id, companyId) { return request(`/iplanet/account-requests/${id}/approve`, { method: 'POST', body: JSON.stringify({ companyId }) }); }
 export async function rejectAccountRequest(id) { return request(`/iplanet/account-requests/${id}/reject`, { method: 'POST', body: JSON.stringify({}) }); }
+// B2B service requests received by email; Claude drafts them and approval creates the ticket.
+export async function getEmailRequests(status = 'pending') { return send(`/iplanet/email-requests?status=${encodeURIComponent(status)}`); }
+export async function getEmailRequestStatus() { return send('/iplanet/email-requests/status'); }
+export async function checkEmailInbox() { return request('/iplanet/email-requests/check', { method: 'POST', body: JSON.stringify({}) }); }
+export async function getEmailRequest(id) { return send(`/iplanet/email-requests/${id}`); }
+export async function getEmailRequestOptions(companyId) { return send(`/iplanet/email-requests/options?companyId=${encodeURIComponent(companyId)}`); }
+export async function updateEmailRequest(id, draft) { return request(`/iplanet/email-requests/${id}`, { method: 'PATCH', body: JSON.stringify(draft) }); }
+export async function approveEmailRequest(id, draft) { return request(`/iplanet/email-requests/${id}/approve`, { method: 'POST', body: JSON.stringify(draft) }); }
+export async function rejectEmailRequest(id, reason) { return request(`/iplanet/email-requests/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }); }
+// The public tracking page for a ticket raised by email: no sign-in, so no token or session handling.
+export async function getTicketTracking(trackingToken) {
+  const response = await fetch(`${API}/track/${encodeURIComponent(trackingToken)}`);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(new Error(body.message || `Request failed (${response.status})`), { status: response.status });
+  return body;
+}
 export async function getServiceCentres() { return request('/iplanet/service-centres'); }
 // Google Business Profile (all calls go through the backend; no Google credentials in the browser)
 export async function getGoogleBusinessStatus() { return request('/google-business/status'); }

@@ -1045,6 +1045,33 @@ a.login-submit { text-decoration: none; }
 .input-with-icon svg { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--color-text-tertiary); pointer-events: none; }
 .input-with-icon input { padding-left: 42px !important; }
 
+/* Public ticket tracking page (/track/:token), linked from acknowledgement emails. */
+.track-main { width: 100%; max-width: 760px; margin: 0 auto; padding: 48px 32px 56px; display: grid; gap: 24px; align-content: start; }
+.track-loading { display: grid; gap: 16px; }
+.track-head { display: grid; gap: 6px; }
+.track-title { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.track-title h1 { font-family: var(--font-display); font-size: 36px; line-height: 1.1; font-weight: 600; letter-spacing: -0.03em; overflow-wrap: anywhere; }
+.track-steps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.track-steps li { display: grid; gap: 8px; font-size: 13px; line-height: 1.35; color: var(--color-text-tertiary); }
+.track-step-dot { height: 6px; border-radius: 3px; background: var(--color-divider); }
+.track-steps li.is-done { color: var(--color-text-secondary); }
+.track-steps li.is-done .track-step-dot { background: var(--color-accent); opacity: 0.45; }
+.track-steps li.is-current { color: var(--color-text-primary); font-weight: 600; }
+.track-steps li.is-current .track-step-dot { background: var(--color-accent); }
+.track-updates { display: grid; }
+.track-updates li { display: grid; gap: 4px; padding: 14px 0; border-bottom: 1px solid var(--color-divider); }
+.track-updates li:first-child { padding-top: 0; }
+.track-updates li:last-child { border-bottom: 0; padding-bottom: 0; }
+.track-update-head { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 16px; font-size: 14px; }
+.track-update-head time { color: var(--color-text-tertiary); font-size: 13px; }
+.track-updates p { font-size: 14px; line-height: 1.45; color: var(--color-text-secondary); }
+@media (max-width: 767px) {
+  .track-main { padding: 28px 16px 40px; }
+  .track-title h1 { font-size: 28px; }
+  .track-steps { grid-template-columns: minmax(0, 1fr); }
+  .track-steps li { grid-template-columns: 24px minmax(0, 1fr); align-items: center; }
+}
+
 /* --------------------------------------------------------------------------
    Responsive
    -------------------------------------------------------------------------- */
@@ -1192,3 +1219,21 @@ a.login-submit { text-decoration: none; }
 .period-calendar-cell[aria-pressed='true'] { background: var(--color-accent); color: #fff; font-weight: 600; }
 .period-calendar-cell:disabled { color: var(--color-text-tertiary); cursor: not-allowed; }
 @media (max-width: 767px) { .period-calendar, .period-calendar-button, .report-range { width: 100%; } }
+
+/* Email Requests (service portal): the original email next to Claude's ticket draft. */
+.email-inbox-status { min-height: 32px; }
+.email-section-title { font-size: 15px; font-weight: 600; margin: 0; }
+.email-body { margin: 0; padding: var(--space-4); max-height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-word; font: inherit; font-size: 14px; line-height: 1.5; background: var(--color-fill); border-radius: 10px; color: var(--color-text-primary); }
+.email-attachments { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.email-attachments a { display: inline-flex; align-items: center; gap: 4px; font-weight: 500; color: var(--color-accent-text); }
+.email-claude { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--color-divider); border-radius: 10px; }
+.email-claude p { margin: 0; }
+.email-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; font-size: 14px; }
+.email-facts dt { color: var(--color-text-secondary); }
+.email-facts dd { margin: 0; }
+.email-notes { margin: 4px 0 0; padding-left: 18px; }
+.email-form { border: 0; margin: 0; padding: 0; min-width: 0; }
+.link-button { background: none; border: 0; padding: 0; font: inherit; text-align: left; cursor: pointer; }
+.table .link-button { font-weight: 500; color: var(--color-text-primary); }
+.table .link-button:hover { color: var(--color-accent-text); }
+@media (max-width: 640px) { .email-review .form-grid { grid-template-columns: 1fr; } }

@@ -3,6 +3,7 @@ import express from 'express';
 import multer from 'multer';
 import mongoose from 'mongoose';
 import { ASSIGNMENT_STATUSES, DEVICE_FIELDS, DEVICE_TYPES, deviceDocument, findDuplicates, normalizeDevice } from './deviceRules.js';
+import { DEVICE_SOURCES } from './deviceSource.js';
 import { MAX_IMPORT_BYTES, MAX_IMPORT_ROWS, WorkbookError, readDeviceRows } from './deviceWorkbook.js';
 
 // How long a validated import waits for confirmation before it must be uploaded again.
@@ -70,7 +71,7 @@ export function createDeviceRegistrationRouter({ models, auth, allowRoles, now =
     const [result] = await validate([{ row: 1, input: req.body || {} }], req.user.companyId);
     if (result.errors.length) return res.status(result.errors.some(error => error.duplicate) ? 409 : 400).json({ message: result.errors[0].message, errors: result.errors });
     try {
-      const device = await Device.create(deviceDocument(result.values, req.user.companyId));
+      const device = await Device.create(deviceDocument(result.values, req.user.companyId, DEVICE_SOURCES.MANUAL));
       res.status(201).json(device);
     } catch (error) {
       if (duplicateKey(error)) return res.status(409).json({ message: 'This serial number or asset ID was registered a moment ago. Refresh your devices and check.' });
@@ -127,7 +128,7 @@ export function createDeviceRegistrationRouter({ models, auth, allowRoles, now =
         return res.status(summary.duplicates ? 409 : 400).json({ message: `${summary.invalid} row${summary.invalid === 1 ? ' has' : 's have'} problems, so nothing was imported. Fix the file and upload it again.`, summary, rows: present(rows) });
       }
       let inserted;
-      try { inserted = await insertAll(rows.map(row => deviceDocument(row.values, item.companyId))); }
+      try { inserted = await insertAll(rows.map(row => deviceDocument(row.values, item.companyId, DEVICE_SOURCES.EXCEL_IMPORT))); }
       catch (error) {
         item.status = 'validated';
         if (duplicateKey(error)) return res.status(409).json({ message: 'Some of these devices were registered while you were reviewing the file, so nothing was imported. Upload the file again to see which.' });

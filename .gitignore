@@ -5,5 +5,9 @@ uploads/*
 !uploads/.gitkeep
 # B2C customer email attachments (default B2C_ATTACHMENT_DIR)
 backend/storage/
-# Local MongoDB data directory
+# B2B email-request inbox credentials
+backend/.env.b2b-email
+# Local env backups and the local MongoDB data directory
+backend/.env.bak*
 data/
+backend/uploads/

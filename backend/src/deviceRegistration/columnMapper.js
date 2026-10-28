@@ -7,7 +7,7 @@ import Anthropic from '@anthropic-ai/sdk';
 
 export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5-5';
 // Models that accept the server-side refusal fallback ("default" routing).
-const SERVER_FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-sonnet-5-5']);
+export const SERVER_FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-sonnet-5-5']);
 
 const SYSTEM_PROMPT = `You match the columns of a spreadsheet of company devices (Apple Macs, iPhones, iPads and similar) to the fields of a device registration form.
 

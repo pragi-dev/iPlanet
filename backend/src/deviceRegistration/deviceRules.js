@@ -158,6 +158,7 @@ export async function findDuplicates(rows, { Device, companyId }) {
 }
 
 // The Device document for a validated device, owned by the admin's organization.
-export function deviceDocument(values, companyId) {
-  return { ...values, companyId, selectedEntityType: 'corporate', selectedEntityId: companyId, deviceStatus: 'In Use' };
+// `deviceSource` is chosen by the route that registers it, never by the input.
+export function deviceDocument(values, companyId, deviceSource) {
+  return { ...values, companyId, deviceSource, selectedEntityType: 'corporate', selectedEntityId: companyId, deviceStatus: 'In Use' };
 }

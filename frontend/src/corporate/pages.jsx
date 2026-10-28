@@ -12,6 +12,10 @@ import {
 
 const ticketStatuses = ['Open', 'Engineer Assigned', 'Engineer Accepted', 'In Progress', 'Waiting for Parts', 'Completed', 'Closed'];
 const toneRank = { critical: 0, warning: 1, info: 2, neutral: 3 };
+// Fleet health categories, matching the server's counts: devices the organization added
+// manually are Other devices; every other device is an iPlanet device.
+const deviceCategory = device => device.deviceSource === 'MANUAL' ? 'other' : 'iplanet';
+const sourceOptions = [{ value: 'iplanet', label: 'iPlanet devices' }, { value: 'other', label: 'Other devices' }];
 
 // A device is healthy when it has no active service request, no recurring
 // issue (same issue type twice in 90 days), no warranty/AMC expiring soon and
@@ -132,6 +136,7 @@ export function Dashboard() {
   const firstName = (user.name || '').split(' ')[0];
   const devices = coverage.data?.devices || [];
   const summary = coverage.data?.summary || {};
+  const sources = summary.sources;
   const coverageReady = Boolean(coverage.data);
   const active = tickets.filter(isActiveTicket);
   const atRisk = active.filter(slaRisk);
@@ -166,6 +171,8 @@ export function Dashboard() {
               </div>
               <MetricSummary label="Device status" items={[
                 { label: 'Devices', value: health.total, to: '/corporate/devices' },
+                { label: 'iPlanet devices', value: sources?.iplanet, to: '/corporate/devices?source=iplanet' },
+                { label: 'Other devices', value: sources?.other, hint: 'Added manually', to: '/corporate/devices?source=other' },
                 { label: 'In use', value: health.inUse, hint: 'Assigned, not in service' },
                 { label: 'In service', value: health.inService, hint: atRisk.length ? `${atRisk.length} at SLA risk` : 'With iPlanet now', tone: atRisk.length ? 'warning' : undefined, to: '/corporate/service-requests' },
                 { label: 'Need attention', value: health.attention, hint: 'Issue, coverage or service due', tone: health.attention ? 'warning' : undefined },
@@ -247,11 +254,12 @@ export function Devices() {
   const [query, setQuery] = useState(search);
   const [allocation, setAllocation] = useState(['Assigned', 'Unassigned'].includes(params.get('allocation')) ? params.get('allocation') : 'All');
   const [warranty, setWarranty] = useState('All');
+  const [source, setSource] = useState(sourceOptions.some(option => option.value === params.get('source')) ? params.get('source') : 'All');
   useEffect(() => { setSearch(params.get('search') || ''); setQuery(params.get('search') || ''); }, [params]);
   useEffect(() => { const timer = window.setTimeout(() => setQuery(search), 250); return () => window.clearTimeout(timer); }, [search]);
   const state = useAsync(() => getDevices(query), [query]);
   const all = state.data || [];
-  const devices = all.filter(device => (allocation === 'All' || device.deviceAllocationStatus === allocation) && (warranty === 'All' || device.warrantyStatus === warranty));
+  const devices = all.filter(device => (allocation === 'All' || device.deviceAllocationStatus === allocation) && (warranty === 'All' || device.warrantyStatus === warranty) && (source === 'All' || deviceCategory(device) === source));
   const warrantyOptions = [...new Set(all.map(device => device.warrantyStatus).filter(Boolean))];
 
   return <Shell title="Devices">
@@ -266,9 +274,10 @@ export function Devices() {
         <SearchInput value={search} onChange={setSearch} placeholder="Search serial, model or asset ID" label="Search devices" />
         <FilterSelect label="Assignment" value={allocation} onChange={setAllocation} options={['Assigned', 'Unassigned']} allLabel="All assignments" />
         <FilterSelect label="Warranty" value={warranty} onChange={setWarranty} options={warrantyOptions} allLabel="All warranty" />
+        <FilterSelect label="Source" value={source} onChange={setSource} options={sourceOptions} allLabel="All sources" />
       </FilterBar>}
       isEmpty={!devices.length}
-      empty={<EmptyState icon={Laptop} title={query || allocation !== 'All' || warranty !== 'All' ? 'No devices match your search' : 'No devices registered yet'} description={query || allocation !== 'All' || warranty !== 'All' ? 'Try a different search term or clear the filters.' : 'Devices enrolled by iPlanet Service for your organization will appear here.'} />}
+      empty={<EmptyState icon={Laptop} title={query || allocation !== 'All' || warranty !== 'All' || source !== 'All' ? 'No devices match your search' : 'No devices registered yet'} description={query || allocation !== 'All' || warranty !== 'All' || source !== 'All' ? 'Try a different search term or clear the filters.' : 'Devices enrolled by iPlanet Service for your organization will appear here.'} />}
     >
       <table className="table">
         <thead><tr><th>Device</th><th>Serial number</th><th>Location</th><th>Warranty</th><th>AMC</th><th>Status</th><th><span className="sr-only">Action</span></th></tr></thead>
