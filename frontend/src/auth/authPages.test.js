@@ -43,6 +43,16 @@ test('Sign in shows a Sign up link that keeps the selected workspace', async () 
   assert.match(service, /value="service@iplanet\.local"/, 'the service profile is preselected as before');
 });
 
+test('Sign in offers B2C Escalations as its own workspace, without Sign up', async () => {
+  const b2c = await render('/login?workspace=b2c');
+  assert.equal(pressed(b2c), 'B2C Escalations');
+  assert.ok(!/b2c\.admin@iplanet\.local|Demo@123/.test(b2c), 'no demo account is offered: production has none');
+  assert.ok(!hrefs(b2c).some(link => link.href.startsWith('/signup')), 'B2C accounts are created by an administrator');
+
+  const signup = await render('/signup?workspace=b2c');
+  assert.ok(!/B2C Escalations<\/button>/.test(signup), 'Sign up keeps its two workspaces');
+});
+
 test('the Sign up route renders the registration form in the login theme', async () => {
   const html = await render('/signup');
   for (const className of ['login', 'login-top', 'login-brand', 'login-intro', 'login-card', 'login-segmented', 'login-fields', 'login-float', 'login-submit', 'login-foot']) {

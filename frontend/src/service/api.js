@@ -36,6 +36,14 @@ async function send(path, options = {}) {
 }
 // The B2C escalation module uses the same session, cache and error handling.
 export { request as apiRequest };
+// Public B2C pages (the customer registration link): no session token is sent, nothing is
+// cached, and a 401 never ends a staff session. Errors carry the API's `code` and `fields`.
+export async function publicB2CRequest(path, { method = 'GET', body } = {}) {
+  const response = await fetch(`${B2C_API}${path}`, { method, cache: 'no-store', referrerPolicy: 'no-referrer', headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(new Error(data.message || `Request failed (${response.status})`), { status: response.status, code: data.code, fields: data.fields, canRenew: data.canRenew });
+  return data;
+}
 // Fetches a protected file with the session token and hands it to the browser as a download.
 export async function downloadProtectedFile(path, filename) {
   const response = await fetch(`${apiFor(path)}${path}`, { headers: { Authorization: `Bearer ${token()}` } });

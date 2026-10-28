@@ -11,6 +11,10 @@ const model = (name, schema) => mongoose.models[name] || mongoose.model(name, sc
 export const B2C_STATUSES = ['Pending Triage', 'Open', 'Engineer Assigned', 'Engineer Accepted', 'In Progress', 'Awaiting Customer', 'Pending Validation', 'Completed', 'Closed', 'Reopened'];
 // Earlier status names, renamed on startup to the stages shared with B2B tickets.
 const RENAMED_STATUSES = { Assigned: 'Engineer Assigned', Investigating: 'In Progress', Resolved: 'Completed' };
+// Customer registration request statuses (see registrationSchema below). A request is open,
+// and its link usable, in OPEN_REGISTRATION.
+export const REGISTRATION_STATUSES = ['required', 'email_pending', 'email_sent', 'email_failed', 'in_progress', 'processing', 'completed', 'manual_review', 'expired', 'cancelled', 'not_requested'];
+export const OPEN_REGISTRATION = ['email_pending', 'email_sent', 'email_failed', 'in_progress'];
 
 // ---- Settings (single document, key "default") ----------------------------------
 const settingsSchema = new mongoose.Schema({
@@ -20,7 +24,7 @@ const settingsSchema = new mongoose.Schema({
     key: { type: String, required: true, match: /^[a-z0-9-]{2,40}$/ },
     address: { type: String, required: true, lowercase: true, trim: true },
     displayName: { type: String, default: '' },
-    provider: { type: String, enum: ['test', 'microsoft_graph'], required: true },
+    provider: { type: String, enum: ['test', 'microsoft_graph', 'imap'], required: true },
     defaultCategory: { type: String, enum: [...CATEGORIES, null], default: null },
     defaultRegion: { type: String, default: '' },
     enabled: { type: Boolean, default: true },
@@ -94,7 +98,51 @@ const escalationSchema = new mongoose.Schema({
   devices: [{ _id: false, serialNumber: String, model: String, productName: String, purchaseDate: Date, warrantyStatus: String, crmDeviceId: String }],
   crmCases: [{ _id: false, caseId: String, status: String, openedAt: Date, description: String }],
   crm: { status: { type: String, enum: ['pending', 'not_configured', 'matched', 'no_match', 'multiple_matches', 'error'], default: 'pending' }, provider: String, mode: String, fetchedAt: Date, attempts: { type: Number, default: 0 }, lastError: String, matchCount: Number, nextAttemptAt: Date },
+  // The registered customer (`customers` collection) the email was matched to. Two
+  // independent details must fit the same record: two of name, email and phone
+  // ('contact_details'), or the email's serial number plus one of them
+  // ('serial_and_contact'); `matchedBy` lists them. 'insufficient': fewer than two details
+  // fit one record; 'ambiguous': more than one person qualifies; 'conflict': details point
+  // to different people. Only the matched customer's ids are kept. The earlier single-detail
+  // methods remain for tickets matched before. Unset on tickets created before customer matching.
+  customerMatch: {
+    status: { type: String, enum: ['pending', 'matched', 'not_found', 'insufficient', 'ambiguous', 'conflict'] },
+    // 'registration': the customer completed the registration form and it was verified
+    // against the device records; such a match is not re-derived from the email again.
+    method: { type: String, enum: ['contact_details', 'serial_and_contact', 'sender_email', 'message_email', 'phone', 'registration', null], default: null },
+    matchedBy: [String],
+    customerIds: [Number],
+    name: String,
+    // The matched customer's registered address: where the acknowledgement goes.
+    email: String,
+    evaluatedAt: Date,
+  },
+  // The region the ticket is routed in: the region (`location`) pre-defined on the matched
+  // customer's registered device, or one chosen in triage.
   region: { type: String, default: '' },
+  // How `region` was decided. 'automatic': from the matched customer's device record;
+  // 'manual': chosen by a B2C admin in triage; 'unresolved': `reason` says why not;
+  // 'pending': not looked up yet. Unset on tickets created before regional routing.
+  regionAssignment: {
+    status: { type: String, enum: ['pending', 'automatic', 'manual', 'unresolved'] },
+    region: String,
+    source: { type: String, enum: ['device_location', 'manual', null], default: null },
+    reason: String,
+    // The serial number used: the customer's registered one, or the email's when unresolved.
+    serialNumber: String,
+    // The serial number written in the email, if any.
+    emailSerialNumber: String,
+    // Whether the device used is registered to the matched sender. A matched customer's
+    // ticket is routed by the email's serial number only when 'verified'; an unmatched
+    // sender's is routed by it as before. Only a 'verified' serial number is quoted to the
+    // customer or used for the CRM.
+    ownerCheck: { type: String, enum: ['verified', 'customer_not_matched', 'other_customer', 'not_registered', null], default: null },
+    deviceId: { type: ObjectId, ref: 'Device', default: null },
+    model: String,
+    evaluatedAt: Date,
+    decidedBy: personRef,
+    note: String,
+  },
   status: { type: String, enum: B2C_STATUSES, default: 'Pending Triage' },
   // SLA and escalation, with the same fields and values as B2B service tickets. B2C has no
   // priority levels: every ticket gets the standard 24-hour target, and only the escalation
@@ -112,7 +160,19 @@ const escalationSchema = new mongoose.Schema({
   participants: [{ type: ObjectId, ref: 'User' }],
   validation: { validatorLevel: String, proposedBy: personRef, proposedAt: Date, resolutionSummary: String, customerMessage: String, decidedBy: personRef, decidedAt: Date, decision: String, rejectionReason: String },
   resolution: { summary: String, resolvedBy: personRef, resolvedAt: Date, finalMessageId: { type: ObjectId, ref: 'B2COutboundEmail' } },
-  acknowledgement: { status: { type: String, enum: ['pending', 'queued', 'held', 'sent', 'failed', 'skipped'], default: 'pending' }, outboundId: { type: ObjectId, ref: 'B2COutboundEmail' }, sentAt: Date },
+  // `reason` says why no acknowledgement is sent: 'customer_not_verified' (policy 'verified'
+  // and no matched customer) or 'invalid_recipient'.
+  acknowledgement: { status: { type: String, enum: ['pending', 'queued', 'held', 'sent', 'failed', 'skipped'], default: 'pending' }, outboundId: { type: ObjectId, ref: 'B2COutboundEmail' }, sentAt: Date, reason: String },
+  // The customer registration request for this ticket (B2CRegistrationRequest), mirrored here
+  // for triage and the queue. While it is open the acknowledgement waits: the ticket is
+  // acknowledged once the customer is verified. Unset when no registration was needed.
+  registration: {
+    status: { type: String, enum: REGISTRATION_STATUSES },
+    requestId: { type: ObjectId, ref: 'B2CRegistrationRequest' },
+    reason: String,
+    requestedAt: Date,
+    completedAt: Date,
+  },
   reopenCount: { type: Number, default: 0 },
   closedAt: Date,
   closure: { reason: String, by: personRef },
@@ -131,6 +191,9 @@ escalationSchema.index({ 'crm.status': 1, 'crm.nextAttemptAt': 1 });
 // ---- Audit trail (append only) ------------------------------------------------
 const auditSchema = new mongoose.Schema({
   ticketId: { type: ObjectId, ref: 'B2CEscalation', index: true },
+  // Events of a registration request recorded before its ticket existed. The ticket is
+  // linked (ticketId, reference) once it is created, so its history starts with them.
+  registrationId: { type: ObjectId, ref: 'B2CRegistrationRequest', default: undefined },
   reference: String,
   action: { type: String, required: true },
   actor: new mongoose.Schema({ userId: { type: ObjectId, ref: 'User', default: null }, name: String, role: String }, { _id: false }),
@@ -141,19 +204,28 @@ const auditSchema = new mongoose.Schema({
   at: { type: Date, default: Date.now },
 });
 auditSchema.index({ ticketId: 1, at: 1 });
+auditSchema.index({ registrationId: 1, action: 1 }, { partialFilterExpression: { registrationId: { $type: 'objectId' } } });
 
 // ---- Outbound email -------------------------------------------------------------
 const outboundSchema = new mongoose.Schema({
   dedupeKey: { type: String, unique: true, sparse: true },
   ticketId: { type: ObjectId, ref: 'B2CEscalation', index: true },
   inboxKey: String,
-  kind: { type: String, enum: ['acknowledgement', 'clarification', 'final', 'reply'] },
+  kind: { type: String, enum: ['acknowledgement', 'clarification', 'final', 'reply', 'registration'] },
+  // For kind 'registration': the request whose link the message carries.
+  registrationId: { type: ObjectId, ref: 'B2CRegistrationRequest' },
   templateKey: String,
   vars: { type: Object, default: {} },
+  // 'inbox': sent by the ticket's inbox connector; 'company_sender': an acknowledgement
+  // sent from the separate company address (B2C_ACK_FROM_EMAIL) over SMTP.
+  via: { type: String, enum: ['inbox', 'company_sender'], default: 'inbox' },
+  from: String,
+  replyTo: String,
   to: String,
   subject: String,
   bodyText: String,
-  status: { type: String, enum: ['queued', 'held', 'retrying', 'sending', 'sent', 'failed'], default: 'queued' },
+  // 'skipped': the inbox is receive-only (IMAP), so the message was recorded but never sent.
+  status: { type: String, enum: ['queued', 'held', 'retrying', 'sending', 'sent', 'failed', 'skipped'], default: 'queued' },
   heldReason: String,
   attempts: { type: Number, default: 0 },
   nextAttemptAt: Date,
@@ -161,12 +233,96 @@ const outboundSchema = new mongoose.Schema({
   lastError: String,
   messageId: String,
   providerMessageId: String,
+  provider: String,
   mode: String,
+  // 'sent' means the mail provider accepted the message (its reply code, if
+  // any, is kept here); it does not confirm delivery to the customer's mailbox.
+  responseCode: Number,
   sentAt: Date,
   createdBy: personRef,
 }, { timestamps: true });
 outboundSchema.index({ status: 1, nextAttemptAt: 1 });
 outboundSchema.index({ messageId: 1 }, { sparse: true });
+
+// ---- Customer registration requests --------------------------------------------
+// One per incoming email whose sender could not be matched to a registered customer. No
+// ticket exists while it is open: the ticket (and its reference number) is created from the
+// original email only once the customer's registration is completed, or when a B2C admin
+// decides to proceed without it. Requests made before this rule (and by staff for an
+// existing ticket) carry their ticket from the start. The link's token is random and single
+// use; only its SHA-256 hash is stored. Statuses: 'required' (needed, no email sent:
+// `reason` says why), 'email_pending' (queued, held or retrying), 'email_sent' (accepted by
+// the mail server), 'email_failed', 'in_progress' (the link was opened), 'processing' (a
+// submission is being checked), 'completed' (customer verified), 'manual_review' (submitted,
+// but staff must decide: `reason`), 'expired', 'cancelled' (withdrawn by staff).
+// On the ticket only, 'not_requested': registration was needed but no email could be sent.
+const registrationSchema = new mongoose.Schema({
+  // Unset until the ticket is created.
+  ticketId: { type: ObjectId, ref: 'B2CEscalation', default: null },
+  reference: String,
+  // The original email: the support request the ticket is created from. One request per email.
+  sourceEmailId: { type: ObjectId, ref: 'B2CInboundEmail' },
+  internetMessageId: String,
+  inboxKey: String,
+  inboxAddress: String,
+  subject: String,
+  issueSummary: String,
+  // Later emails from the customer in reply to the registration email, added to the ticket
+  // as customer replies once it is created.
+  relatedEmailIds: [{ type: ObjectId, ref: 'B2CInboundEmail' }],
+  // How the ticket came about: 'registration' (created when the registration completed) or
+  // 'staff' (a B2C admin proceeded without it).
+  ticketCreatedBy: { type: String, enum: ['registration', 'staff', null], default: null },
+  ticketCreatedAt: Date,
+  // Why registration was needed: the email's customer match status ('not_found', 'insufficient').
+  trigger: String,
+  // Where the link goes: the address the email came from.
+  recipient: { type: String, required: true },
+  status: { type: String, enum: REGISTRATION_STATUSES, required: true },
+  reason: String,
+  tokenHash: String,
+  tokenIssuedAt: Date,
+  expiresAt: Date,
+  // Registration emails queued for this request (the first and resends), the last one queued,
+  // and the last one the mail server accepted.
+  sendCount: { type: Number, default: 0 },
+  lastQueuedAt: Date,
+  lastSentAt: Date,
+  outboundId: { type: ObjectId, ref: 'B2COutboundEmail' },
+  openedAt: Date,
+  failedAttempts: { type: Number, default: 0 },
+  lockedUntil: Date,
+  submittedAt: Date,
+  completedAt: Date,
+  // What the customer submitted (validated and normalised). Kept for staff review; never
+  // copied into logs, audit details or notifications.
+  submission: {
+    name: String, email: String, phone: String, alternatePhone: String, serialNumber: String, brand: String, model: String,
+    purchaseDate: Date, purchaseLocation: String, purchaseRegion: String, dealer: String, invoiceNumber: String,
+  },
+  // How the submission was resolved: the customer record used or created (its stored name,
+  // email and phone, never overwritten), the device record and its region, and the checks passed.
+  outcome: {
+    customerRecord: { type: String, enum: ['existing', 'linked', 'created', null], default: null },
+    customerIds: [Number],
+    name: String,
+    email: String,
+    phone: String,
+    deviceId: { type: ObjectId, ref: 'Device', default: null },
+    model: String,
+    region: String,
+    checks: [String],
+  },
+  // When the ticket was created (or the original ticket continued) from the submission;
+  // retried each cycle until set.
+  resumedAt: { type: Date, default: null },
+  resumingUntil: { type: Date, default: null },
+}, { timestamps: true });
+registrationSchema.index({ ticketId: 1 }, { unique: true, partialFilterExpression: { ticketId: { $type: 'objectId' } } });
+registrationSchema.index({ sourceEmailId: 1 }, { unique: true, partialFilterExpression: { sourceEmailId: { $type: 'objectId' } } });
+registrationSchema.index({ tokenHash: 1 }, { unique: true, partialFilterExpression: { tokenHash: { $type: 'string' } } });
+registrationSchema.index({ status: 1, expiresAt: 1 });
+registrationSchema.index({ recipient: 1, createdAt: -1 });
 
 // ---- Integration health ---------------------------------------------------------
 const integrationStatusSchema = new mongoose.Schema({
@@ -192,12 +348,19 @@ export const B2CAuditEvent = model('B2CAuditEvent', auditSchema);
 export const B2COutboundEmail = model('B2COutboundEmail', outboundSchema);
 export const B2CIntegrationStatus = model('B2CIntegrationStatus', integrationStatusSchema);
 export const B2CCounter = model('B2CCounter', counterSchema);
+export const B2CRegistrationRequest = model('B2CRegistrationRequest', registrationSchema);
 
-export const b2cModels = { B2CSettings, B2CInboundEmail, B2CEscalation, B2CAuditEvent, B2COutboundEmail, B2CIntegrationStatus, B2CCounter };
+export const b2cModels = { B2CSettings, B2CInboundEmail, B2CEscalation, B2CAuditEvent, B2COutboundEmail, B2CIntegrationStatus, B2CCounter, B2CRegistrationRequest };
 
 export async function ensureB2CIndexes() {
+  // A request no longer needs a ticket: the earlier unique ticketId index (every value,
+  // nulls included) is replaced by one over set ticket ids only.
+  const existing = await b2cModels.B2CRegistrationRequest.collection.indexes().catch(error => { if (error?.code === 26) return []; throw error; });
+  if (existing.some(index => index.name === 'ticketId_1' && !index.partialFilterExpression)) await b2cModels.B2CRegistrationRequest.collection.dropIndex('ticketId_1');
   await Promise.all(Object.values(b2cModels).map(item => item.createIndexes()));
   // Raw collection update: the old values are no longer in the schema enum.
+  // SMTP sending was removed: drop the per-inbox outgoing provider it used.
+  await b2cModels.B2CSettings.collection.updateMany({ 'inboxes.outboundProvider': { $exists: true } }, { $unset: { 'inboxes.$[].outboundProvider': '' } });
   for (const [from, to] of Object.entries(RENAMED_STATUSES)) await b2cModels.B2CEscalation.collection.updateMany({ status: from }, { $set: { status: to } });
   // Tickets created before SLA tracking get the standard target from their creation time.
   const untracked = await b2cModels.B2CEscalation.collection.find({ slaTargetAt: { $exists: false } }, { projection: { createdAt: 1 } }).toArray();

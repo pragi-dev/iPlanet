@@ -7,10 +7,11 @@ import {
   ActivityTimeline, Badge, Button, ErrorState, Field, InfoList, InlineAlert, JourneyTrack, Modal, NextAction, PageSkeleton, Section, Surface, formatDate, formatDateTime, friendlyError, useAsync,
 } from '../ui';
 import { b2cTicketAction, downloadB2CAttachment, getB2CStaff, getB2CTicket } from './api';
-import { ACK_STATUS, b2cJourneySteps, B2CShell, B2CStatus, B2C_ROLE_LABELS, CRM_STATUS, CategoryBadge, IDENTIFIER_LABELS, NoB2CAccess, TRIAGE_REASONS, auditTimeline } from './shared';
+import { ackLabel, b2cJourneySteps, B2CShell, B2CStatus, B2C_ROLE_LABELS, CRM_STATUS, CUSTOMER_MATCH, CUSTOMER_MATCH_METHODS, CategoryBadge, EMAIL_KINDS, IDENTIFIER_LABELS, NoB2CAccess, REGION_SOURCES, REGION_STATUS, REGISTRATION_REASONS, REGISTRATION_STATUS, TRIAGE_REASONS, auditTimeline, registrationLabel } from './shared';
 
 const ACTION_META = {
   complete_triage: { label: 'Complete triage', icon: ClipboardCheck },
+  send_registration: { label: 'Send registration link', icon: Send, direct: true },
   retry_crm: { label: 'Retry CRM lookup', icon: RefreshCcw, direct: true },
   claim: { label: 'Take ownership', icon: Hand, direct: true },
   assign: { label: 'Assign', icon: UserPlus },
@@ -27,8 +28,8 @@ const ACTION_META = {
   reopen: { label: 'Reopen', icon: RotateCcw },
   add_note: { label: 'Add internal note', icon: StickyNote },
 };
-const DONE = { claim: 'You now own this escalation.', accept: 'Assignment accepted.', start: 'Work started.', retry_crm: 'CRM lookup repeated.', complete_triage: 'Triage completed and the escalation was routed.', assign: 'Assigned.', reroute: 'Rerouted.', set_path: 'Workflow path updated.', request_clarification: 'Clarification request queued for the customer.', propose_resolution: 'Repair completion submitted.', approve_resolution: 'Resolution approved. The final customer email has been queued.', reject_resolution: 'Returned to the owner for rework.', close: 'Escalation closed.', close_unresolved: 'Escalation closed.', reopen: 'Escalation reopened.', add_note: 'Note added.' };
-const OUTBOUND_STATUS = { queued: ['Queued', 'info'], sending: ['Sending', 'info'], retrying: ['Retrying', 'warning'], held: ['Held — template not approved', 'warning'], sent: ['Sent', 'success'], failed: ['Failed', 'critical'] };
+const DONE = { send_registration: 'Registration link queued for the customer.', claim: 'You now own this escalation.', accept: 'Assignment accepted.', start: 'Work started.', retry_crm: 'CRM lookup repeated.', complete_triage: 'Triage completed and the escalation was routed.', assign: 'Assigned.', reroute: 'Rerouted.', set_path: 'Workflow path updated.', request_clarification: 'Clarification request queued for the customer.', propose_resolution: 'Repair completion submitted.', approve_resolution: 'Resolution approved. The final customer email has been queued.', reject_resolution: 'Returned to the owner for rework.', close: 'Escalation closed.', close_unresolved: 'Escalation closed.', reopen: 'Escalation reopened.', add_note: 'Note added.' };
+const OUTBOUND_STATUS = { queued: ['Queued', 'info'], sending: ['Sending', 'info'], retrying: ['Retrying', 'warning'], held: ['Held — template not approved', 'warning'], sent: ['Sent — accepted by mail server', 'success'], failed: ['Failed', 'critical'], skipped: ['Not sent — inbox is receive-only (IMAP)', 'neutral'] };
 const REJECT_REASONS = { type_not_allowed: 'file type not allowed', content_does_not_match_type: 'content does not match its type', too_large: 'too large', empty_file: 'empty', content_unavailable: 'not downloadable', too_many_attachments: 'too many attachments' };
 const levelName = (levels, key) => levels.find(level => level.key === key)?.label || B2C_ROLE_LABELS[key] || key;
 
@@ -39,7 +40,7 @@ function nextStep(ticket, allowed, levels, open) {
   const level = levelName(levels, ticket.workflow?.currentLevel);
   switch (ticket.status) {
     case 'Pending Triage':
-      return { tone: 'warning', eyebrow: 'Triage', title: 'Review before routing', description: (ticket.triage?.reasons || []).map(reason => TRIAGE_REASONS[reason] || reason).join('. ') || 'This escalation needs review.', actions: [can('complete_triage') && button('complete_triage'), can('retry_crm') && button('retry_crm', { secondary: true })] };
+      return { tone: 'warning', eyebrow: 'Triage', title: 'Review before routing', description: (ticket.triage?.reasons || []).map(reason => TRIAGE_REASONS[reason] || reason).join('. ') || 'This escalation needs review.', actions: [can('complete_triage') && button('complete_triage'), can('send_registration') && button('send_registration', { secondary: true }), can('retry_crm') && button('retry_crm', { secondary: true })] };
     case 'Open':
     case 'Reopened':
       return { tone: ticket.status === 'Reopened' ? 'warning' : 'info', title: ticket.workflow?.assignee?.name ? `Reopened — with ${ticket.workflow.assignee.name}` : `Waiting for a ${level} to take ownership`, description: ticket.workflow?.assignee?.name ? 'Start work again or hand it to someone else.' : 'Take ownership to accept the work, or assign it to a colleague at this level.', actions: [can('claim') && button('claim'), can('start') && button('start'), can('assign') && button('assign', { secondary: true }), can('reroute') && button('reroute', { secondary: true })] };
@@ -74,7 +75,7 @@ export function B2CTicketDetail() {
   if (!data && !state.error) return <B2CShell title="Escalation" crumbs={crumbs}><PageSkeleton variant="detail" kpis={0} /></B2CShell>;
   if (!data) return <B2CShell title="Escalation" crumbs={crumbs}><div className="card"><ErrorState title={state.error?.status === 404 ? 'Escalation not found' : 'Unable to load this escalation'} message={state.error?.status === 404 ? 'It does not exist or is not visible to your account.' : friendlyError(state.error)} onRetry={state.error?.status === 404 ? undefined : state.reload} /></div></B2CShell>;
 
-  const { ticket, conversation, audit, allowedActions: allowed, workflow, templates, crmConfigured } = data;
+  const { ticket, conversation, audit, allowedActions: allowed, workflow, templates, crmConfigured, registration } = data;
   const levels = workflow.levels;
 
   const run = async (action, payload = {}) => {
@@ -105,7 +106,7 @@ export function B2CTicketDetail() {
           <p className="case-id mono">{ticket.reference}</p>
           <h1 className="case-title">{ticket.subject || 'No subject'}</h1>
           <p className="case-sub">{[ticket.customer?.name || ticket.customer?.email, ticket.region, `received ${formatDateTime(ticket.createdAt)}`].filter(Boolean).join(' · ')}</p>
-          <div className="case-badges"><B2CStatus status={ticket.status} /><CategoryBadge category={ticket.category} /><Badge tone={CRM_STATUS[ticket.crm?.status]?.tone}>{CRM_STATUS[ticket.crm?.status]?.label}</Badge><Badge tone={ticket.acknowledgement?.status === 'sent' ? 'success' : ticket.acknowledgement?.status === 'failed' ? 'critical' : 'neutral'}>{ACK_STATUS[ticket.acknowledgement?.status]}</Badge></div>
+          <div className="case-badges"><B2CStatus status={ticket.status} /><CategoryBadge category={ticket.category} /><Badge tone={CRM_STATUS[ticket.crm?.status]?.tone}>{CRM_STATUS[ticket.crm?.status]?.label}</Badge><Badge tone={ticket.acknowledgement?.status === 'sent' ? 'success' : ticket.acknowledgement?.status === 'failed' ? 'critical' : 'neutral'}>{ackLabel(ticket.acknowledgement)}</Badge></div>
         </div>
         <div className="page-actions">{allowed.includes('add_note') && <Button icon={StickyNote} onClick={() => setDialog('add_note')}>Add note</Button>}</div>
       </div>
@@ -147,7 +148,15 @@ export function B2CTicketDetail() {
             {ticket.crm?.status === 'not_configured' && <p className="text-muted text-small">The CRM connector is not configured, so customer and device details come from the email only.</p>}
             {ticket.crm?.status === 'error' && <InlineAlert tone="warning" title="CRM lookup failed">{ticket.crm.nextAttemptAt ? `Retrying automatically after ${formatDateTime(ticket.crm.nextAttemptAt)}.` : 'Automatic retries have stopped. Retry manually.'}</InlineAlert>}
             {ticket.crm?.mode === 'test' && <p className="b2c-test-label">Data from the CRM TEST adapter — not TCM's CRM</p>}
-            <InfoList items={[['Name', ticket.customer?.name], ['Email', ticket.customer?.email], ['Phone', ticket.customer?.phone], ['CRM customer ID', ticket.customer?.crmCustomerId], ['Region', ticket.region]]} />
+            <InfoList items={[['Name', ticket.customer?.name], ['Email', ticket.customer?.email], ['Phone', ticket.customer?.phone], ['CRM customer ID', ticket.customer?.crmCustomerId]]} />
+          </section>
+          {registration && <section className="side-section" aria-label="Customer registration">
+            <p className="side-section-title">Customer registration</p>
+            <RegistrationPanel registration={registration} />
+          </section>}
+          <section className="side-section" aria-label="Region and routing">
+            <p className="side-section-title">Region &amp; routing</p>
+            <RegionRouting ticket={ticket} levels={levels} />
           </section>
           <section className="side-section" aria-label="Devices">
             <p className="side-section-title">Devices</p>
@@ -174,15 +183,107 @@ export function B2CTicketDetail() {
   </B2CShell>;
 }
 
+// The registration request of an escalation whose sender could not be identified: its state,
+// when each step happened and why it needs a person. The link itself is never shown.
+const REGISTRATION_CHECKS = { device_found: 'device record found', purchase_region_confirmed: 'purchase region confirmed', purchase_date_confirmed: 'purchase date confirmed', customer_matched: 'existing customer matched', new_customer: 'no existing customer', device_region_missing: 'device record has no region' };
+function RegistrationPanel({ registration }) {
+  const status = REGISTRATION_STATUS[registration.status];
+  const reason = registration.reason ? REGISTRATION_REASONS[registration.reason] || registration.reason.replace(/_/g, ' ') : null;
+  const submission = registration.submission;
+  const when = value => (value ? formatDateTime(value) : null);
+  return <div className="b2c-registration-panel">
+    <span><Badge tone={status?.tone}>{registrationLabel(registration, registration.assigned) || registration.status}</Badge></span>
+    {registration.status === 'manual_review' && <InlineAlert tone="warning" title="Needs a decision in triage">{reason}</InlineAlert>}
+    <InfoList items={[
+      ['Sent to', registration.recipient],
+      ['Reason', registration.status !== 'manual_review' ? reason : null],
+      ['Requested', when(registration.requestedAt)],
+      ['Emails', registration.sendCount ? `${registration.sendCount} of ${registration.maxSends} allowed${registration.lastSentAt ? ` · last accepted by the mail server ${when(registration.lastSentAt)}` : ''}` : null],
+      ['Link expires', registration.expiresAt && !registration.submittedAt ? when(registration.expiresAt) : null],
+      ['Opened', when(registration.openedAt)],
+      ['Invalid submissions', registration.failedAttempts || null],
+      ['Submitted', when(registration.submittedAt)],
+      ['Completed', when(registration.completedAt)],
+      ['Outcome', registration.outcome?.customerRecord ? `${{ existing: 'Existing customer record used', linked: 'Device added to an existing customer', created: 'New customer record created' }[registration.outcome.customerRecord]}${registration.outcome.region ? ` · ${registration.outcome.region}` : ''}` : null],
+      ['Ticket created', { registration: 'After the customer registered', staff: 'By a B2C admin, without registration' }[registration.ticketCreatedBy] || null],
+      ['Checks passed', registration.outcome?.checks?.length ? registration.outcome.checks.filter(check => REGISTRATION_CHECKS[check]).map(check => REGISTRATION_CHECKS[check]).join(', ') : null],
+    ].filter(([, value]) => value)} />
+    {submission && <>
+      <p className="text-muted text-small">Submitted by the customer (not verified):</p>
+      <InfoList items={[
+        ['Name', submission.name], ['Email', submission.email], ['Phone', submission.phone], ['Alternate phone', submission.alternatePhone],
+        ['Serial number', submission.serialNumber ? <span key="serial" className="mono">{submission.serialNumber}</span> : null], ['Device', [submission.brand, submission.model].filter(Boolean).join(' ')],
+        ['Purchased', [submission.purchaseDate && formatDate(submission.purchaseDate), submission.purchaseLocation].filter(Boolean).join(' · ')], ['Region stated', submission.purchaseRegion], ['Dealer', submission.dealer], ['Invoice', submission.invoiceNumber],
+      ].filter(([, value]) => value)} />
+    </>}
+  </div>;
+}
+
+// Whether the device used is registered to the sender. An identified customer's ticket is routed
+// by the serial number only when it is theirs; an unidentified sender's is routed by it as before.
+const OWNER_CHECK = {
+  verified: ['Registered to this customer', 'success'],
+  customer_not_matched: ['Sender is not a registered customer', 'warning'],
+  other_customer: ['Registered to a different customer', 'warning'],
+  not_registered: ['Not registered to any customer', 'warning'],
+};
+// Reasons recorded on tickets created before the serial number had priority.
+const SERIAL_MISMATCH = ['serial_registered_to_other_customer', 'serial_not_registered_to_customer'];
+
+// The registered customer the email was matched to, their device, and how the device's
+// region decided the owner.
+function RegionRouting({ ticket, levels }) {
+  const assignment = ticket.regionAssignment;
+  const match = ticket.customerMatch;
+  const currentLevel = ticket.workflow?.currentLevel;
+  const routing = [
+    ['Regional queue', currentLevel ? `${levelName(levels, currentLevel)}${ticket.region ? ` · ${ticket.region}` : ''}` : 'Not routed yet'],
+    [currentLevel === 'cluster_manager' ? 'Cluster Manager' : 'Owner', ticket.workflow?.assignee?.name || (currentLevel ? 'Waiting in the level queue' : null)],
+    // Triage completed by the system is automatic routing; by a named admin, manual.
+    ['Assignment', ticket.triage?.resolvedAt ? (ticket.triage.resolvedBy === 'System' ? 'Automatic' : `Manual · triage by ${ticket.triage.resolvedBy}`) : null],
+  ];
+  if (!assignment?.status) return <><p className="text-muted text-small">Created before routing by device region.</p><InfoList items={[['Region', ticket.region || 'Not set'], ...routing].filter(([, value]) => value)} /></>;
+  const status = REGION_STATUS[assignment.status];
+  const matchStatus = match?.status ? CUSTOMER_MATCH[match.status] : null;
+  const matched = match?.status === 'matched';
+  const owner = OWNER_CHECK[assignment.ownerCheck];
+  // The matched customer's registered serial number (older tickets: unless the email's did not match it).
+  const registeredSerial = assignment.ownerCheck ? (assignment.ownerCheck === 'verified' ? assignment.serialNumber : null) : matched && !SERIAL_MISMATCH.includes(assignment.reason) ? assignment.serialNumber : null;
+  const association = owner ? <span key="association"><Badge tone={owner[1]}>{owner[0]}</Badge>{assignment.ownerCheck === 'verified' && !assignment.emailSerialNumber ? ' · only registered device (no serial number in the email)' : ''}</span>
+    : matched && SERIAL_MISMATCH.includes(assignment.reason) ? <Badge key="association" tone="warning">Not this customer's device</Badge> : null;
+  return <>
+    {assignment.status === 'unresolved' && <InlineAlert tone="warning" title="Region not identified">{TRIAGE_REASONS[assignment.reason] || assignment.reason}. A B2C admin chooses the region in triage.</InlineAlert>}
+    {assignment.status === 'automatic' && owner && assignment.ownerCheck !== 'verified' && <InlineAlert tone="info" title="Routed by the serial number">{owner[0]}. The region comes from the device record; confirm the customer when you contact them.</InlineAlert>}
+    {assignment.status === 'pending' && <p className="text-muted text-small">Waiting for the customer and device lookup to finish.</p>}
+    <InfoList items={[
+      ['Customer', matchStatus ? <span key="customer">{matched ? `${match.name || 'Registered customer'} ` : ''}<Badge tone={matchStatus.tone}>{matchStatus.label}</Badge></span> : (match ? null : 'Not checked (created before customer matching)')],
+      ['Customer ID', matched && match.customerIds?.length ? match.customerIds.join(', ') : null],
+      ['Matched by', matched ? (match.matchedBy || [match.method]).map(method => CUSTOMER_MATCH_METHODS[method] || method).join('; ') : null],
+      ['Serial number in email', assignment.emailSerialNumber ? <span key="email-serial" className="mono">{assignment.emailSerialNumber}</span> : (match ? 'None' : null)],
+      ['Registered serial number', registeredSerial ? <span key="serial" className="mono">{registeredSerial}</span> : null],
+      ['Device owner', association],
+      ['Serial number', !match && assignment.serialNumber ? <span key="serial" className="mono">{assignment.serialNumber}</span> : null],
+      ['Device model', assignment.model],
+      ['Device record', assignment.deviceId ? 'Found' : registeredSerial || assignment.emailSerialNumber || (!match && assignment.serialNumber) ? 'Not found' : null],
+      ['Purchase region', <span key="region">{ticket.region || 'Not set'} <Badge tone={status?.tone}>{status?.label}</Badge></span>],
+      ['Decided from', assignment.source ? REGION_SOURCES[assignment.source] : null],
+      ['Chosen by', assignment.status === 'manual' && assignment.decidedBy?.name ? `${assignment.decidedBy.name} · ${formatDateTime(assignment.evaluatedAt)}` : null],
+      ['Reason', assignment.status === 'manual' ? assignment.note : null],
+      ...routing,
+    ].filter(([, value]) => value)} />
+  </>;
+}
+
 function EmailMessage({ message, ticketId, onError }) {
   const inbound = message.direction === 'inbound';
-  const [status, tone] = OUTBOUND_STATUS[message.status] || [];
+  // A live provider accepting the message is not proof it reached the customer's mailbox.
+  const [status, tone] = message.status === 'sent' && message.mode === 'test' ? ['Sent', 'success'] : OUTBOUND_STATUS[message.status] || [];
   return <li className={`b2c-message b2c-message-${message.direction}`}>
     <div className="b2c-message-head">
       <span className="b2c-message-icon" aria-hidden="true">{inbound ? <Mail size={15} /> : <Send size={15} />}</span>
       <div>
         <strong>{inbound ? (message.from?.name || message.from?.address) : `To ${message.to}`}</strong>
-        <span className="text-muted text-small">{inbound ? message.from?.address : `${message.kind === 'final' ? 'Final customer email' : message.kind === 'clarification' ? 'Clarification request' : 'Acknowledgement'}${message.createdBy?.name ? ` · by ${message.createdBy.name}` : ' · automatic'}`} · {formatDateTime(message.at)}</span>
+        <span className="text-muted text-small">{inbound ? message.from?.address : `${(EMAIL_KINDS[message.kind] || EMAIL_KINDS.acknowledgement).replace(/^./, letter => letter.toUpperCase())}${message.createdBy?.name ? ` · by ${message.createdBy.name}` : ' · automatic'}`} · {formatDateTime(message.at)}</span>
       </div>
       {!inbound && <span className="b2c-message-status">{message.mode === 'test' && <Badge tone="warning">Test adapter — not delivered</Badge>}<Badge tone={tone}>{status}</Badge></span>}
     </div>
@@ -207,18 +308,23 @@ function TemplateNote({ template, label }) {
 
 function ActionDialog({ action, ticket, workflow, templates, busy, error, onSubmit, onClose }) {
   const [form, setForm] = useState(() => ({
-    category: ticket.category === 'Unclassified' ? '' : ticket.category, region: ticket.region || '', identifiers: [], identifierType: 'caseId', identifierValue: '', rerunCrm: true,
+    category: ticket.category === 'Unclassified' ? '' : ticket.category, region: ticket.region || '', regionReason: '', identifiers: [], identifierType: 'caseId', identifierValue: '', rerunCrm: true,
     userId: '', levelKey: '', reason: '', message: '', note: '', resolutionSummary: '', customerMessage: action === 'approve_resolution' ? ticket.validation?.customerMessage || '' : '', path: ticket.path || [],
   }));
   const set = (key, value) => setForm(current => ({ ...current, [key]: value }));
-  const staff = useAsync(() => (['assign', 'reroute'].includes(action) ? getB2CStaff() : Promise.resolve([])), [action]);
-  const targetLevel = action === 'assign' ? ticket.workflow?.currentLevel : form.levelKey;
-  const eligible = (staff.data || []).filter(person => person.b2cRole === targetLevel && (!person.b2cRegions?.length || person.b2cRegions.includes(ticket.region)) && String(person._id) !== String(ticket.workflow?.assignee?.userId));
+  const staff = useAsync(() => (['assign', 'reroute', 'complete_triage'].includes(action) ? getB2CStaff() : Promise.resolve([])), [action]);
+  const targetLevel = action === 'assign' ? ticket.workflow?.currentLevel : action === 'complete_triage' ? workflow.firstLevel : form.levelKey;
+  // Triage decides the region, so the staff list follows the region chosen in the form.
+  const identified = ticket.regionAssignment?.status === 'automatic' ? ticket.regionAssignment.region : null;
+  const targetRegion = action === 'complete_triage' ? form.region || identified : ticket.region;
+  const eligible = (staff.data || []).filter(person => person.b2cRole === targetLevel && (!person.b2cRegions?.length || person.b2cRegions.includes(targetRegion)) && String(person._id) !== String(ticket.workflow?.assignee?.userId));
   const levelLabel = key => workflow.levels.find(level => level.key === key)?.label || key;
+  const regionOverridden = Boolean(form.region) && form.region !== identified;
+  const regions = workflow.regions || [];
 
   const payload = () => {
     switch (action) {
-      case 'complete_triage': return { category: form.category, region: form.region, identifiers: form.identifiers, rerunCrm: form.rerunCrm, note: form.note };
+      case 'complete_triage': return { category: form.category, region: form.region, regionReason: regionOverridden ? form.regionReason : '', identifiers: form.identifiers, rerunCrm: form.rerunCrm, note: form.note, ...(form.userId ? { userId: form.userId } : {}) };
       case 'assign': return { userId: form.userId };
       case 'reroute': return { levelKey: form.levelKey, reason: form.reason, ...(form.userId ? { userId: form.userId } : {}) };
       case 'set_path': return { path: form.path };
@@ -232,7 +338,8 @@ function ActionDialog({ action, ticket, workflow, templates, busy, error, onSubm
     }
   };
   const valid = {
-    complete_triage: Boolean(form.category), assign: Boolean(form.userId), reroute: form.levelKey && form.reason.trim(), set_path: form.path.length > 0,
+    // Without an identified region one must be chosen, unless a newly added identifier may identify it.
+    complete_triage: Boolean(form.category) && (!regionOverridden || form.regionReason.trim()) && (Boolean(form.region || identified) || !regions.length || form.identifiers.length > 0), assign: Boolean(form.userId), reroute: form.levelKey && form.reason.trim(), set_path: form.path.length > 0,
     request_clarification: form.message.trim(), propose_resolution: form.resolutionSummary.trim() && form.customerMessage.trim(), reject_resolution: form.reason.trim(), reopen: form.reason.trim(),
     close_unresolved: form.reason.trim(), add_note: form.note.trim(),
   }[action] ?? true;
@@ -243,7 +350,7 @@ function ActionDialog({ action, ticket, workflow, templates, busy, error, onSubm
   </select>}</Field>;
 
   const descriptions = {
-    complete_triage: 'Confirm the category and add any identifier the automatic extraction missed. The escalation is then routed using the configured workflow.',
+    complete_triage: 'Confirm the category and region, and add any identifier the automatic extraction missed (a serial number on a device record gives the region). The escalation is then routed using the configured workflow.',
     reroute: 'Moves the escalation to any enabled level. The level is added to the path if it is not already on it.',
     propose_resolution: workflow.validatorLevel === false ? 'Validation is not required: the escalation is resolved and the final email is queued.' : `The resolution goes to ${workflow.validatorLevel ? levelLabel(workflow.validatorLevel) : 'a B2C admin'} for validation before the customer is told.`,
     approve_resolution: 'Approving resolves the escalation and queues the final customer email below.',
@@ -258,7 +365,19 @@ function ActionDialog({ action, ticket, workflow, templates, busy, error, onSubm
       {action === 'complete_triage' && <>
         {ticket.triage?.reasons?.length > 0 && <InlineAlert tone="warning" title="Flagged for triage">{ticket.triage.reasons.map(reason => TRIAGE_REASONS[reason] || reason).join('. ')}</InlineAlert>}
         <Field label="Category" required>{props => <select {...props} value={form.category} onChange={event => set('category', event.target.value)}><option value="">Choose Service or Retail</option><option>Service</option><option>Retail</option></select>}</Field>
-        <Field label="Region" hint="Filled from the CRM when it finds the customer.">{props => <input {...props} value={form.region} onChange={event => set('region', event.target.value)} maxLength={80} />}</Field>
+        {regions.length
+          ? <Field label="Region" required={!identified && !form.identifiers.length} hint={identified ? `From the device record: ${identified}.` : 'No device record gives a region. Add the serial number, or choose the region.'}>{props => <select {...props} value={form.region} onChange={event => setForm(current => ({ ...current, region: event.target.value, userId: '' }))}>
+            <option value="">{identified ? `Keep ${identified}` : 'Choose a region'}</option>
+            {regions.map(name => <option key={name} value={name}>{name}{name === identified ? ' (identified)' : ''}</option>)}
+          </select>}</Field>
+          : <InlineAlert tone="warning" title="No device records have a region">Regions come from the location on the device records. Until devices have one, the escalation is routed without a region.</InlineAlert>}
+        {regionOverridden && <Field label="Reason for this region" required hint="Recorded in the escalation history.">{textarea('regionReason', identified ? `Why ${form.region} instead of ${identified}` : 'e.g. confirmed with the customer', 2)}</Field>}
+        {workflow.firstLevel && (form.region || identified) && !staff.loading && (eligible.length
+          ? <Field label={`${levelLabel(workflow.firstLevel)} (optional)`} hint="Leave empty to assign automatically when exactly one person holds this level for the region.">{props => <select {...props} value={form.userId} onChange={event => set('userId', event.target.value)}>
+            <option value="">Assign automatically or leave in the level queue</option>
+            {eligible.map(person => <option key={person._id} value={person._id}>{person.name}{person.b2cRegions?.length ? ` · ${person.b2cRegions.join(', ')}` : ''}</option>)}
+          </select>}</Field>
+          : <InlineAlert tone="warning" title={`Nobody holds ${levelLabel(workflow.firstLevel)} for this region`}>The escalation will wait in the {levelLabel(workflow.firstLevel)} queue. Grant the role for this region with the b2c:staff command.</InlineAlert>)}
         <div className="field"><span className="field-label">Add an identifier</span>
           <div className="row">
             <select aria-label="Identifier type" value={form.identifierType} onChange={event => set('identifierType', event.target.value)}>{Object.entries(IDENTIFIER_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>

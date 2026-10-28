@@ -73,8 +73,14 @@ export function createB2CRouter({ service, auth, User, Notification, logger = co
   router.put('/settings', adminOnly, handle(req => service.updateSettings(req.body || {}, req.b2cUser)));
   router.get('/integrations/health', adminOnly, handle(() => service.health()));
   router.post('/integrations/run', adminOnly, handle(() => service.runCycle('manual')));
+  // IMAP check: login and mailbox folder only; reads and changes nothing. Rate limited.
+  router.post('/integrations/imap/verify', adminOnly, handle(req => service.verifyImap(req.b2cUser)));
   router.get('/inbound', adminOnly, handle(req => service.listInbound(req.query)));
   router.post('/inbound/:id/retry', adminOnly, handle(req => service.retryInbound(req.params.id, req.b2cUser)));
+  // Emails waiting for the customer to register: no ticket exists for them yet.
+  router.get('/registrations', adminOnly, handle(req => service.listRegistrations(req.query)));
+  router.get('/registrations/:id', adminOnly, handle(req => service.getRegistration(req.params.id)));
+  router.post('/registrations/:id/actions/:action', adminOnly, handle(req => service.registrationAction(req.params.id, req.params.action, req.body || {}, req.b2cUser)));
   router.get('/outbound', adminOnly, handle(req => service.listOutbound(req.query)));
   router.post('/outbound/:id/retry', adminOnly, handle(req => service.retryOutbound(req.params.id)));
 
@@ -82,6 +88,53 @@ export function createB2CRouter({ service, auth, User, Notification, logger = co
   router.post('/test-adapter/inbound', adminOnly, handle(req => service.injectTestEmail(req.body || {}, req.b2cUser)));
   router.get('/test-adapter/outbox', adminOnly, handle(() => service.testOutbox()));
 
+  return router;
+}
+
+// Fixed-window request limits per client address, held in memory (per server process).
+export function createRateLimiter({ windowMs, max, now = () => Date.now() }) {
+  const hits = new Map();
+  return function limit(req, res, next) {
+    const at = now();
+    const key = req.ip || req.socket?.remoteAddress || 'unknown';
+    const entry = hits.get(key);
+    if (!entry || at - entry.start >= windowMs) hits.set(key, { start: at, count: 1 });
+    else if (entry.count >= max) {
+      res.set('Retry-After', String(Math.ceil((entry.start + windowMs - at) / 1000)));
+      return res.status(429).json({ code: 'rate_limited', message: 'Too many attempts. Please wait a few minutes and try again.' });
+    } else entry.count += 1;
+    if (hits.size > 10_000) for (const [item, value] of hits) if (at - value.start >= windowMs) hits.delete(item);
+    next();
+  };
+}
+
+// /api/b2c/public/registration — the customer registration page. No sign-in: the token in
+// the path is the only credential, and it opens only the form for its own request. Answers
+// are never cached and never sent with a referrer. Mounted before the staff router.
+export function createB2CPublicRouter({ service, logger = console, limits = {} }) {
+  const router = express.Router();
+  const MINUTE = 60_000;
+  const viewLimit = createRateLimiter({ windowMs: 15 * MINUTE, max: limits.view ?? 60 });
+  const submitLimit = createRateLimiter({ windowMs: 15 * MINUTE, max: limits.submit ?? 15 });
+  const renewLimit = createRateLimiter({ windowMs: 60 * MINUTE, max: limits.renew ?? 5 });
+  router.use((req, res, next) => {
+    res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex, nofollow', 'X-Content-Type-Options': 'nosniff' });
+    next();
+  });
+  const handle = fn => async (req, res) => {
+    try {
+      res.json(await fn(req));
+    } catch (error) {
+      const status = Number(error?.status);
+      if (status >= 400 && status < 500) return res.status(status).json({ code: error.code || 'invalid', message: error.message, ...(error.fields ? { fields: error.fields } : {}), ...(error.canRenew !== undefined ? { canRenew: error.canRenew } : {}) });
+      // The token is in the path: it is never logged.
+      logger.error(`[B2C] Registration ${req.method} failed: ${safeErrorMessage(error)}`);
+      res.status(500).json({ code: 'error', message: 'Something went wrong. Please try again later.' });
+    }
+  };
+  router.get('/registration/:token', viewLimit, handle(req => service.openRegistration(req.params.token)));
+  router.post('/registration/:token', submitLimit, handle(req => service.submitRegistration(req.params.token, req.body || {})));
+  router.post('/registration/:token/renew', renewLimit, handle(req => service.renewRegistration(req.params.token)));
   return router;
 }
 

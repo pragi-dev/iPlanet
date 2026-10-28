@@ -19,7 +19,7 @@ export function B2CDashboard() {
   if (state.error?.status === 403) return <B2CShell title="B2C Escalations"><PageHeader title="B2C Escalations" /><NoB2CAccess /></B2CShell>;
   if (state.error) return <B2CShell title="B2C Escalations"><PageHeader title="B2C Escalations" /><div className="card"><ErrorState title="Unable to load B2C escalations" message={friendlyError(state.error)} onRetry={state.reload} /></div></B2CShell>;
 
-  const { summary, byStatus, byCategory, byRegion, byLevel, recent, health, role } = state.data;
+  const { summary, byStatus, byCategory, byRegion, byLevel, recent, health, registrations, role } = state.data;
   const admin = role === 'b2c_admin';
   const metrics = [
     { label: 'Active', value: summary.active, hint: 'Not yet resolved', to: '/b2c/tickets?status=active' },
@@ -29,6 +29,9 @@ export function B2CDashboard() {
     { label: 'Pending validation', value: summary.pendingValidation, hint: 'Resolution submitted', to: '/b2c/tickets?view=validation' },
     { label: 'Awaiting customer', value: summary.awaitingCustomer, hint: 'Clarification requested', to: '/b2c/tickets?status=Awaiting%20Customer' },
     { label: 'Resolved', value: summary.resolved30d, hint: 'Last 30 days' },
+    // Emails that have no ticket until the customer registers.
+    registrations && { label: 'Awaiting registration', value: registrations.awaitingCustomer, hint: 'No ticket until the customer registers', to: '/b2c/registrations' },
+    registrations && { label: 'Registrations to decide', value: registrations.needDecision, tone: registrations.needDecision ? 'warning' : undefined, hint: 'Under review, expired or not sent', to: '/b2c/registrations?view=decide' },
   ];
   const healthIssues = health ? health.failedInbound + health.failedOutbound + health.integrationErrors : 0;
 

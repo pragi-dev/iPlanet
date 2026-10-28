@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Inbox, Search, X } from 'lucide-react';
 import { Button, EmptyState, FilterBar, FilterSelect, PageHeader, RowAction, SearchInput, TableCard, Tabs, formatDate, formatRelative, friendlyError, pluralize, useAsync } from '../ui';
 import { getB2CTickets } from './api';
-import { ACTIVE_STATUSES, B2CShell, B2CStatus, B2C_ROLE_LABELS, B2C_STATUSES, CategoryBadge, IDENTIFIER_LABELS, NoB2CAccess, TRIAGE_REASONS, ageLabel, isB2CAdmin } from './shared';
+import { ACTIVE_STATUSES, B2CShell, B2CStatus, B2C_ROLE_LABELS, B2C_STATUSES, CategoryBadge, IDENTIFIER_LABELS, NoB2CAccess, REGION_STATUS, REGISTRATION_STATUS, TRIAGE_REASONS, ageLabel, isB2CAdmin, registrationLabel } from './shared';
 
 const LEVELS = Object.entries(B2C_ROLE_LABELS).filter(([key]) => key !== 'b2c_admin').map(([value, label]) => ({ value, label }));
 const AGEING = ['Under 1 day', '1–3 days', '3–7 days', '7–14 days', 'Over 14 days'];
@@ -13,7 +13,9 @@ const SORTS = [
   { value: 'lastActivityAt:desc', label: 'Recently active' },
   { value: 'reference:asc', label: 'Reference' },
 ];
-const FILTER_KEYS = ['status', 'category', 'region', 'level', 'ageing'];
+const FILTER_KEYS = ['status', 'category', 'region', 'regionStatus', 'registrationStatus', 'level', 'ageing'];
+const REGION_STATUS_OPTIONS = Object.entries(REGION_STATUS).map(([value, item]) => ({ value, label: item.label }));
+const REGISTRATION_OPTIONS = [{ value: 'open', label: 'Waiting for the customer' }, ...['manual_review', 'expired', 'completed', 'not_requested', 'cancelled'].map(value => ({ value, label: REGISTRATION_STATUS[value].label }))];
 // Each tab is a preset of API filters.
 const VIEWS = {
   active: { label: 'Active', params: { status: 'active' } },
@@ -69,6 +71,8 @@ export function B2CQueue() {
         <FilterSelect label="Status" value={filters.status} onChange={value => set({ status: value })} options={[{ value: 'active', label: 'Any active status' }, ...B2C_STATUSES]} allLabel="All statuses" />
         <FilterSelect label="Category" value={filters.category} onChange={value => set({ category: value })} options={['Service', 'Retail', 'Unclassified']} allLabel="All categories" />
         <FilterSelect label="Region" value={filters.region} onChange={value => set({ region: value })} options={data?.facets.regions || []} allLabel="All regions" />
+        <FilterSelect label="Region assignment" value={filters.regionStatus} onChange={value => set({ regionStatus: value })} options={REGION_STATUS_OPTIONS} allLabel="Any region assignment" />
+        <FilterSelect label="Customer registration" value={filters.registrationStatus} onChange={value => set({ registrationStatus: value })} options={REGISTRATION_OPTIONS} allLabel="Any registration state" />
         <FilterSelect label="Workflow level" value={filters.level} onChange={value => set({ level: value })} options={LEVELS} allLabel="All levels" />
         <FilterSelect label="Age" value={filters.ageing} onChange={value => set({ ageing: value })} options={AGEING} allLabel="Any age (active)" />
         <label className="filter-select"><span className="sr-only">Sort</span><select aria-label="Sort" value={sort} onChange={event => set({ sort: event.target.value })}>{SORTS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
@@ -86,9 +90,9 @@ export function B2CQueue() {
         <thead><tr><th>Reference</th><th>Customer</th><th>Category</th><th>Region</th><th>Level · owner</th><th>Status</th><th>Age</th><th><span className="sr-only">Open</span></th></tr></thead>
         <tbody>{(data?.items || []).map(ticket => <tr key={ticket._id} className="row-clickable" onClick={event => { if (!event.target.closest('a')) navigate(`/b2c/tickets/${ticket._id}`); }}>
           <td className="b2c-cell-ref"><Link className="cell-link mono" to={`/b2c/tickets/${ticket._id}`}>{ticket.reference}</Link><span className="cell-sub">{ticket.subject || 'No subject'}</span></td>
-          <td>{ticket.customer?.name || ticket.customer?.email}<span className="cell-sub">{(ticket.identifiers || []).slice(0, 2).map(item => `${IDENTIFIER_LABELS[item.type] || item.type} ${item.value}`).join(' · ') || 'No identifier'}</span></td>
+          <td>{ticket.customer?.name || ticket.customer?.email}<span className="cell-sub">{ticket.registration?.status ? registrationLabel(ticket.registration, ticket.workflow?.assignee?.userId) : (ticket.identifiers || []).slice(0, 2).map(item => `${IDENTIFIER_LABELS[item.type] || item.type} ${item.value}`).join(' · ') || 'No identifier'}</span></td>
           <td><CategoryBadge category={ticket.category} /></td>
-          <td>{ticket.region || <span className="text-muted">Not set</span>}</td>
+          <td>{ticket.region || <span className="text-muted">Not set</span>}{ticket.regionAssignment?.status && <span className="cell-sub">{ticket.regionAssignment.status === 'unresolved' ? `Unresolved: ${TRIAGE_REASONS[ticket.regionAssignment.reason] || ticket.regionAssignment.reason}` : REGION_STATUS[ticket.regionAssignment.status]?.label}</span>}</td>
           <td>{ticket.workflow?.currentLevel ? B2C_ROLE_LABELS[ticket.workflow.currentLevel] || ticket.workflow.currentLevel : <span className="text-muted">Not routed</span>}<span className="cell-sub">{ticket.workflow?.assignee?.name || (ticket.status === 'Pending Triage' ? (ticket.triage?.reasons || []).map(reason => TRIAGE_REASONS[reason] || reason)[0] : 'Unassigned')}</span></td>
           <td><B2CStatus status={ticket.status} /></td>
           <td className="cell-nowrap" title={formatDate(ticket.createdAt)}>{ACTIVE_STATUSES.includes(ticket.status) ? ageLabel(ticket.createdAt) : formatDate(ticket.createdAt)}<span className="cell-sub">{formatRelative(ticket.lastActivityAt)}</span></td>

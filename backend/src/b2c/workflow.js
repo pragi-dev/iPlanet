@@ -85,6 +85,8 @@ export function visibilityFilter(user) {
 
 export const ACTIONS = {
   complete_triage: { label: 'Complete triage', statuses: [TRIAGE], allowed: ({ user }) => isAdmin(user) },
+  // Offered only while registration is enabled and the customer is not identified (b2cService).
+  send_registration: { label: 'Send registration link', statuses: [TRIAGE], allowed: ({ user }) => isAdmin(user) },
   retry_crm: { label: 'Retry CRM lookup', statuses: ACTIVE_STATUSES, allowed: ({ ticket, user }) => isAdmin(user) || isAssignee(ticket, user) },
   claim: { label: 'Take ownership', statuses: [OPEN, REOPENED], allowed: ({ ticket, user }) => !ticket.workflow?.assignee?.userId && atUsersLevel(ticket, user) },
   assign: { label: 'Assign', statuses: [OPEN, ...WORKING], allowed: ({ ticket, user }) => isAdmin(user) || isAssignee(ticket, user) },
