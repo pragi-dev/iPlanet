@@ -84,7 +84,7 @@ export function ProactiveService() {
       onRetry={state.reload}
       toolbar={<div className="pro-toolbar">
         <div className="pro-toolbar-top">
-        <SearchInput className="pro-search" value={searchText} onChange={value => { setSearchText(value); setParam({ search: value }); }} placeholder="Search device, serial, corporate, employee or location" label="Search follow-ups" />
+        <SearchInput className="pro-search" value={searchText} onChange={value => { setSearchText(value); setParam({ search: value }); }} placeholder="Search device, serial, corporate or location" label="Search follow-ups" />
           {data && <span className="pro-toolbar-count">{state.loading && <span className="text-muted">Updating…</span>}{pluralize(data.items.length, 'device')}{active && <Button size="sm" variant="ghost" icon={X} onClick={clear}>Clear filters</Button>}</span>}
         </div>
         <div className="pro-filter-grid">
@@ -106,7 +106,7 @@ export function ProactiveService() {
         <thead><tr><th>Device</th><th>Corporate</th><th className="pro-col-optional">Location</th><th>Service due</th><th className="pro-col-optional">Coverage</th><th>Status</th><th className="pro-col-optional pro-col-wide">Last contact</th><th><span className="sr-only">Action</span></th></tr></thead>
         <tbody>{(data?.items || []).map(item => <tr key={item._id} className="row-clickable" onClick={event => { if (!event.target.closest('button, a')) setParam({ followUp: item._id }); }}>
           <td className="pro-cell-device"><span className="cell-primary">{item.device.model}</span><span className="cell-sub mono">{item.device.serialNumber}</span></td>
-          <td data-label="Corporate">{item.company?.name || '—'}<span className="cell-sub">{item.device.employeeName || 'Unassigned'}</span></td>
+          <td data-label="Corporate">{item.company?.name || '—'}</td>
           <td className="pro-col-optional pro-nowrap" data-label="Location">{item.device.location || '—'}<span className="cell-sub">{item.serviceCentre?.name || 'No service centre'}</span></td>
           <td data-label="Service due"><span className={`pro-due pro-due-${dueTone(item)}`}><strong>{dueLabel(item.daysUntil)}</strong><small>{formatDate(item.nextServiceDate)}</small></span></td>
           <td className="pro-col-optional" data-label="Coverage"><span className="pro-coverage"><span>Warranty · {item.coverage.warrantyStatus || '—'}</span><span>AMC · {item.coverage.amcStatus || '—'}</span></span></td>
@@ -161,7 +161,7 @@ function FollowUpDrawer({ id, onClose, onChanged }) {
           <p className="pro-drawer-title">Device and coverage</p>
           <InfoList columns={2} items={[
             ['Device', item.device.model], ['Serial number', <span className="mono">{item.device.serialNumber}</span>],
-            ['Corporate', item.company?.name], ['Employee', item.device.employeeName || 'Unassigned'],
+            ['Corporate', item.company?.name],
             ['Location', item.device.location], ['Service centre', item.serviceCentre?.name || 'Not mapped'],
             ['Purchase date', formatDate(item.purchaseDate, 'Not on record')], ['Last service', formatDate(item.lastServiceDate, 'None recorded')],
             ['Next service', formatDate(item.nextServiceDate, 'Not set')], ['Coverage', item.coverage.status],

@@ -148,11 +148,11 @@ export function OperationalTicketDetail() {
                 {device.serialNumber && <Link className="row-action" to={`/service/tickets?search=${encodeURIComponent(device.serialNumber)}`}>All tickets for this device</Link>}
               </div>
               {recurring && <Insight title={`${pluralize(recurring.count, `${recurring.issueType} request`)} for this device`}>Raised on {recurring.tickets.map(item => formatDate(item.createdAt)).join(', ')}. Consider checking for an underlying fault during this repair.</Insight>}
-              <InfoList columns={2} items={[['Asset ID', device.assetId], ['Device type', device.deviceType], ['Employee', device.employeeName], ['Department', device.department]]} />
+              <InfoList columns={2} items={[['Asset ID', device.assetId], ['Device type', device.deviceType], ['Department', device.department]]} />
             </div>
           </Section>
           <Section stacked title="Service information">
-            <InfoList columns={2} items={[['Corporate', company], ['Contact person', ticket.customerId?.name], ['Contact phone', ticket.customerId?.phone || ticket.companyId?.phone], ['Service centre', ticket.serviceCentreId?.name], ['Service location', ticket.location], ['Preferred date', formatDate(ticket.preferredServiceDate, '')], ['Raised', formatDateTime(ticket.createdAt, '')], ['Expected TAT', formatTat(ticket.expectedTAT)]]} />
+            <InfoList columns={2} items={[['Corporate', company], ['Contact person', ticket.customerId?.name], ['Contact phone', ticket.customerId?.phone || ticket.companyId?.phone], ['Service centre', ticket.serviceCentreId?.name], ['Service location', ticket.location], ['Preferred date', formatDate(ticket.preferredServiceDate, '')], ...(ticket.deviceCount ? [['Number of devices', ticket.deviceCount]] : []), ['Raised', formatDateTime(ticket.createdAt, '')], ['Expected TAT', formatTat(ticket.expectedTAT)]]} />
           </Section>
           <Section stacked title="Evidence" description="Original photos and customer damage markings"><Evidence ticket={ticket} resolve={mediaUrl} onOpen={setSelectedImage} /></Section>
           <Section stacked title="Timeline" description="Every update, newest first"><ActivityTimeline events={timeline} limit={6} /></Section>

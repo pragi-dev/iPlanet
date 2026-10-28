@@ -75,6 +75,7 @@
 .journey-current .journey-dot::after, .journey-hold .journey-dot::after { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--color-accent); }
 .journey-current .journey-label { color: var(--color-text-primary); font-weight: 600; }
 .journey-current .journey-meta { color: var(--color-text-secondary); }
+.journey-flag { font-size: 12px; font-weight: 500; color: var(--color-accent); }
 .journey-hold .journey-dot { border-color: var(--color-warning); }
 .journey-hold .journey-dot::after { background: var(--color-warning); }
 .journey-hold .journey-label { color: var(--color-warning-text); font-weight: 600; }
@@ -170,6 +171,28 @@
 .command-status { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-5) 12px; font-size: 14px; color: var(--color-text-secondary); }
 .command-footer { display: flex; gap: var(--space-5); padding: 10px var(--space-5); border-top: 1px solid var(--color-divider); font-size: 12px; color: var(--color-text-tertiary); }
 .command-footer span { display: inline-flex; align-items: center; gap: 4px; }
+
+/* Voice search: mic in the command input plus one status line under it */
+.voice-button {
+  width: 34px; height: 34px; flex: none; display: inline-grid; place-items: center; border: 0; border-radius: var(--radius-pill);
+  background: transparent; color: var(--color-text-secondary); transition: background-color 180ms var(--ease), color 180ms var(--ease);
+}
+.voice-button:hover { background: var(--color-neutral-soft); color: var(--color-text-primary); }
+.voice-button:focus-visible { outline: none; box-shadow: var(--focus); }
+.voice-button[aria-disabled='true'] { color: var(--color-text-tertiary); opacity: 0.55; cursor: not-allowed; }
+.voice-button[aria-disabled='true']:hover { background: transparent; }
+.voice-button svg, .command-input .voice-button svg { color: inherit; }
+.voice-button-active, .voice-button-active:hover { background: var(--color-error-soft); color: var(--color-error-text); box-shadow: 0 0 0 0 var(--color-error-soft); animation: voice-ring 1.4s var(--ease) infinite; }
+.voice-status-region:empty { display: none; }
+.voice-status { display: flex; align-items: center; gap: var(--space-3); padding: 10px var(--space-5); border-bottom: 1px solid var(--color-divider); font-size: 14px; color: var(--color-text-secondary); }
+.voice-status-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.voice-status-text q { color: var(--color-text-primary); }
+.voice-status-error { color: var(--color-error-text); background: var(--color-error-soft); }
+.voice-pulse { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--color-error); animation: voice-pulse 1s ease-in-out infinite alternate; }
+.voice-spinner { flex: none; color: var(--color-accent); animation: login-spin 800ms linear infinite; }
+.voice-heard-icon { flex: none; color: var(--color-accent); }
+@keyframes voice-pulse { from { opacity: 0.35; transform: scale(0.8); } to { opacity: 1; transform: none; } }
+@keyframes voice-ring { 0% { box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.28); } 100% { box-shadow: 0 0 0 8px rgba(255, 59, 48, 0); } }
 
 /* --------------------------------------------------------------------------
    Status fills (shared by dashboards and meters)

@@ -42,7 +42,7 @@ export function ServiceRecommendations() {
         <tbody>{items.map(item => {
           const status = customerStatus(item);
           return <tr key={item._id} className={item._id === focusId ? 'row-selected' : undefined}>
-            <td className="pro-cell-device"><Link className="cell-link" to={`/corporate/devices/${item.deviceId}`}>{item.device.model}</Link><span className="cell-sub mono">{item.device.serialNumber}{item.device.employeeName ? ` · ${item.device.employeeName}` : ''}</span></td>
+            <td className="pro-cell-device"><Link className="cell-link" to={`/corporate/devices/${item.deviceId}`}>{item.device.model}</Link><span className="cell-sub mono">{item.device.serialNumber}</span></td>
             <td className="pro-col-optional" data-label="Location">{item.device.location || '—'}</td>
             <td data-label="Last service">{formatDate(item.lastServiceDate, 'None recorded')}</td>
             <td data-label="Recommended"><span className="pro-due"><strong>{formatDate(item.nextServiceDate)}</strong><small>{dueLabel(item.daysUntil)}</small></span></td>

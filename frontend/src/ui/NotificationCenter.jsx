@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, Check, CheckCheck, ChevronRight, Laptop, MessageSquareText, ShieldAlert, Star, Ticket, UserCheck } from 'lucide-react';
+import { Bell, Check, CheckCheck, ChevronRight, Laptop, Mail, MessageSquareText, ShieldAlert, Star, Ticket, UserCheck } from 'lucide-react';
 import { Badge, Button, EmptyState, ErrorState, IconButton, PageHeader, Tabs, TableSkeleton } from './primitives';
 import { dayGroup, formatRelative, formatDateTime, friendlyError } from './format';
 import { notifyNotificationsChanged } from './AppShell';
@@ -14,6 +14,7 @@ const typeMeta = {
   RATE_SERVICE: { label: 'Review request', icon: Star, tone: 'neutral' },
   NEW_CUSTOMER_REVIEW: { label: 'Customer review', icon: MessageSquareText, tone: 'neutral' },
   GOOGLE_REVIEW_ACTIVITY: { label: 'Google review', icon: Star, tone: 'neutral' },
+  B2C_ESCALATION: { label: 'B2C escalation', icon: Mail, tone: 'info' },
 };
 
 function metaFor(item) {

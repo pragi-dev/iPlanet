@@ -1,6 +1,11 @@
 import mongoose from 'mongoose';
+import { DEVICE_SOURCES } from './deviceRegistration/deviceSource.js';
 
-const userSchema = new mongoose.Schema({ name: String, email: { type: String, unique: true }, password: { type: String, select: false }, role: { type: String, default: 'corporate_admin' }, company: String, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, phone: String });
+const userSchema = new mongoose.Schema({ name: String, email: { type: String, unique: true }, password: { type: String, select: false }, role: { type: String, default: 'corporate_admin' }, company: String, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, phone: String, gstNumber: String,
+  // B2C escalation access: 'b2c_admin' or a workflow level key (see b2c/b2cDefaults.js). Held by
+  // 'b2c_staff' accounts (B2C only) or by iplanet_service accounts that also work B2C escalations.
+  // Unset for every B2B-only account. Regions limit which level queues the user sees; empty means all.
+  b2cRole: { type: String, default: null }, b2cRegions: { type: [String], default: undefined } });
 const companySchema = new mongoose.Schema({ name: { type: String, unique: true }, companyId: { type: String, unique: true }, contactName: String, contactEmail: String, phone: String, location: String });
 const serviceCentreSchema = new mongoose.Schema({
   serviceCentreId: { type: String, unique: true, sparse: true },
@@ -13,10 +18,14 @@ const serviceCentreSchema = new mongoose.Schema({
   email: String,
   status: { type: String, default: 'Active' },
 }, { timestamps: true });
-const deviceSchema = new mongoose.Schema({ assetId: String, serialNumber: { type: String, unique: true }, deviceType: String, model: String, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, selectedEntityId: { type: mongoose.Schema.Types.ObjectId }, selectedEntityType: { type: String, enum: ['corporate', 'service_centre'] }, employeeName: String, employeeId: String, department: String, location: String, purchaseDate: Date, warrantyStatus: String, warrantyExpiry: Date, amcStatus: String, amcExpiry: Date, deviceStatus: String, deviceAllocationStatus: { type: String, enum: ['Unassigned', 'Assigned'], default: 'Unassigned' }, lastServiceDate: Date, installationDate: Date, serviceIntervalMonths: { type: Number, min: 1, max: 60 }, nextServiceDate: Date });
+const deviceSchema = new mongoose.Schema({ assetId: String, serialNumber: { type: String, unique: true }, deviceType: String, model: String, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, selectedEntityId: { type: mongoose.Schema.Types.ObjectId }, selectedEntityType: { type: String, enum: ['corporate', 'service_centre'] }, employeeName: String, employeeId: String, department: String, location: String, purchaseDate: Date, warrantyStatus: String, warrantyExpiry: Date, amcStatus: String, amcExpiry: Date, deviceStatus: String, deviceAllocationStatus: { type: String, enum: ['Unassigned', 'Assigned'], default: 'Unassigned' }, lastServiceDate: Date, installationDate: Date, serviceIntervalMonths: { type: Number, min: 1, max: 60 }, nextServiceDate: Date, deviceSource: { type: String, enum: Object.values(DEVICE_SOURCES), immutable: true } });
+// Asset IDs are unique within an organization; devices without one are not constrained.
+deviceSchema.index({ companyId: 1, assetId: 1 }, { unique: true, partialFilterExpression: { assetId: { $type: 'string' } } });
 const deviceMasterSchema = new mongoose.Schema({ serialNumber: { type: String, unique: true }, deviceType: String, model: String, assetId: String, purchaseDate: Date, warrantyStatus: String, warrantyExpiry: Date, amcStatus: String, amcExpiry: Date });
 const engineerSchema = new mongoose.Schema({ name: String, employeeId: { type: String, unique: true }, email: { type: String, unique: true }, phone: String, location: String, status: { type: String, default: 'Available' }, userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' } });
-const ticketSchema = new mongoose.Schema({ ticketId: { type: String, unique: true }, customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, category: String, issueType: String, description: String, images: [String], originalImages: [String], annotatedImages: [String], location: String, preferredServiceDate: Date, priority: String, status: { type: String, default: 'Open' }, assignedEngineer: String, assignedEngineerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Engineer' }, assignedAt: Date, expectedTAT: String, responseTarget: String, resolutionTarget: String, slaTargetAt: Date, slaStatus: { type: String, enum: ['Healthy', 'At Risk', 'Escalated', 'SLA Breached', 'Resolved'], default: 'Healthy' }, escalationLevel: { type: Number, default: 0 }, escalationStatus: { type: String, enum: ['Not Escalated', 'At Risk', 'Escalated', 'SLA Breached', 'Resolved'], default: 'Not Escalated' }, escalationReason: String, escalatedAt: Date, serviceFollowUpId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceFollowUp' } }, { timestamps: true });
+const ticketSchema = new mongoose.Schema({ ticketId: { type: String, unique: true }, customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, category: String, issueType: String, description: String, images: [String], originalImages: [String], annotatedImages: [String], location: String, preferredServiceDate: Date, deviceCount: Number, closedAt: Date, priority: String, status: { type: String, default: 'Open' }, assignedEngineer: String, assignedEngineerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Engineer' }, assignedAt: Date, expectedTAT: String, responseTarget: String, resolutionTarget: String, slaTargetAt: Date, slaStatus: { type: String, enum: ['Healthy', 'At Risk', 'Escalated', 'SLA Breached', 'Resolved'], default: 'Healthy' }, escalationLevel: { type: Number, default: 0 }, escalationStatus: { type: String, enum: ['Not Escalated', 'At Risk', 'Escalated', 'SLA Breached', 'Resolved'], default: 'Not Escalated' }, escalationReason: String, escalatedAt: Date, serviceFollowUpId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceFollowUp' }, emailSource: { address: String, name: String, messageId: String, subject: String, trackingToken: String } }, { timestamps: true });
+// The public tracking link mailed to whoever raised the ticket by email.
+ticketSchema.index({ 'emailSource.trackingToken': 1 }, { unique: true, partialFilterExpression: { 'emailSource.trackingToken': { $type: 'string' } } });
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 // One proactive-service cycle for one device: the recommended service date the
 // cycle is about, what the service team and the corporate customer did about
@@ -42,7 +51,12 @@ const serviceFollowUpSchema = new mongoose.Schema({
 }, { timestamps: true });
 serviceFollowUpSchema.index({ deviceId: 1, dueDate: 1 }, { unique: true });
 const escalationRuleSchema = new mongoose.Schema({ name: { type: String, required: true }, level: { type: Number, min: 1, max: 3, required: true }, trigger: { type: String, required: true }, priority: { type: String, default: 'All' }, slaThreshold: { type: Number, min: 0, max: 100, required: true }, action: { type: String, required: true }, isActive: { type: Boolean, default: true } }, { timestamps: true });
-const reviewSchema = new mongoose.Schema({ ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket', required: true, unique: true, index: true }, corporateId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true }, customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre', index: true }, deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, engineerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Engineer' }, rating: { type: Number, required: true, min: 1, max: 5 }, comment: { type: String, required: true, trim: true, maxlength: 2000 } }, { timestamps: true });
+// A review covers one calendar month (period 'YYYY-MM') of a company's closed requests.
+// Older reviews were for a single request and carry ticketId instead of period.
+const reviewSchema = new mongoose.Schema({ period: String, ticketIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' }], serviceCentreIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }], ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' }, corporateId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true }, customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre', index: true }, deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, engineerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Engineer' }, rating: { type: Number, required: true, min: 1, max: 5 }, comment: { type: String, required: true, trim: true, maxlength: 2000 } }, { timestamps: true });
+reviewSchema.index({ ticketId: 1 }, { unique: true, partialFilterExpression: { ticketId: { $exists: true } } });
+reviewSchema.index({ corporateId: 1, period: 1 }, { unique: true, partialFilterExpression: { period: { $exists: true } } });
+reviewSchema.index({ serviceCentreIds: 1, createdAt: -1 });
 reviewSchema.index({ corporateId: 1, createdAt: -1 });
 reviewSchema.index({ serviceCentreId: 1, createdAt: -1 });
 const googleBusinessIntegrationSchema = new mongoose.Schema({
@@ -111,6 +125,8 @@ const aiSupportSessionSchema = new mongoose.Schema({ ticketId: { type: mongoose.
 // Indexes for the queries every portal page runs (lists by company, status,
 // device, engineer, recipient and time).
 deviceSchema.index({ companyId: 1 });
+// Fleet health counts devices per organization by origin.
+deviceSchema.index({ companyId: 1, deviceSource: 1 });
 ticketSchema.index({ companyId: 1, createdAt: -1 });
 ticketSchema.index({ status: 1, createdAt: -1 });
 ticketSchema.index({ deviceId: 1, status: 1 });
@@ -120,6 +136,89 @@ notificationSchema.index({ user: 1, read: 1 });
 timelineSchema.index({ ticketId: 1, timestamp: 1 });
 timelineSchema.index({ timestamp: -1 });
 timelineSchema.index({ status: 1, timestamp: -1 });
+// Self-service sign-up requests. Kept apart from User so a request can never sign in:
+// an iPlanet Service user approves it, choosing the organization, and only then is a
+// corporate_admin User created. Only one pending request may exist per email.
+const accountRequestSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  email: { type: String, required: true, lowercase: true, trim: true },
+  phone: { type: String, required: true },
+  organization: { type: String, required: true },
+  gstNumber: { type: String, required: true },
+  passwordHash: { type: String, select: false },
+  status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+  reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  reviewedAt: Date,
+  companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+}, { timestamps: true });
+accountRequestSchema.index({ email: 1 }, { unique: true, partialFilterExpression: { status: 'pending' } });
+accountRequestSchema.index({ status: 1, createdAt: -1 });
+// A B2B service request received by email. Claude prepares the draft fields from the
+// message; an iPlanet Service user reviews and edits them, and only approval creates a
+// Ticket. Kept apart from the B2C escalation collections. One request per Message-ID.
+const emailRequestSchema = new mongoose.Schema({
+  messageId: { type: String, required: true },
+  inReplyTo: String,
+  from: { address: { type: String, lowercase: true, trim: true }, name: String },
+  subject: String,
+  text: String,
+  receivedAt: Date,
+  attachments: [{ filename: String, contentType: String, size: Number, path: String }],
+  status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+  extraction: {
+    source: { type: String, enum: ['claude', 'none'], default: 'none' },
+    isServiceRequest: Boolean,
+    summary: String,
+    serialNumbers: [String],
+    assetIds: [String],
+    deviceModel: String,
+    contactName: String,
+    contactPhone: String,
+    preferredDateText: String,
+    missingDetails: [String],
+    error: String,
+  },
+  draft: {
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' },
+    customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' },
+    category: String,
+    issueType: String,
+    description: String,
+    priority: String,
+    location: String,
+    preferredServiceDate: String,
+    deviceCount: Number,
+  },
+  matchNotes: [String],
+  ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket' },
+  reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  reviewedAt: Date,
+  rejectionReason: String,
+}, { timestamps: true });
+emailRequestSchema.index({ messageId: 1 }, { unique: true });
+emailRequestSchema.index({ status: 1, receivedAt: -1 });
+// An update email for a ticket that was raised by email, sent to the original sender.
+// One per timeline entry (dedupeKey), so a retried update never mails the customer twice.
+const ticketEmailSchema = new mongoose.Schema({
+  dedupeKey: { type: String, required: true },
+  ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket', required: true },
+  to: { type: String, required: true },
+  subject: String,
+  text: String,
+  inReplyTo: String,
+  status: { type: String, enum: ['queued', 'sent', 'failed'], default: 'queued' },
+  attempts: { type: Number, default: 0 },
+  nextAttemptAt: Date,
+  lockedUntil: Date,
+  lastError: String,
+  messageId: String,
+  sentAt: Date,
+}, { timestamps: true });
+ticketEmailSchema.index({ dedupeKey: 1 }, { unique: true });
+ticketEmailSchema.index({ status: 1, nextAttemptAt: 1 });
+
 export const User = mongoose.model('User', userSchema);
 export const Company = mongoose.model('Company', companySchema);
 export const ServiceCentre = mongoose.model('ServiceCentre', serviceCentreSchema);
@@ -137,3 +236,6 @@ export const EscalationRule = mongoose.model('EscalationRule', escalationRuleSch
 export const ServiceFollowUp = mongoose.model('ServiceFollowUp', serviceFollowUpSchema);
 export const CallRecord = mongoose.model('CallRecord', callRecordSchema);
 export const AITroubleshootingSession = mongoose.model('AITroubleshootingSession', aiSupportSessionSchema);
+export const AccountRequest = mongoose.model('AccountRequest', accountRequestSchema);
+export const EmailRequest = mongoose.model('EmailRequest', emailRequestSchema);
+export const TicketEmail = mongoose.model('TicketEmail', ticketEmailSchema);

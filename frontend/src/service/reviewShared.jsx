@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { ExternalLink, MessageSquareReply, Pencil, Trash2 } from 'lucide-react';
-import { Avatar, Badge, Button, Stars, Tabs, formatDate, formatRelative } from '../ui';
+import { Avatar, Badge, Button, Stars, Tabs, formatDate, formatMonth, formatRelative } from '../ui';
 
 export function ReviewTabs({ current }) {
   return <Tabs label="Review source" value={current} tabs={[
@@ -60,10 +60,18 @@ export function GoogleReviewCard({ review, onReply, onDeleteReply }) {
   </article>;
 }
 
+// Internal reviews cover a calendar month of a corporate's closed requests. Older ones
+// were for a single request and have a ticket instead of a period.
+export function reviewCovers(review) {
+  if (review.period) return [formatMonth(review.period), `${review.ticketIds?.length || 0} closed request${review.ticketIds?.length === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
+  return review.ticketId?.ticketId ? `Request ${review.ticketId.ticketId}` : 'Service request';
+}
+export const reviewCentres = review => review.period ? (review.serviceCentreIds || []).map(centre => centre?.name).filter(Boolean).join(', ') : review.serviceCentreId?.name || '';
+
 export function InternalReviewCard({ review }) {
   return <article className="review-card">
     <div className="review-card-head"><Badge tone="info">Internal review</Badge><Stars rating={review.rating} /></div>
-    <div className="review-author"><Avatar name={review.customerId?.name || review.corporateId?.name} size={32} /><div><strong>{review.corporateId?.name || 'Corporate customer'}</strong><span>{[review.ticketId?.ticketId, review.serviceCentreId?.name].filter(Boolean).join(' · ') || 'Service request'}</span></div></div>
+    <div className="review-author"><Avatar name={review.customerId?.name || review.corporateId?.name} size={32} /><div><strong>{review.corporateId?.name || 'Corporate customer'}</strong><span>{[reviewCovers(review), reviewCentres(review)].filter(Boolean).join(' · ')}</span></div></div>
     <p className="review-text">{review.comment}</p>
     <div className="review-card-foot">
       <time dateTime={review.createdAt} title={formatDate(review.createdAt)}>{formatRelative(review.createdAt)}</time>

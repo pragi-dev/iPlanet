@@ -1,10 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { Bell, ChevronDown, ChevronRight, LogOut, Menu, Search, Sparkles, UserRound, X } from 'lucide-react';
+import { Bell, ChevronDown, ChevronRight, LogOut, Menu, Mic, Search, Sparkles, UserRound, X } from 'lucide-react';
 import { Avatar, IconButton } from './primitives';
 import { readSessionUser } from './format';
 import { CommandPalette } from './CommandPalette';
 import { clearRequestCache } from './requestCache';
+import { voiceSupport } from './voiceSearch';
 
 // Lets any part of the corporate portal open the AI Support drawer.
 export const AIAssistantContext = createContext({ available: false, open: () => {} });
@@ -143,6 +144,9 @@ export function AppShell({ config, title, crumbs, children }) {
   const ai = useAIAssistant();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
+  const [commandVoice, setCommandVoice] = useState(false);
+  const [voiceAvailable] = useState(() => voiceSupport().supported);
+  const openCommand = ({ voice = false } = {}) => { setCommandVoice(voice); setCommandOpen(true); };
   const commandIndex = useCommandIndex(config.key, config.commands?.load);
   const reloadIndex = commandIndex.reload;
 
@@ -150,7 +154,7 @@ export function AppShell({ config, title, crumbs, children }) {
   useEffect(() => { if (commandOpen) reloadIndex({ force: false }); }, [commandOpen, reloadIndex]);
   useEffect(() => {
     const onKey = event => {
-      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k') { event.preventDefault(); setCommandOpen(value => !value); }
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k') { event.preventDefault(); setCommandVoice(false); setCommandOpen(value => !value); }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -189,9 +193,10 @@ export function AppShell({ config, title, crumbs, children }) {
           </nav>
         </div>
         <div className="topbar-right">
-          {config.commands && <button type="button" className="command-trigger" onClick={() => setCommandOpen(true)} aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'} aria-label="Search tickets, devices, people and actions">
+          {config.commands && <button type="button" className="command-trigger" onClick={() => openCommand()} aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'} aria-label="Search tickets, devices, people and actions">
             <Search size={15} aria-hidden="true" /><span className="command-trigger-text">Search</span><kbd className="kbd" aria-hidden="true">{isMac() ? '⌘K' : 'Ctrl K'}</kbd>
           </button>}
+          {config.commands && voiceAvailable && <IconButton className="voice-trigger" label="Search by voice" icon={Mic} onClick={() => openCommand({ voice: true })} />}
           {ai.available && <button type="button" className="btn btn-ghost ai-trigger" onClick={ai.open}><Sparkles size={16} aria-hidden="true" /><span>AI Support</span></button>}
           <IconButton label="Notifications" icon={Bell} badge={unread} onClick={() => navigate(config.notificationsRoute)} />
           <span className="topbar-divider" aria-hidden="true" />
@@ -202,6 +207,6 @@ export function AppShell({ config, title, crumbs, children }) {
         <div className="content-inner">{children}</div>
       </main>
     </div>
-    {commandOpen && <CommandPalette onClose={() => setCommandOpen(false)} index={commandIndex} actions={commandActions} onRunAction={runCommand} />}
+    {commandOpen && <CommandPalette onClose={() => setCommandOpen(false)} index={commandIndex} actions={commandActions} onRunAction={runCommand} startWithVoice={commandVoice} />}
   </div>;
 }

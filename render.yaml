@@ -11,6 +11,9 @@ services:
         sync: false
       - key: JWT_SECRET
         generateValue: true
+      # One proxy hop in front of the API, so the sign-up rate limit sees the client address.
+      - key: TRUST_PROXY
+        value: '1'
       - key: FRONTEND_URLS
         sync: false
       - key: AI_PROVIDER
@@ -23,6 +26,12 @@ services:
         value: gemini-3.6-flash
       - key: GEMINI_TIMEOUT_MS
         value: '60000'
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-opus-5-5
+      - key: ANTHROPIC_TIMEOUT_MS
+        value: '20000'
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
@@ -40,4 +49,33 @@ services:
       - key: GOOGLE_PUBSUB_PUSH_AUDIENCE
         sync: false
       - key: GOOGLE_PUBSUB_PUSH_SERVICE_ACCOUNT
+        sync: false
+      - key: B2C_SEPARATE_SERVER
+        value: 'true'
+  # B2C escalation API and email scheduler, separate from the main API. Same
+  # database; it accepts sign-in tokens from iplanet-backend via the shared JWT_SECRET.
+  - type: web
+    name: iplanet-b2c
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm run b2c:start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: B2C_PORT
+        value: '10000'
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        fromService:
+          type: web
+          name: iplanet-backend
+          envVarKey: JWT_SECRET
+      - key: FRONTEND_URLS
+        sync: false
+      - key: B2C_CRON_SECRET
+        sync: false
+      - key: B2C_ATTACHMENT_DIR
         sync: false

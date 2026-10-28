@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { BarChart3, Building2, CalendarClock, CalendarDays, ChevronRight, ClipboardList, KeyRound, LogOut, Mail, MapPin, ScanLine, ShieldAlert, Ticket, UserCheck, UsersRound, Wrench } from 'lucide-react';
 import { ServiceShell } from './components';
+import { AccountRequests } from './AccountRequests';
 import { engineerFilterOptions, filterEngineers } from './engineerFilters';
 import { getEngineers, getProactiveFollowUps, getServiceActivity, getServiceCentres, getServiceTickets } from './api';
 import {
@@ -331,7 +332,7 @@ export function ServiceSettings() {
   const centres = useAsync(getServiceCentres, []);
   const centre = (centres.data || []).find(item => String(item._id) === String(user.serviceCentreId));
   const expires = sessionExpiry();
-  const sections = [['personal', 'Personal information'], ['contact', 'Contact'], ['role', 'Role'], ['organization', 'Organization'], ['integrations', 'Integrations'], ['security', 'Security']];
+  const sections = [['personal', 'Personal information'], ['contact', 'Contact'], ['role', 'Role'], ['organization', 'Organization'], ['account-requests', 'Account requests'], ['integrations', 'Integrations'], ['security', 'Security']];
   return <ServiceShell title="Settings">
     <PageHeader title="Settings" description="Your account, organization and integration settings." />
     <div className="settings-layout">
@@ -342,6 +343,7 @@ export function ServiceSettings() {
         <div id="contact" className="settings-section"><Card title="Contact"><InfoList items={[['Email', user.email && <span className="row"><Mail size={14} aria-hidden="true" />{user.email}</span>]]} /></Card></div>
         <div id="role" className="settings-section"><Card title="Role" description="Your access level in iPlanet Self-care Portal"><InfoList items={[['Role', <Badge tone="info">iPlanet Service</Badge>], ['Access', 'Tickets, enrollment, engineers, reports, coverage, escalation matrix, notifications and reviews']]} /></Card></div>
         <div id="organization" className="settings-section"><Card title="Organization"><InfoList columns={2} items={[['Organization', 'iPlanet Service'], ['Service centre', user.serviceCentreId ? (centres.loading ? 'Loading…' : centre?.name || 'Not found') : 'All service centres'], ['Centre location', centre?.location], ['Centre contact', centre?.contactNumber]]} /></Card></div>
+        <div id="account-requests" className="settings-section"><AccountRequests /></div>
         <div id="integrations" className="settings-section"><Card title="Integrations" description="External services connected to iPlanet Self-care Portal">
           <div className="row-between"><div className="person-cell"><span className="thumb thumb-lg"><Building2 size={18} aria-hidden="true" /></span><div><strong>Google Business Profile</strong><span className="cell-sub">Connect locations and sync public Google reviews</span></div></div><Button to="/service/reviews/google">Manage</Button></div>
         </Card></div>

@@ -18,14 +18,19 @@ function request(path, options = {}) {
 }
 // Wakes a sleeping API host (Render free tier) while the user is still on the sign-in form.
 export function warmUpApi() { fetch(`${API}/health`).catch(() => {}); }
-async function send(path, options = {}) { const token = getToken(); const response = await fetch(`${API}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers || {}) } }); if (!response.ok) { if (isExpiredSessionResponse(response.status, path, Boolean(token))) endExpiredSession(); const body = await response.json().catch(() => ({})); const error = new Error(body.message || `Request failed (${response.status})`); error.status = response.status; error.path = path; throw error; } return response.json(); }
+async function send(path, options = {}) { const token = getToken(); const response = await fetch(`${API}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers || {}) } }); if (!response.ok) { if (isExpiredSessionResponse(response.status, path, Boolean(token))) endExpiredSession(); const body = await response.json().catch(() => ({})); const error = new Error(body.message || `Request failed (${response.status})`); error.status = response.status; error.path = path; error.body = body; throw error; } return response.json(); }
 export async function login(email, password) { return request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }); }
+// Creates a pending access request; an iPlanet Service user must approve it before the account can sign in.
+export async function registerAccount(details) { return request('/auth/register', { method: 'POST', body: JSON.stringify(details) }); }
 export async function getDevices(search = '') { return request(`/devices${search ? `?search=${encodeURIComponent(search)}` : ''}`); }
 export async function getDevice(id) { return request(`/devices/${id}`); }
 export async function getTickets() { return request('/tickets'); }
+export async function getTicketResolutions() { return request('/tickets/resolutions'); }
 export async function getTicket(id) { return request(`/tickets/${id}`); }
 export async function submitReview(payload) { return request('/reviews', { method: 'POST', body: JSON.stringify(payload) }); }
 export async function getMyReviews() { return request('/reviews/my'); }
+export async function getReviewPeriods() { return request('/reviews/periods'); }
+export async function getReviewPeriod(key) { return request(`/reviews/periods/${encodeURIComponent(key)}`); }
 export async function createTicket(payload) { return request('/tickets', { method: 'POST', body: JSON.stringify(payload) }); }
 export async function uploadImages(ticketId, files) { if (!files.length || String(ticketId).startsWith('ticket-')) return; clearRequestCache(); const body = new FormData(); files.forEach(file => body.append('images', file)); const response = await fetch(`${API}/tickets/${ticketId}/images`, { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body }); if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.message || `Image upload failed (${response.status})`); } }
 export async function uploadAnnotatedImages(ticketId, files) { if (!files.length || String(ticketId).startsWith('ticket-')) return; clearRequestCache(); const body = new FormData(); files.forEach(file => body.append('images', file)); const response = await fetch(`${API}/tickets/${ticketId}/annotated-images`, { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body }); if (!response.ok) throw new Error('Annotated image upload failed'); return response.json(); }
@@ -49,3 +54,18 @@ export async function getServiceRecommendations() { return request('/corporate/s
 export async function getServiceRecommendation(id) { return request(`/corporate/service-recommendations/${id}`); }
 export async function respondToServiceRecommendation(id, action, payload) { return request(`/corporate/service-recommendations/${id}/${action}`, { method: 'POST', body: JSON.stringify(payload) }); }
 export async function getDeviceServicePlan(deviceId) { return request(`/corporate/devices/${deviceId}/service-plan`); }
+
+// Device registration. The import endpoints return their full report (row errors, summary)
+// with error statuses too, so they are read here rather than through request().
+export async function getDeviceRegistrationOptions() { return request('/corporate/devices/registration-options'); }
+export async function createDevice(payload) { return request('/corporate/devices', { method: 'POST', body: JSON.stringify(payload) }); }
+async function deviceImportCall(path, options = {}) {
+  clearRequestCache();
+  const response = await fetch(`${API}/corporate/devices/import${path}`, { ...options, headers: { Authorization: `Bearer ${getToken()}`, ...(options.headers || {}) } });
+  if (isExpiredSessionResponse(response.status, path, Boolean(getToken()))) endExpiredSession();
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) { const error = new Error(body.message || `Request failed (${response.status})`); error.status = response.status; error.body = body; throw error; }
+  return body;
+}
+export async function validateDeviceImport(file) { const body = new FormData(); body.append('file', file); return deviceImportCall('', { method: 'POST', body }); }
+export async function confirmDeviceImport(importId) { return deviceImportCall(`/${encodeURIComponent(importId)}/confirm`, { method: 'POST' }); }

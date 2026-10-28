@@ -35,7 +35,7 @@ export function CoverageView({ state, description, showCorporate = false, device
   const devices = useMemo(() => {
     const term = search.trim().toLowerCase();
     return all.filter(device => (filter === 'All' || filters[filter](device))
-      && (!term || [device.model, device.serialNumber, device.assetId, device.employeeName, device.location, device.companyId?.name].some(value => String(value || '').toLowerCase().includes(term))));
+      && (!term || [device.model, device.serialNumber, device.assetId, device.location, device.companyId?.name].some(value => String(value || '').toLowerCase().includes(term))));
   }, [all, search, filter]);
 
   if (loading && !data) return <PageSkeleton kpis={5} />;
@@ -70,7 +70,7 @@ export function CoverageView({ state, description, showCorporate = false, device
       <TableCard
         columns={7}
         toolbar={<FilterBar summary={`${devices.length} of ${pluralize(all.length, 'device')}`}>
-          <SearchInput value={search} onChange={setSearch} placeholder={showCorporate ? 'Search serial, model, employee or corporate' : 'Search serial, model or employee'} label="Search coverage" />
+          <SearchInput value={search} onChange={setSearch} placeholder={showCorporate ? 'Search serial, model or corporate' : 'Search serial or model'} label="Search coverage" />
           <FilterSelect label="Coverage filter" value={filter} onChange={setFilter} options={Object.keys(filters).map(key => ({ value: key, label: filterLabels[key] || key }))} allLabel="All coverage" />
         </FilterBar>}
         isEmpty={!devices.length}
@@ -79,7 +79,7 @@ export function CoverageView({ state, description, showCorporate = false, device
         <table className="table">
           <thead><tr><th>Device</th><th>Serial</th>{showCorporate && <th>Corporate</th>}<th>Location</th><th>Coverage</th><th>Status</th><th>Purchased</th><th>Warranty ends</th><th>AMC ends</th></tr></thead>
           <tbody>{devices.map(device => <tr key={device._id}>
-            <td><div className="person-cell"><span className="thumb"><DeviceIcon type={device.deviceType} model={device.model} size={16} /></span><div>{deviceLink ? <Link className="cell-link" to={deviceLink(device)}>{device.model}</Link> : <span className="cell-primary">{device.model}</span>}<span className="cell-sub">{[device.assetId, device.employeeName].filter(Boolean).join(' · ')}</span></div></div></td>
+            <td><div className="person-cell"><span className="thumb"><DeviceIcon type={device.deviceType} model={device.model} size={16} /></span><div>{deviceLink ? <Link className="cell-link" to={deviceLink(device)}>{device.model}</Link> : <span className="cell-primary">{device.model}</span>}<span className="cell-sub">{device.assetId}</span></div></div></td>
             <td className="mono cell-nowrap">{device.serialNumber}</td>
             {showCorporate && <td>{device.companyId?.name || <span className="text-muted">Not assigned</span>}</td>}
             <td>{device.location || '—'}</td>
