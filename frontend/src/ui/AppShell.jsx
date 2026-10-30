@@ -1,8 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { Bell, ChevronDown, ChevronRight, LogOut, Menu, Mic, Search, Sparkles, UserRound, X } from 'lucide-react';
+import { Bell, ChevronDown, ChevronRight, LogOut, Menu, Mic, Moon, Search, Sun, UserRound, X } from 'lucide-react';
 import { Avatar, IconButton } from './primitives';
 import { readSessionUser } from './format';
+import { clearStorageKeepingTheme, currentTheme, setTheme } from './theme';
 import { CommandPalette } from './CommandPalette';
 import { clearRequestCache } from './requestCache';
 import { voiceSupport } from './voiceSearch';
@@ -65,22 +66,19 @@ function isMac() {
 function signOut(navigate) {
   commandIndexCache = { key: null, data: null, at: 0 };
   clearRequestCache();
-  localStorage.clear();
+  clearStorageKeepingTheme();
   navigate('/login', { replace: true });
 }
 
 function Sidebar({ config, unread, onNavigate, aiOpen }) {
   return <div className="sidebar-inner">
     <Link to={config.home} className="brand" onClick={onNavigate}>
-      <span className="brand-mark" aria-hidden="true">i</span>
-      <span className="brand-text">
-        <strong>iPlanet Self-care Portal</strong>
-        <small>{config.portalName}</small>
-      </span>
+      <img className="brand-logo" src="/brand/iplanet-logo.png" alt="iPlanet, Apple Premium Partner" width="297" height="49" />
+      <img className="partner-badge brand-logo-compact" src="/brand/apple-premium-partner.png" alt="" aria-hidden="true" width="96" height="45" />
     </Link>
     <nav className="sidebar-nav" aria-label={`${config.portalName} navigation`}>
-      {config.groups.map(group => <div className="nav-group" key={group.label}>
-        <p className="nav-group-label">{group.label}</p>
+      {config.groups.map((group, index) => <div className="nav-group" key={group.label}>
+        {!(index === 0 && group.items.length === 1 && group.items[0].label === group.label) && <p className="nav-group-label">{group.label}</p>}
         <ul>
           {group.items.map(item => {
             const Icon = item.icon;
@@ -97,9 +95,6 @@ function Sidebar({ config, unread, onNavigate, aiOpen }) {
         </ul>
       </div>)}
     </nav>
-    <div className="sidebar-footer">
-      <p className="sidebar-product">iPlanet Self-care Portal</p>
-    </div>
   </div>;
 }
 
@@ -117,7 +112,7 @@ function UserMenu({ user, config }) {
   }, [open]);
   return <div className="user-menu" ref={ref}>
     <button type="button" className="user-trigger" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(value => !value)}>
-      <Avatar name={user.name || user.email} size={32} />
+      <Avatar name={user.name || user.email} size={40} />
       <span className="user-text">
         <strong>{user.name || user.email || 'Signed in'}</strong>
         <small>{config.roleLabel}</small>
@@ -146,6 +141,8 @@ export function AppShell({ config, title, crumbs, children }) {
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandVoice, setCommandVoice] = useState(false);
   const [voiceAvailable] = useState(() => voiceSupport().supported);
+  const [theme, setThemeState] = useState(currentTheme);
+  const toggleTheme = () => { const next = theme === 'dark' ? 'light' : 'dark'; setTheme(next); setThemeState(next); };
   const openCommand = ({ voice = false } = {}) => { setCommandVoice(voice); setCommandOpen(true); };
   const commandIndex = useCommandIndex(config.key, config.commands?.load);
   const reloadIndex = commandIndex.reload;
@@ -194,10 +191,10 @@ export function AppShell({ config, title, crumbs, children }) {
         </div>
         <div className="topbar-right">
           {config.commands && <button type="button" className="command-trigger" onClick={() => openCommand()} aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'} aria-label="Search tickets, devices, people and actions">
-            <Search size={15} aria-hidden="true" /><span className="command-trigger-text">Search</span><kbd className="kbd" aria-hidden="true">{isMac() ? '⌘K' : 'Ctrl K'}</kbd>
+            <Search size={18} aria-hidden="true" /><span className="command-trigger-text">Search devices, requests, or anything…</span><kbd className="kbd" aria-hidden="true">{isMac() ? '⌘K' : 'Ctrl K'}</kbd>
           </button>}
           {config.commands && voiceAvailable && <IconButton className="voice-trigger" label="Search by voice" icon={Mic} onClick={() => openCommand({ voice: true })} />}
-          {ai.available && <button type="button" className="btn btn-ghost ai-trigger" onClick={ai.open}><Sparkles size={16} aria-hidden="true" /><span>AI Support</span></button>}
+          <IconButton className="theme-toggle" label={theme === 'dark' ? 'Use light appearance' : 'Use dark appearance'} icon={theme === 'dark' ? Sun : Moon} onClick={toggleTheme} />
           <IconButton label="Notifications" icon={Bell} badge={unread} onClick={() => navigate(config.notificationsRoute)} />
           <span className="topbar-divider" aria-hidden="true" />
           <UserMenu user={user} config={config} />

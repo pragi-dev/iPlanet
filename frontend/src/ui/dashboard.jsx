@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, ChevronRight, CircleCheck, Info, ShieldAlert } from 'lucide-react';
-import { formatDateTime, formatRelative, statusTone } from './format';
+import { formatDate, formatDateTime, formatRelative, statusTone } from './format';
 
 // ---------------------------------------------------------------------------
 // Command-center building blocks shared by the Corporate and Service home
@@ -20,9 +20,10 @@ export function DashboardHeader({ eyebrow, title, summary, actions }) {
   </header>;
 }
 
-export function DashboardSection({ title, description, actions, children, className = '' }) {
+// `card` puts the whole section, heading included, on one raised surface.
+export function DashboardSection({ title, description, actions, children, className = '', card = false }) {
   const headingId = useId();
-  return <section className={`cc-section ${className}`} aria-labelledby={headingId}>
+  return <section className={`cc-section${card ? ' cc-section-card' : ''} ${className}`} aria-labelledby={headingId}>
     <div className="cc-section-head">
       <div className="cc-section-heading">
         <h2 className="cc-section-title" id={headingId}>{title}</h2>
@@ -36,12 +37,14 @@ export function DashboardSection({ title, description, actions, children, classN
 
 // A row of figures separated by hairlines. Items with `to` link to the list
 // they count, items with `onClick` act as toggles (`active` marks the pressed one); `tone` colours the figure only when it signals a problem.
-export function MetricSummary({ items, size = 'md', label }) {
-  return <ul className={`cc-metrics cc-metrics-${size}`} aria-label={label}>
+// `tiles` shows each figure on its own raised tile, label above the number.
+export function MetricSummary({ items, size = 'md', label, tiles = false }) {
+  return <ul className={`cc-metrics cc-metrics-${size}${tiles ? ' cc-metrics-tiles' : ''}`} aria-label={label}>
     {items.filter(Boolean).map(item => {
+      const value = <strong className="cc-metric-value">{item.value ?? '—'}</strong>;
+      const name = <span className="cc-metric-label">{item.label}</span>;
       const body = <>
-        <strong className="cc-metric-value">{item.value ?? '—'}</strong>
-        <span className="cc-metric-label">{item.label}</span>
+        {tiles ? <>{name}{value}</> : <>{value}{name}</>}
         {item.hint && <span className="cc-metric-hint">{item.hint}</span>}
       </>;
       const className = `cc-metric cc-metric-${item.tone || 'neutral'}${item.active ? ' cc-metric-active' : ''}`;
@@ -68,17 +71,19 @@ export function StatusDistribution({ segments, label }) {
   </div>;
 }
 
-// Ring showing `value` out of `total`, with the count in the centre.
-export function HealthRing({ value, total, label, tone = 'success', size = 148 }) {
-  const stroke = 10;
+// Ring showing `value` out of `total`, with the count in the centre. The
+// 'accent' tone draws the arc as a blue gradient.
+export function HealthRing({ value, total, label, tone = 'success', size = 148, stroke = 10 }) {
+  const gradientId = `ring-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const radius = (size - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
   const ratio = total ? Math.min(1, value / total) : 0;
   const centre = size / 2;
-  return <div className="cc-ring" style={{ width: size, height: size }} role="img" aria-label={`${value} of ${total} ${label}`}>
+  return <div className={`cc-ring cc-ring-is-${tone}`} style={{ width: size, height: size }} role="img" aria-label={`${value} of ${total} ${label}`}>
     <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} aria-hidden="true">
+      {tone === 'accent' && <defs><linearGradient id={gradientId} x1="0" y1="0" x2="0.4" y2="1"><stop offset="0%" style={{ stopColor: 'var(--ring-start)' }} /><stop offset="100%" style={{ stopColor: 'var(--ring-end)' }} /></linearGradient></defs>}
       <circle className="cc-ring-track" cx={centre} cy={centre} r={radius} strokeWidth={stroke} />
-      {ratio > 0 && <circle className={`cc-ring-value cc-ring-${tone}`} cx={centre} cy={centre} r={radius} strokeWidth={stroke} strokeLinecap="round"
+      {ratio > 0 && <circle className={`cc-ring-value cc-ring-${tone}`} stroke={tone === 'accent' ? `url(#${gradientId})` : undefined} cx={centre} cy={centre} r={radius} strokeWidth={stroke} strokeLinecap="round"
         strokeDasharray={circumference} strokeDashoffset={circumference * (1 - ratio)} transform={`rotate(-90 ${centre} ${centre})`} />}
     </svg>
     <span className="cc-ring-centre" aria-hidden="true"><strong>{value}</strong><span>{label}</span></span>
@@ -129,6 +134,34 @@ export function AttentionFeed({ items, limit = 6, empty }) {
     {items.length > limit && <button type="button" className="cc-more" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
       {expanded ? 'Show fewer' : `Show ${items.length - limit} more`}
     </button>}
+  </div>;
+}
+
+// The same attention items as a table: device, issue, priority, date, status and
+// the one action that resolves it. Items carry `device`, `issue`, `priority`,
+// `date`/`dateLabel` and `status`; `reason` becomes the issue's tooltip.
+const priorityTones = { critical: 'critical', high: 'critical', medium: 'warning', low: 'neutral' };
+
+function PriorityPill({ priority }) {
+  if (!priority) return <span className="text-muted">—</span>;
+  return <span className={`cc-priority cc-priority-${priorityTones[String(priority).toLowerCase()] || 'neutral'}`}>{priority}</span>;
+}
+
+export function AttentionTable({ items, limit = 5, expanded = false, empty }) {
+  if (!items.length) return empty || null;
+  const visible = expanded ? items : items.slice(0, limit);
+  return <div className="cc-table-wrap">
+    <table className="cc-table">
+      <thead><tr><th scope="col">Device</th><th scope="col">Issue</th><th scope="col">Priority</th><th scope="col" className="cc-col-date">Date</th><th scope="col">Status</th><th scope="col"><span className="sr-only">Action</span></th></tr></thead>
+      <tbody>{visible.map(item => <tr key={item.key}>
+        <td data-label="Device"><span className="cc-cell-primary">{item.device?.name || item.title}</span>{item.device?.detail && <span className="cc-cell-sub">{item.device.detail}</span>}</td>
+        <td data-label="Issue" title={[item.meta, item.reason].filter(Boolean).join(' — ') || undefined}><span className="cc-cell-primary cc-cell-wrap">{item.issue || item.title}</span>{item.category && <span className={`cc-cell-sub cc-cell-${item.tone || 'info'}`}>{item.category}</span>}</td>
+        <td data-label="Priority"><PriorityPill priority={item.priority} /></td>
+        <td data-label="Date" className="cc-cell-nowrap cc-col-date">{item.date ? <><span>{formatDate(item.date)}</span>{item.dateLabel && <span className="cc-cell-sub">{item.dateLabel}</span>}</> : <span className="text-muted">—</span>}</td>
+        <td data-label="Status">{item.status ? <StatusIndicator status={item.status.label} tone={item.status.tone} /> : <span className="text-muted">—</span>}</td>
+        <td className="cc-cell-action">{item.action && <ActionButton action={item.action} />}</td>
+      </tr>)}</tbody>
+    </table>
   </div>;
 }
 

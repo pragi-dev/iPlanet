@@ -6,7 +6,7 @@ import { signInWorkspaceFrom } from './auth/workspace';
 import { AICustomerSupportPanel } from './corporate/AICustomerSupportPanel';
 import { getDevice, getTicket, login, warmUpApi } from './corporate/api';
 import { clearRequestCache } from './ui/requestCache';
-import { AIAssistantContext, InlineAlert } from './ui';
+import { AIAssistantContext, InlineAlert, Loader } from './ui';
 
 // Pages load per route so each portal only downloads what it uses (charts,
 // enrollment and review tooling stay out of the initial bundle).
@@ -60,7 +60,7 @@ const B2CRegistrations = page(() => import('./b2c/B2CRegistrations'), 'B2CRegist
 const CustomerRegistration = page(() => import('./b2c/CustomerRegistration'), 'CustomerRegistration');
 
 function RouteLoading() {
-  return <div className="route-loading" role="status" aria-live="polite"><span className="sr-only">Loading page…</span><span className="route-loading-bar" aria-hidden="true" /></div>;
+  return <div className="route-loading"><Loader label="Loading page…" size={44} /></div>;
 }
 
 const TOKEN_KEY = 'iplanet_token';

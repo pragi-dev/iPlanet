@@ -114,8 +114,8 @@ export function CustomerRegistration() {
 
   return <main className="b2c-register">
     <header className="b2c-register-top">
-      <span className="login-brand-mark" aria-hidden="true">i</span>
-      <span><strong>{state.data?.companyName || 'iPlanet'}</strong> Support</span>
+      <img className="brand-logo" src="/brand/iplanet-logo.png" alt="iPlanet, Apple Premium Partner" width="297" height="49" />
+      <span>Support</span>
     </header>
     <div className="b2c-register-body">
       {state.phase === 'loading' && <div className="b2c-register-card" role="status" aria-live="polite"><p className="text-muted">Checking your registration link…</p></div>}

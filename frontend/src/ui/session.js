@@ -1,10 +1,11 @@
 import { clearRequestCache } from './requestCache';
+import { clearStorageKeepingTheme } from './theme';
 
 // Called when the API rejects the stored token (expired or revoked). Retrying can
 // never succeed, so the session is cleared and the user is sent to sign in again.
 export function endExpiredSession() {
   clearRequestCache();
-  localStorage.clear();
+  clearStorageKeepingTheme();
   if (window.location.pathname !== '/login') window.location.assign('/login');
 }
 

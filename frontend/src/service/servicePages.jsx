@@ -6,6 +6,7 @@ import { AccountRequests } from './AccountRequests';
 import { engineerFilterOptions, filterEngineers } from './engineerFilters';
 import { getEngineers, getProactiveFollowUps, getServiceActivity, getServiceCentres, getServiceTickets } from './api';
 import {
+  clearStorageKeepingTheme,
   ActivityFeed, AttentionFeed, Avatar, Badge, Button, CalmState, Card, DashboardHeader, DashboardSection, Drawer, EmptyState, ErrorState, FilterBar, FilterSelect, InfoList, Insight, KPI, KPIGrid,
   MetricSummary, PageHeader, PageSkeleton, QuickActions, SearchInput, Skeleton, StatusDistribution, TableCard, formatDateTime, formatRelative, friendlyError, greeting, idOf, isActiveTicket,
   pluralize, readSessionUser, recurringIssues, riskLabel, riskTone, slaCountdown, slaLabel, slaRisk, suggestEngineer, todayLabel, useAsync,
@@ -347,7 +348,7 @@ export function ServiceSettings() {
         <div id="integrations" className="settings-section"><Card title="Integrations" description="External services connected to iPlanet Self-care Portal">
           <div className="row-between"><div className="person-cell"><span className="thumb thumb-lg"><Building2 size={18} aria-hidden="true" /></span><div><strong>Google Business Profile</strong><span className="cell-sub">Connect locations and sync public Google reviews</span></div></div><Button to="/service/reviews/google">Manage</Button></div>
         </Card></div>
-        <div id="security" className="settings-section"><Card title="Security" actions={<Button icon={LogOut} onClick={() => { localStorage.clear(); navigate('/login', { replace: true }); }}>Sign out</Button>}>
+        <div id="security" className="settings-section"><Card title="Security" actions={<Button icon={LogOut} onClick={() => { clearStorageKeepingTheme(); navigate('/login', { replace: true }); }}>Sign out</Button>}>
           <InfoList items={[['Sign-in method', <span className="row"><KeyRound size={14} aria-hidden="true" />Email and password</span>], ['Current session expires', expires ? formatDateTime(expires) : null]]} />
         </Card></div>
       </div>

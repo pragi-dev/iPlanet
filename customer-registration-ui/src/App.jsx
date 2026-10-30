@@ -91,8 +91,7 @@ export default function App() {
 
   return <div className="reg-page">
     <header className="reg-top">
-      <span className="reg-brand-mark" aria-hidden="true">i</span>
-      <span className="reg-brand-text"><strong>{state.data?.companyName || 'iPlanet'}</strong><small>Self-care Portal</small></span>
+      <img className="brand-logo" src="/brand/iplanet-logo.png" alt="iPlanet, Apple Premium Partner" width="297" height="49" />
       {demo && <span className="badge badge-warning reg-mode-badge"><i className="badge-dot" aria-hidden="true" />Demo mode</span>}
     </header>
 

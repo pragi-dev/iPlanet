@@ -30,7 +30,7 @@ export function TrackTicket() {
 
   return <main className="login track">
     <header className="login-top">
-      <div className="login-brand"><span className="login-brand-mark" aria-hidden="true">i</span><span><strong>iPlanet</strong> Service</span></div>
+      <div className="login-brand"><img className="brand-logo" src="/brand/iplanet-logo.png" alt="iPlanet, Apple Premium Partner" width="297" height="49" /><span>Service</span></div>
     </header>
 
     <div className="track-main">

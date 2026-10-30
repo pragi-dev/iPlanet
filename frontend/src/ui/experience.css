@@ -6,9 +6,7 @@
    ========================================================================== */
 
 /* Route chunk loading: a thin, quiet progress bar instead of a blank flash */
-.route-loading { position: fixed; inset: 0 0 auto 0; height: 2px; z-index: 2000; overflow: hidden; }
-.route-loading-bar { display: block; width: 40%; height: 100%; background: var(--color-accent); animation: route-progress 900ms var(--ease) infinite; }
-@keyframes route-progress { from { transform: translateX(-100%); } to { transform: translateX(260%); } }
+.route-loading { position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center; pointer-events: none; }
 
 /* Keyboard hint */
 .kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 5px; background: var(--color-surface); box-shadow: inset 0 0 0 1px var(--color-border), 0 1px 0 rgba(0, 0, 0, 0.04); font-family: var(--font-sans); font-size: 11px; font-weight: 500; color: var(--color-text-secondary); letter-spacing: 0; line-height: 1; }
@@ -140,18 +138,21 @@
    Command bar
    -------------------------------------------------------------------------- */
 .command-trigger {
-  display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 6px 0 12px; min-width: 210px;
-  border: 0; border-radius: var(--radius-pill); background: rgba(0, 0, 0, 0.05); color: var(--color-text-secondary); font-size: 14px;
-  transition: background-color 180ms var(--ease);
+  display: inline-flex; align-items: center; gap: 12px; height: 48px; padding: 0 10px 0 18px; width: clamp(220px, 22vw, 440px);
+  border: 1px solid var(--glass-border); border-radius: var(--radius-pill); background: var(--glass); color: var(--color-text-secondary); font-size: 15px;
+  box-shadow: var(--glass-highlight), var(--shadow-card); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+  transition: background-color 180ms var(--ease), box-shadow 180ms var(--ease);
 }
-.command-trigger:hover { background: rgba(0, 0, 0, 0.08); }
-.command-trigger:focus-visible { outline: none; box-shadow: var(--focus); }
-.command-trigger-text { flex: 1; text-align: left; }
-.command-trigger .kbd { background: rgba(255, 255, 255, 0.85); }
+.command-trigger:hover { background: var(--glass-strong); }
+.command-trigger:focus-visible { outline: none; box-shadow: var(--shadow-card), var(--focus); }
+.command-trigger svg { flex: none; color: var(--color-text-primary); }
+.command-trigger-text { flex: 1; min-width: 0; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.command-trigger .kbd { height: 26px; padding: 0 8px; border-radius: 8px; background: var(--color-fill); box-shadow: none; font-size: 12px; }
 .overlay-command { display: flex; justify-content: center; align-items: flex-start; padding: 12vh var(--space-4) var(--space-4); background: rgba(0, 0, 0, 0.24); }
 .command {
   width: min(640px, 100%); max-height: min(560px, 76vh); display: flex; flex-direction: column; overflow: hidden;
-  background: var(--color-surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); animation: modal-in 180ms var(--ease);
+  background: var(--glass-menu); border: 1px solid var(--glass-border); -webkit-backdrop-filter: blur(40px) saturate(200%); backdrop-filter: blur(40px) saturate(200%);
+  border-radius: var(--radius-lg); box-shadow: var(--glass-highlight), var(--shadow-lg); animation: modal-in 180ms var(--ease);
 }
 .command-input { display: flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-5); border-bottom: 1px solid var(--color-divider); }
 .command-input svg { color: var(--color-text-tertiary); flex: none; }
@@ -295,7 +296,7 @@
    Responsive
    -------------------------------------------------------------------------- */
 @media (max-width: 1199px) {
-  .command-trigger { min-width: 0; padding: 0; width: 36px; justify-content: center; background: transparent; }
+  .command-trigger { min-width: 0; padding: 0; width: 40px; height: 40px; justify-content: center; background: transparent; border-color: transparent; box-shadow: none; }
   .command-trigger:hover { background: var(--color-neutral-soft); }
   .command-trigger-text, .command-trigger .kbd { display: none; }
   .workspace { grid-template-columns: minmax(0, 1fr); }
@@ -333,3 +334,10 @@
   .engineer-option-side { grid-column: 2; justify-items: start; grid-auto-flow: column; justify-content: start; gap: 8px; }
   .filter-row { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* --------------------------------------------------------------------------
+   Loader — uiball's Hourglass (see Loader.jsx)
+   -------------------------------------------------------------------------- */
+.loader { display: inline-flex; flex-direction: column; align-items: center; gap: 14px; }
+.loader-label { font-size: 14px; color: var(--color-text-secondary); letter-spacing: -0.01em; }
+.page-loader { min-height: min(60vh, 520px); display: grid; place-items: center; }
