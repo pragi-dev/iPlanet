@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FlaskConical, Mail, PlugZap, RefreshCcw, Send } from 'lucide-react';
-import { Badge, Button, Card, EmptyState, ErrorState, Field, FilterSelect, InfoList, InlineAlert, PageHeader, PageSkeleton, formatDateTime, formatRelative, friendlyError, useAsync } from '../ui';
-import { getB2CHealth, getB2CInbound, getB2COutbound, getB2CTestOutbox, injectB2CTestEmail, retryB2CInbound, retryB2COutbound, runB2CCycle, verifyB2CImap } from './api';
+import { Mail, PlugZap, RefreshCcw, Send } from 'lucide-react';
+import { Badge, Button, Card, EmptyState, ErrorState, FilterSelect, InfoList, InlineAlert, PageHeader, PageSkeleton, formatDateTime, formatRelative, friendlyError, useAsync } from '../ui';
+import { getB2CHealth, getB2CInbound, getB2COutbound, retryB2CInbound, retryB2COutbound, runB2CCycle, verifyB2CImap } from './api';
 import { B2CShell, NoB2CAccess } from './shared';
 
 const MODES = {
@@ -51,7 +51,6 @@ export function B2CIntegrations() {
   if (health.error) return <B2CShell title="Integration health"><PageHeader title="Integration health" /><div className="card"><ErrorState title="Unable to load integration health" message={friendlyError(health.error)} onRetry={health.reload} /></div></B2CShell>;
   const data = health.data;
   const queues = data.queues;
-  const testInboxes = data.inboxes.filter(inbox => inbox.provider === 'test' && inbox.mode === 'test');
 
   return <B2CShell title="Integration health">
     <PageHeader title="Integration health" description="Inbox polling, CRM lookups and customer email, with anything that failed and needs attention."
@@ -138,7 +137,6 @@ export function B2CIntegrations() {
       </table></div>}
     </Card>
 
-    {data.testAdapters.email && testInboxes.length > 0 && <TestAdapterPanel inboxes={testInboxes} onDone={refresh} />}
   </B2CShell>;
 }
 
@@ -164,44 +162,6 @@ function ImapPanel({ imap, onDone }) {
         <div><Button icon={PlugZap} disabled={busy || !imap.configured} onClick={check}>{busy ? 'Checking…' : 'Check connection and login'}</Button></div>
         {error && <InlineAlert title={error} />}
         {result && <InlineAlert tone={result.ok ? 'success' : 'critical'} title={result.ok ? result.message : result.error}>{!result.ok && (result.retryable ? 'This looks temporary; try again shortly.' : 'Check the IMAP settings on the server.')}</InlineAlert>}
-      </div>
-    </div>
-  </Card>;
-}
-
-// TEST ADAPTER ONLY: puts an email in a test inbox and runs processing.
-function TestAdapterPanel({ inboxes, onDone }) {
-  const [form, setForm] = useState({ inboxKey: inboxes[0].key, from: 'test.customer.one@example.test', fromName: 'Test Customer One', subject: 'Repair delay', body: 'Hello,\n\nCase ID: TEST-CASE-0001\nSerial No: DEMOCHN0001\nMy device repair is delayed.\n' });
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const outbox = useAsync(getB2CTestOutbox, []);
-  const set = (key, value) => setForm(current => ({ ...current, [key]: value }));
-  // Only the messages for the escalation the last test email created or updated.
-  const reference = result?.email?.ticket?.reference;
-  const replies = reference ? (outbox.data || []).filter(message => message.subject?.startsWith(`[${reference}]`)) : [];
-  const submit = async event => {
-    event.preventDefault();
-    setBusy(true); setError(''); setResult(null);
-    try { setResult(await injectB2CTestEmail(form)); await Promise.all([onDone(), outbox.reload({ silent: true })]); } catch (submitError) { setError(friendlyError(submitError)); } finally { setBusy(false); }
-  };
-  return <Card title="Test adapter: simulate a customer email" description="For development and acceptance testing only. Nothing here is sent to or received from a real mailbox." actions={<Badge tone="warning"><FlaskConical size={12} aria-hidden="true" /> Test only</Badge>}>
-    <div className="grid-2">
-      <form className="stack-16" onSubmit={submit}>
-        <p className="text-muted text-small">Write the serial number in the body after a label, e.g. “Serial No: DEMOCHN0001”. It is looked up in the device records and the escalation goes to that device's region; without a serial number it goes to triage. Test CRM records: case IDs TEST-CASE-0001 / TEST-CASE-0002 and the matching @example.test addresses.</p>
-        <Field label="Test inbox">{props => <select {...props} value={form.inboxKey} onChange={event => set('inboxKey', event.target.value)}>{inboxes.map(inbox => <option key={inbox.key} value={inbox.key}>{inbox.displayName || inbox.address}</option>)}</select>}</Field>
-        <div className="grid-2"><Field label="Sender email">{props => <input {...props} type="email" value={form.from} onChange={event => set('from', event.target.value)} required />}</Field><Field label="Sender name">{props => <input {...props} value={form.fromName} onChange={event => set('fromName', event.target.value)} />}</Field></div>
-        <Field label="Subject">{props => <input {...props} value={form.subject} onChange={event => set('subject', event.target.value)} />}</Field>
-        <Field label="Body">{props => <textarea {...props} rows={6} value={form.body} onChange={event => set('body', event.target.value)} />}</Field>
-        {error && <InlineAlert title={error} />}
-        {result?.email && <InlineAlert tone={result.email.status === 'processed' ? 'success' : 'warning'} title={OUTCOMES[result.email.outcome] || result.email.status}>{result.email.ticket ? <>Escalation <Link to={`/b2c/tickets/${result.email.ticket._id}`}>{result.email.ticket.reference}</Link> · {result.email.ticket.status}</> : result.email.lastError}</InlineAlert>}
-        <div><Button type="submit" variant="primary" icon={PlugZap} disabled={busy}>{busy ? 'Processing…' : 'Send test email and process'}</Button></div>
-      </form>
-      <div className="stack-12">
-        <p className="side-section-title">Test outbox (not delivered)</p>
-        {!reference ? <p className="text-muted text-small">Send a test email to see what the customer receives for it.</p>
-          : replies.length ? <ul className="b2c-outbox">{replies.map(message => <li key={message.providerMessageId}><strong>{message.subject}</strong><span className="text-muted text-small">To {message.to} · {formatDateTime(message.sentAt)}</span><p className="text-small description-text">{message.text}</p></li>)}</ul>
-          : <p className="text-muted text-small">Nothing "sent" to the customer for {reference} yet. The acknowledgement is held until its template is approved in B2C Settings.</p>}
       </div>
     </div>
   </Card>;

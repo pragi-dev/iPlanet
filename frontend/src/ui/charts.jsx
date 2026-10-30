@@ -17,18 +17,18 @@ export function ColumnChart({ data, dataKey = 'value', nameKey = 'name', seriesN
   return <div role="img" aria-label={`${seriesName} chart: ${data.map(item => `${item[nameKey]} ${item[dataKey]}`).join(', ')}`}>
     <ResponsiveContainer width="100%" height={height}>
       <BarChart data={data} margin={{ top: 8, right: 4, left: -16, bottom: 0 }}>
-        <CartesianGrid vertical={false} stroke="#f0f0f2" />
+        <CartesianGrid vertical={false} stroke="var(--color-divider)" />
         <XAxis dataKey={nameKey} {...axis} interval={0} tickFormatter={value => String(value).length > 12 ? `${String(value).slice(0, 11)}…` : value} />
         <YAxis {...axis} allowDecimals={false} />
         <Tooltip cursor={{ fill: 'rgba(0,0,0,0.03)' }} content={<ChartTooltip />} />
-        <Bar dataKey={dataKey} name={seriesName} fill="#0071e3" radius={[6, 6, 0, 0]} maxBarSize={28} />
+        <Bar dataKey={dataKey} name={seriesName} fill="var(--color-accent)" radius={[6, 6, 0, 0]} maxBarSize={28} />
       </BarChart>
     </ResponsiveContainer>
   </div>;
 }
 
 // Horizontal bars for categorical distributions; easier to read than pies.
-export function BarList({ data, emptyText = 'No data yet.', tone = '#0071e3', limit }) {
+export function BarList({ data, emptyText = 'No data yet.', tone = 'var(--color-accent)', limit }) {
   const rows = [...(data || [])].filter(item => Number(item.value) > 0).sort((a, b) => b.value - a.value).slice(0, limit || undefined);
   if (!rows.length) return <EmptyState compact icon={BarChart3} title={emptyText} />;
   const max = Math.max(...rows.map(item => Number(item.value)));

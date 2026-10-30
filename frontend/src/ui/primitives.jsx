@@ -1,4 +1,5 @@
 import { useId } from 'react';
+import { Loader } from './Loader';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, Check, CheckCircle2, ChevronLeft, Info, ChevronRight, Inbox, RefreshCcw, Search, Star } from 'lucide-react';
 import { initials, statusTone } from './format';
@@ -142,13 +143,10 @@ export function TableSkeleton({ rows = 6, columns = 6 }) {
   </div>;
 }
 
-export function PageSkeleton({ kpis = 4, variant = 'dashboard' }) {
-  return <div className="page-skeleton" aria-busy="true" aria-label="Loading">
-    <div className="page-header"><Skeleton width={220} height={28} /><Skeleton width={340} height={14} /></div>
-    {variant === 'dashboard' && <div className="kpi-grid" style={{ '--kpi-columns': Math.min(kpis, 6) }}>{Array.from({ length: kpis }, (_, index) => <div className="kpi" key={index}><Skeleton width="50%" /><Skeleton width="35%" height={28} /></div>)}</div>}
-    {variant === 'detail' && <div className="detail-layout"><div className="card"><div className="card-body stack-16">{Array.from({ length: 6 }, (_, index) => <Skeleton key={index} width={`${60 + (index % 3) * 12}%`} />)}</div></div><div className="card"><div className="card-body stack-16">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} />)}</div></div></div>}
-    <div className="card"><TableSkeleton /></div>
-  </div>;
+// Full-page loading state shared by every page: the hourglass loader, centred.
+// Callers' `kpis` / `variant` props are accepted and ignored.
+export function PageSkeleton() {
+  return <div className="page-loader" aria-busy="true"><Loader label="Loading…" size={44} /></div>;
 }
 
 export function SearchInput({ value, onChange, placeholder = 'Search', label = 'Search', className = '', ...inputProps }) {

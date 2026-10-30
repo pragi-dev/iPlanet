@@ -6,6 +6,8 @@ export * from './experience';
 export * from './dashboard';
 export * from './proactive';
 export { useAsync } from './useAsync';
+export { Loader } from './Loader';
+export { clearStorageKeepingTheme, currentTheme, setTheme } from './theme';
 export { AppShell, AIAssistantContext, useAIAssistant, notifyNotificationsChanged } from './AppShell';
 export * from './ticket';
 export { NotificationCenter } from './NotificationCenter';

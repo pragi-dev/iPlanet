@@ -10,7 +10,7 @@ const highlights = [
 export function AuthLayout({ children }) {
   return <main className="login">
     <header className="login-top">
-      <div className="login-brand"><span className="login-brand-mark" aria-hidden="true">i</span><span><strong>iPlanet</strong> Self-care Portal</span></div>
+      <div className="login-brand"><img className="brand-logo" src="/brand/iplanet-logo.png" alt="iPlanet, Apple Premium Partner" width="297" height="49" /></div>
     </header>
 
     <div className="login-main">
