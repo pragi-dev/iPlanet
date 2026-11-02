@@ -96,8 +96,11 @@ from `frontend/src/ui/styles.css`. The page layout follows the portal's own regi
 `frontend/src/ui/primitives.jsx`, so the markup and class names match. Icons come from
 `lucide-react`, as in the portal.
 
+The look matches the redesigned portal: black ink accent, frosted-glass surfaces and pill
+buttons, with the iPlanet / Apple Premium Partner logo (`public/brand/iplanet-logo.png`).
+
 These are **copies**: a change to the portal's tokens is not picked up automatically.
-The portal has no dark theme, so this page has none either.
+The portal has a light/dark switch; this page is light only.
 
 ## Limitations
 
@@ -105,7 +108,6 @@ The portal has no dark theme, so this page has none either.
 - The "Email me a new link" action for expired links (in the portal's built-in page) is not
   included; an expired link tells the customer to reply to the support email.
 - Demo-mode purchase regions are sample values; in api mode they come from the device records.
-- There is no logo image in the repository; the header uses the portal's "i" brand mark.
 - The main portal already serves the same form at `/b2c/customer-registration/:token`
   (`frontend/src/b2c/CustomerRegistration.jsx`). This app does not replace it. Decide which
   one customers should use before going live.
