@@ -835,7 +835,7 @@ const emailInbox = emailInboxConfig();
 // Tickets created from these emails are acknowledged to the sender when opened (with a
 // tracking link) and when closed. Links use the first portal address in FRONTEND_URLS.
 const portalUrl = (String(process.env.FRONTEND_URLS || '').split(',').map(value => value.trim()).find(Boolean) || 'http://localhost:5173').replace(/\/+$/, '');
-const ticketEmails = createTicketEmailUpdates({ models: { TicketEmail }, send: createEmailSender(emailInbox), fromAddress: emailInbox.user, via: emailInbox.api.key ? 'Brevo' : 'SMTP', trackingUrl: token => `${portalUrl}/track/${token}` });
+const ticketEmails = createTicketEmailUpdates({ models: { TicketEmail }, send: createEmailSender(emailInbox), fromAddress: emailInbox.user, via: emailInbox.api.key ? `Brevo${emailInbox.api.fromAddress ? ` as ${emailInbox.api.fromAddress}` : ''}` : 'SMTP', trackingUrl: token => `${portalUrl}/track/${token}` });
 async function createTicketFromEmail({ draft, emailRequest, reviewer }) {
   const onSite = isOnSiteRequest(draft.category);
   const images = emailRequest.attachments.filter(item => /^image\//.test(item.contentType)).map(item => item.path);

@@ -25,8 +25,9 @@ export function createEmailSender(config, { fetchImpl = globalThis.fetch } = {})
   return config?.api?.key ? createBrevoSender(config, { fetchImpl }) : createSmtpSender(config);
 }
 
-// Sends through Brevo's transactional email API. The sender (B2B_EMAIL_USER) must be a
-// verified sender or domain in the Brevo account.
+// Sends through Brevo's transactional email API. The sender (B2B_EMAIL_FROM_ADDRESS, else
+// B2B_EMAIL_USER) must be a verified sender or domain in the Brevo account. When it differs
+// from the inbox, Reply-To points at the inbox so customer replies still come back to it.
 export function createBrevoSender(config, { fetchImpl = globalThis.fetch } = {}) {
   if (!config?.api?.key || !config.user) return null;
   const timeoutMs = Number(config.api.timeoutMs) || 20000;
@@ -35,8 +36,9 @@ export function createBrevoSender(config, { fetchImpl = globalThis.fetch } = {})
       method: 'POST',
       headers: { 'api-key': config.api.key, 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({
-        sender: { name: config.smtp?.fromName || 'iPlanet Service', email: config.user },
+        sender: { name: config.smtp?.fromName || 'iPlanet Service', email: config.api.fromAddress || config.user },
         to: [{ email: to }],
+        ...(config.api.fromAddress && config.api.fromAddress !== config.user ? { replyTo: { email: config.user } } : {}),
         subject,
         textContent: text,
         ...(inReplyTo ? { headers: { 'In-Reply-To': inReplyTo, References: inReplyTo } } : {}),

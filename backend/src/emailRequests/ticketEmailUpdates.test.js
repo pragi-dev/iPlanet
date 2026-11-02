@@ -65,6 +65,15 @@ describe('choosing and using an email sender', () => {
     assert.deepEqual(body.headers, { 'In-Reply-To': '<orig@demo.test>', References: '<orig@demo.test>' });
   });
 
+  test('a separate Brevo sender address replies back to the inbox', async () => {
+    const { calls, fetchImpl } = fakeFetch(201, { messageId: '<brevo-2@smtp-relay>' });
+    const send = createEmailSender(config({ api: { key: 'xkeysib-test', fromAddress: 'tester@gmail.test' } }), { fetchImpl });
+    await send({ to: 'karthik@demo.test', subject: 'Re: Battery', text: 'Hello' });
+    const body = JSON.parse(calls[0].options.body);
+    assert.deepEqual(body.sender, { name: 'iPlanet Service', email: 'tester@gmail.test' });
+    assert.deepEqual(body.replyTo, { email: 'service@iplanet.test' });
+  });
+
   test('a Brevo error is thrown so the queue retries it', async () => {
     const { fetchImpl } = fakeFetch(401, { code: 'unauthorized', message: 'Key not found' });
     const send = createBrevoSender(config({ api: { key: 'bad' } }), { fetchImpl });
