@@ -26,9 +26,12 @@ tickets, devices, SLA rules and screens are unchanged.
   `localhost:5100` (override with `B2C_DEV_TARGET`).
 - Local: `npm run dev` at the repo root starts the main API, the B2C server
   and the frontend. On its own: `cd backend && npm run b2c:dev`.
-- Render: `render.yaml` defines `iplanet-b2c` (`npm run b2c:start`), which
-  takes `JWT_SECRET` from `iplanet-backend`. The B2C variables below are set on
-  this service, not the main one.
+- Render: `render.yaml` defines an optional `iplanet-b2c` (`npm run b2c:start`),
+  which takes `JWT_SECRET` from `iplanet-backend`. **Production today runs B2C
+  inside `iplanet-backend`** (`B2C_SEPARATE_SERVER=false`), so the B2C variables
+  below (`IMAP_*`, `B2C_ACK_*`, `B2C_REGISTRATION_*`) are set on `iplanet-backend`.
+  Move them to `iplanet-b2c` only if that service is created and
+  `B2C_SEPARATE_SERVER=true`.
 
 > **Integration status.** The email-to-ticket flow is complete and tested
 > end to end with the **test adapters** (an in-memory mailbox and a CRM stub
@@ -63,8 +66,9 @@ Customer email → TCM inbox
   → saving classification rules or inboxes re-checks tickets still in triage, so one that
     now has a category and a region is routed the same way
   → acknowledgement queued once per ticket; sent only once its template is approved.
-    With B2C_ACK_EMAIL_ENABLED it is sent from the separate company address over SMTP
-    to the matched customer's registered address (see "Acknowledgement from the company
+    With B2C_ACK_EMAIL_ENABLED it is sent from the separate company address (over SMTP,
+    or Brevo's HTTPS API when B2C_ACK_API_KEY is set) to the address the email came
+    from (see "Acknowledgement from the company
     address"); otherwise by the inbox (IMAP inboxes are receive-only: recorded as not sent)
 ```
 
@@ -318,7 +322,9 @@ stored in MongoDB or sent to the browser):
 | `IMAP_HOST`, `IMAP_USER`, `IMAP_PASS` | – (all required) | Mailbox read by inboxes with provider `imap`, e.g. MilesWeb `mail.aavoraa.com`. `IMAP_PASS` is secret |
 | `IMAP_PORT`, `IMAP_SECURE`, `IMAP_MAILBOX`, `IMAP_MAX_MESSAGE_MB` | `993`, `true` on 993, `INBOX`, `40` | IMAP connection and limits |
 | `IMAP_CONNECTION_TIMEOUT_MS`, `IMAP_SOCKET_TIMEOUT_MS` | `15000`, `60000` | IMAP timeouts |
-| `B2C_ACK_EMAIL_ENABLED` | `false` | `true` sends acknowledgements from the company address below. Keep `false` in development and tests |
+| `B2C_ACK_EMAIL_ENABLED` | `false` | Exactly `true` (lowercase) sends acknowledgements from the company address below. Keep `false` in development and tests |
+| `B2C_ACK_API_KEY` | — | Brevo API key (`xkeysib-…`). When set, acknowledgements and registration links go through Brevo's HTTPS API and the `B2C_ACK_SMTP_*` settings are not used. Secret |
+| `B2C_ACK_API_TIMEOUT_MS` | `20000` | Brevo request timeout (max `120000`) |
 | `B2C_ACK_FROM_EMAIL`, `B2C_ACK_FROM_NAME` | — | Sender address and display name, e.g. `noreply@aavoraa.com`, `iPlanet Support` |
 | `B2C_ACK_COMPANY_NAME` | `iPlanet` | `{{companyName}}` in the template |
 | `B2C_ACK_SMTP_HOST`, `B2C_ACK_SMTP_PORT`, `B2C_ACK_SMTP_SECURE` | —, `465`, `true` on 465 | SMTP server; `587` requires STARTTLS. TLS 1.2 or later |
@@ -342,11 +348,12 @@ stored in MongoDB or sent to the browser):
 B2C reads mail that arrives at a MilesWeb address (for example
 `test1@aavoraa.com`) over IMAP with the `imap` inbox provider
 (`connectors/imapEmailAdapter.js`, using `imapflow` and `mailparser`). IMAP only
-reads mail. Acknowledgements are sent by a separate SMTP account (see
+reads mail. Acknowledgements are sent by a separate company sender (see
 [Acknowledgement from the company address](#acknowledgement-from-the-company-address)).
 
 1. Set `IMAP_HOST`, `IMAP_USER` and `IMAP_PASS` on the server that runs B2C
-   processing (the `iplanet-b2c` service when `B2C_SEPARATE_SERVER=true`).
+   processing (`iplanet-backend` in production; the `iplanet-b2c` service only when
+   `B2C_SEPARATE_SERVER=true`).
    Port `993` (SSL/TLS) and folder `INBOX` are the defaults; port `143` uses
    STARTTLS and refuses to log in without it. On startup the server logs
    whether IMAP is configured and names any missing variable (never values).
@@ -401,8 +408,11 @@ are marked `skipped` on the next cycle.
 
 Every new escalation gets one acknowledgement, sent from a separate company
 address (for example `noreply@aavoraa.com`) over authenticated SMTP with TLS
-(`connectors/smtpAckSender.js`, using `nodemailer`). It is a different account
-from the IMAP inbox, with its own credentials. The customer's address is never
+(`connectors/smtpAckSender.js`, using `nodemailer`), or, when `B2C_ACK_API_KEY` is
+set, through Brevo's HTTPS API (`connectors/brevoAckSender.js`). Brevo is the route
+in production, because Render's free plan blocks outgoing SMTP ports (25, 465 and
+587). Either way it is a different account from the IMAP inbox, with its own
+credentials. The customer's address is never
 used as the sender. Replies go to the escalation inbox (`Reply-To`), and the
 subject carries `[B2C-YYYY-NNNNNN]`, so a reply threads to the ticket.
 
@@ -478,12 +488,37 @@ and reused on a retry. If the connection drops after the server accepted a
 message, the retry can send it twice; mail clients can recognise the duplicate by
 its Message-ID, but SMTP cannot guarantee exactly-once delivery.
 
-**Setting it up.**
+With Brevo, "sent" means Brevo accepted the message (HTTP 201). Our `Message-ID`
+is passed to Brevo; the `messageId` Brevo reports is kept as `providerMessageId`,
+and a customer reply quoting either one threads to the ticket or registration.
+`401`/`403` (bad key) and other `4xx` answers fail at once; `429`, `5xx`, network
+errors and timeouts are retried. Delivery itself shows in **Brevo →
+Transactional → Logs**.
+
+**Setting it up with Brevo (production on Render).**
+
+1. Create a Brevo API key (**SMTP & API → API Keys**; it starts with `xkeysib-`,
+   not the SMTP key `xsmtpsib-`).
+2. Use a verified Brevo sender as `B2C_ACK_FROM_EMAIL`. The Brevo signup address
+   is verified already. A domain with a DMARC policy of `quarantine` or `reject`
+   (aavoraa.com is `quarantine`) must be authenticated in Brevo before it can be
+   used.
+3. On **iplanet-backend → Environment** set `B2C_ACK_API_KEY`,
+   `B2C_ACK_FROM_EMAIL`, `B2C_ACK_FROM_NAME` and `B2C_ACK_EMAIL_ENABLED=true`,
+   then **Save, rebuild, and deploy**.
+4. The startup log should read `[B2C] Acknowledgements are sent from <address>
+   via Brevo (HTTPS API)`. `are off (B2C_ACK_EMAIL_ENABLED is not true)` means the
+   variable is missing or not exactly `true`.
+5. Approve the acknowledgement template in B2C Settings, then send a test email
+   quoting a known serial number (for example `Serial No: TESTMOB0010`) from an
+   address other than the sender.
+
+**Setting it up with SMTP.**
 
 1. Create the sending mailbox (for example `noreply@aavoraa.com`) in MilesWeb
    cPanel, with its own password.
-2. Set the `B2C_ACK_*` variables (below) on the server that runs B2C processing
-   (`iplanet-b2c` on Render), with `B2C_ACK_SMTP_PASS` entered in the Render
+2. Set the `B2C_ACK_*` variables (above) on the server that runs B2C processing,
+   with `B2C_ACK_SMTP_PASS` entered in the hosting
    dashboard only. Then set `B2C_ACK_EMAIL_ENABLED=true`. On startup the server
    logs the sender and server, or names any missing variable (never values).
 3. Approve the acknowledgement template in B2C Settings.

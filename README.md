@@ -7,7 +7,11 @@ Confidential local-only prototype with one role-aware React frontend and one sha
 - `frontend/`: Unified React frontend on port 5173. It preserves both existing portal experiences behind role-protected routes.
 - `frontend/src/corporate/`: Corporate Admin pages, components, API, and styles.
 - `frontend/src/service/`: iPlanet Service pages, components, API, and styles.
-- `backend/`: Shared API on port 5000.
+- `backend/`: Shared API on port 5000 (the B2C module can also run on its own on port 5100).
+- `backend/src/emailRequests/`: B2B service requests by email. See [docs/b2b-email-requests.md](docs/b2b-email-requests.md).
+- `backend/src/b2c/`: B2C email escalations and customer registration. See [docs/b2c-escalations.md](docs/b2c-escalations.md) and [docs/b2c-customer-registration.md](docs/b2c-customer-registration.md).
+- `customer-registration-ui/`: Standalone customer registration page on port 5174. See [its README](customer-registration-ui/README.md).
+- `docs/`: Feature documentation.
 - `database/`: Local MongoDB notes.
 - `uploads/`: Local uploaded service-request images.
 - `render.yaml`: Render blueprint for the production backend service.
@@ -107,7 +111,7 @@ The iPlanet Service API also exposes the complete catalog at `GET /api/iplanet/d
 
 Device responsibility is intentionally split: iPlanet Service assigns `Device -> Company` and leaves the device `Unassigned`; Corporate Admin receives the `New Device Added` notification and manages `Device -> Employee` from Unassigned Devices.
 
-Everything uses sample data and local MongoDB only. No deployment, external APIs, cloud storage, or production credentials are used.
+Locally everything uses sample data and a local MongoDB. Real credentials live only in the git-ignored `backend/.env` and `backend/.env.b2b-email` files and in the Render dashboard.
 
 ## AI Support Engine foundation
 
@@ -172,7 +176,22 @@ The browser must call the backend's forwarded URL when a portal is opened remote
 
 The unified frontend ships with a non-secret `.env` that sets `VITE_API_URL=http://localhost:5000/api` for local work. Use its ignored `.env.local` counterpart to override that value for a tunnel. The backend continues to connect to MongoDB Atlas; MongoDB is never exposed through a tunnel.
 
+## Look and feel
+
+The portal uses an Apple-like glass design: SF/Inter type, frosted-glass surfaces, a black ink accent (no blue), pill buttons and an hourglass loader. The header shows the iPlanet / Apple Premium Partner logo (`frontend/public/brand/`). Users can switch between light and dark mode from the top bar; the choice is remembered in the browser. Colours and glass values are tokens in `frontend/src/ui/styles.css` (`--color-accent`, `--glass`, `--glass-blur`, `--page-glow` and others), switched by `data-theme` on `<html>` (`frontend/src/ui/theme.js`).
+
+## Email features
+
+| Feature | Inbox (read over IMAP) | Replies sent | Docs |
+| --- | --- | --- | --- |
+| B2B Email Requests (corporate customers) | `B2B_EMAIL_USER` | Ticket opened and closed acknowledgements | [docs/b2b-email-requests.md](docs/b2b-email-requests.md) |
+| B2C escalations (retail customers) | `IMAP_USER`, inbox provider `imap` in B2C Settings | Acknowledgements and registration links | [docs/b2c-escalations.md](docs/b2c-escalations.md) |
+
+Outgoing email goes over SMTP locally, or through **Brevo's HTTPS API** when `B2B_EMAIL_API_KEY` / `B2C_ACK_API_KEY` is set. Production uses Brevo because Render's free plan blocks outgoing SMTP ports (25, 465, 587). The sender address must be verified in Brevo.
+
 ## Production deployment
+
+The live backend runs on Render's free plan: it sleeps after about 15 minutes without traffic, so the first request after that can take up to a minute, and inbox checks pause while it sleeps.
 
 ### Backend on Render
 
@@ -198,7 +217,33 @@ GEMINI_FALLBACK_MODEL=gemini-3.6-flash
 GEMINI_TIMEOUT_MS=60000
 ```
 
-Do not commit the real MongoDB URI, JWT secret, or Gemini key. Configure MongoDB Atlas Network Access to allow the Render service to connect.
+For Claude drafting of email requests, also set `ANTHROPIC_API_KEY`.
+
+B2C runs inside this service (`B2C_SEPARATE_SERVER=false`), so its variables are set here too:
+
+```env
+# B2B Email Requests
+B2B_EMAIL_IMAP_HOST=<mail server>
+B2B_EMAIL_USER=<request inbox>
+B2B_EMAIL_PASSWORD=<inbox password>
+B2B_EMAIL_API_KEY=<Brevo API key, xkeysib-...>
+B2B_EMAIL_FROM_ADDRESS=<Brevo-verified sender, optional>
+
+# B2C inbox, acknowledgements and registration links
+IMAP_HOST=<mail server>
+IMAP_USER=<B2C inbox>
+IMAP_PASS=<inbox password>
+B2C_ACK_EMAIL_ENABLED=true
+B2C_ACK_API_KEY=<Brevo API key>
+B2C_ACK_FROM_EMAIL=<Brevo-verified sender>
+B2C_ACK_FROM_NAME=iPlanet Service
+B2C_REGISTRATION_ENABLED=true
+B2C_REGISTRATION_PORTAL_URL=https://<your-vercel-app>.vercel.app
+```
+
+After **Save, rebuild, and deploy**, the startup log should show `[Ticket emails] … via Brevo as <sender>` and `[B2C] Acknowledgements are sent from <sender> via Brevo (HTTPS API)`. A value of `B2C_ACK_EMAIL_ENABLED` other than exactly `true` leaves B2C acknowledgements off.
+
+Do not commit the real MongoDB URI, JWT secret, API keys or mailbox passwords. Configure MongoDB Atlas Network Access to allow the Render service to connect.
 
 ### Frontend on Vercel
 
@@ -214,6 +259,8 @@ Set this Vercel environment variable for Production, Preview, and Development as
 ```env
 VITE_API_URL=https://<actual-render-service>.onrender.com/api
 ```
+
+This is the only Vercel variable. Never put secrets in Vercel: `VITE_` values are built into the public JavaScript.
 
 Use the exact backend URL shown in the Render service dashboard. Verify it first at `https://<actual-render-service>.onrender.com/api/health`; it must return `{ "success": true, "message": "API is running" }`.
 

@@ -46,8 +46,8 @@ it. Replies to the registration email that arrive before the ticket exists are a
 ## When a link is sent
 
 The email goes to the address the email came from, from the company sender (`B2C_ACK_FROM_EMAIL`,
-over SMTP) when it is enabled, otherwise through the inbox it came to, if that inbox can send. IMAP
-is only ever used to read mail.
+over SMTP, or Brevo's HTTPS API when `B2C_ACK_API_KEY` is set) when it is enabled, otherwise
+through the inbox it came to, if that inbox can send. IMAP is only ever used to read mail.
 
 One address receives at most `B2C_REGISTRATION_MAX_PER_RECIPIENT_DAY` registration emails in 24
 hours. Beyond that — or with no way to send, an invalid sender address, or no valid
@@ -213,7 +213,8 @@ admin's decision and is recorded in the ticket history:
 | `B2C_REGISTRATION_PURCHASE_DATE_TOLERANCE_DAYS` | `7` | Allowed difference from the device record's purchase date |
 | `TRUST_PROXY_HOPS` | — | Proxies in front of the server (Render: `1`) |
 
-The sender is the existing company sender (`B2C_ACK_*`); no new credentials are needed.
+The sender is the existing company sender (`B2C_ACK_*`, including `B2C_ACK_API_KEY` for Brevo);
+no new credentials are needed.
 
 On startup the earlier unique index on `b2cregistrationrequests.ticketId` (which required a ticket)
 is replaced by one over set ticket ids only, and a unique index on `sourceEmailId` is added.

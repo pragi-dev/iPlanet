@@ -78,6 +78,18 @@ services:
         value: iPlanet Support
       - key: B2C_ACK_API_KEY
         sync: false
+      # B2C inbox read over IMAP (B2C Settings → Inboxes, provider "imap").
+      - key: IMAP_HOST
+        sync: false
+      - key: IMAP_USER
+        sync: false
+      - key: IMAP_PASS
+        sync: false
+      # Customer registration links for senders who are not yet registered.
+      - key: B2C_REGISTRATION_ENABLED
+        value: 'true'
+      - key: B2C_REGISTRATION_PORTAL_URL
+        sync: false
   # Optional: B2C escalation API and email scheduler as a separate service. Same
   # database; it accepts sign-in tokens from iplanet-backend via the shared JWT_SECRET.
   - type: web
