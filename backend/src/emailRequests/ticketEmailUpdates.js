@@ -16,6 +16,41 @@ const istTime = date => new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolka
 // Only a real Message-ID can thread a reply; stored fallback keys ("imap:...") can't.
 const threadId = messageId => (/^<[^<>\s]+>$/.test(messageId || '') ? messageId : null);
 
+const BREVO_SEND_URL = 'https://api.brevo.com/v3/smtp/email';
+
+// Picks how acknowledgements are sent: Brevo's HTTPS API when B2B_EMAIL_API_KEY is set (for
+// hosts that block outgoing SMTP ports, such as Render's free plan), otherwise SMTP. Returns
+// send({ to, subject, text, inReplyTo }) -> { messageId }, or null when neither is configured.
+export function createEmailSender(config, { fetchImpl = globalThis.fetch } = {}) {
+  return config?.api?.key ? createBrevoSender(config, { fetchImpl }) : createSmtpSender(config);
+}
+
+// Sends through Brevo's transactional email API. The sender (B2B_EMAIL_FROM_ADDRESS, else
+// B2B_EMAIL_USER) must be a verified sender or domain in the Brevo account. When it differs
+// from the inbox, Reply-To points at the inbox so customer replies still come back to it.
+export function createBrevoSender(config, { fetchImpl = globalThis.fetch } = {}) {
+  if (!config?.api?.key || !config.user) return null;
+  const timeoutMs = Number(config.api.timeoutMs) || 20000;
+  return async ({ to, subject, text, inReplyTo }) => {
+    const response = await fetchImpl(BREVO_SEND_URL, {
+      method: 'POST',
+      headers: { 'api-key': config.api.key, 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({
+        sender: { name: config.smtp?.fromName || 'iPlanet Service', email: config.api.fromAddress || config.user },
+        to: [{ email: to }],
+        ...(config.api.fromAddress && config.api.fromAddress !== config.user ? { replyTo: { email: config.user } } : {}),
+        subject,
+        textContent: text,
+        ...(inReplyTo ? { headers: { 'In-Reply-To': inReplyTo, References: inReplyTo } } : {}),
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(`Brevo rejected the email (${response.status}): ${body.message || body.code || response.statusText}`);
+    return { messageId: body.messageId || null };
+  };
+}
+
 // Returns send({ to, subject, text, inReplyTo }) -> { messageId }, or null when SMTP isn't configured.
 export function createSmtpSender(config) {
   if (!config?.smtp?.host || !config.user || !config.pass) return null;
@@ -55,7 +90,7 @@ export function composeTicketEmail({ ticket, entry, device, created, trackingUrl
 }
 
 // trackingUrl(token) -> the public tracking page address.
-export function createTicketEmailUpdates({ models, send, fromAddress, trackingUrl = () => null, now = () => new Date(), logger = console }) {
+export function createTicketEmailUpdates({ models, send, fromAddress, via = 'SMTP', trackingUrl = () => null, now = () => new Date(), logger = console }) {
   const { TicketEmail } = models;
   let processing = null;
 
@@ -112,8 +147,8 @@ export function createTicketEmailUpdates({ models, send, fromAddress, trackingUr
   const scheduler = {
     timer: null,
     start(minutes) {
-      if (!send) { logger.info('[Ticket emails] SMTP not configured (B2B_EMAIL_SMTP_HOST); acknowledgement emails are off.'); return; }
-      logger.info(`[Ticket emails] Sending opening and closing acknowledgements from ${fromAddress}.`);
+      if (!send) { logger.info('[Ticket emails] No email sender configured (B2B_EMAIL_API_KEY or B2B_EMAIL_SMTP_HOST); acknowledgement emails are off.'); return; }
+      logger.info(`[Ticket emails] Sending opening and closing acknowledgements from ${fromAddress} via ${via}.`);
       const run = () => processQueue().catch(error => logger.error(`[Ticket emails] ${error?.message || error}`));
       run();
       this.timer = setInterval(run, Math.max(1, Number(minutes) || 2) * 60000);

@@ -6,7 +6,7 @@ import test, { after, before, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import mongoose from 'mongoose';
 import { TicketEmail } from '../models.js';
-import { composeTicketEmail, createTicketEmailUpdates } from './ticketEmailUpdates.js';
+import { composeTicketEmail, createBrevoSender, createEmailSender, createTicketEmailUpdates } from './ticketEmailUpdates.js';
 
 const ticket = (fields = {}) => ({ _id: new mongoose.Types.ObjectId(), ticketId: 'TKT-1001', category: 'Service', issueType: 'Battery', priority: 'Critical', emailSource: { address: 'karthik@demo.test', name: 'Karthik', messageId: '<m1@demo.test>', subject: 'iPhone battery swelling', trackingToken: 'tok' }, ...fields });
 const entry = (fields = {}) => ({ _id: new mongoose.Types.ObjectId(), status: 'Open', message: 'Created from an email.', timestamp: new Date('2026-10-28T09:30:00Z'), ...fields });
@@ -31,6 +31,53 @@ describe('composing an acknowledgement', () => {
     assert.match(text, /Closing note: Battery replaced and tested\.\nClosed: 28 Oct 2026, 3:00 pm IST/i);
     assert.match(text, /Devices: 40/);
     assert.doesNotMatch(text, /track/i);
+  });
+});
+
+describe('choosing and using an email sender', () => {
+  const config = (fields = {}) => ({ user: 'service@iplanet.test', pass: 'secret', smtp: { host: '', fromName: 'iPlanet Service' }, api: { key: '' }, ...fields });
+  const fakeFetch = (status, body) => {
+    const calls = [];
+    const fetchImpl = async (url, options) => { calls.push({ url, options }); return { ok: status < 300, status, statusText: 'x', json: async () => body }; };
+    return { calls, fetchImpl };
+  };
+
+  test('no API key and no SMTP host means no sender', () => {
+    assert.equal(createEmailSender(config()), null);
+  });
+
+  test('an SMTP host without an API key uses SMTP', () => {
+    assert.equal(typeof createEmailSender(config({ smtp: { host: 'mail.test', port: 465, secure: true } })), 'function');
+  });
+
+  test('an API key sends through Brevo, as a reply in the original thread', async () => {
+    const { calls, fetchImpl } = fakeFetch(201, { messageId: '<brevo-1@smtp-relay>' });
+    const send = createEmailSender(config({ api: { key: 'xkeysib-test' } }), { fetchImpl });
+    const result = await send({ to: 'karthik@demo.test', subject: 'Re: Battery', text: 'Hello', inReplyTo: '<orig@demo.test>' });
+    assert.deepEqual(result, { messageId: '<brevo-1@smtp-relay>' });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, 'https://api.brevo.com/v3/smtp/email');
+    assert.equal(calls[0].options.headers['api-key'], 'xkeysib-test');
+    const body = JSON.parse(calls[0].options.body);
+    assert.deepEqual(body.sender, { name: 'iPlanet Service', email: 'service@iplanet.test' });
+    assert.deepEqual(body.to, [{ email: 'karthik@demo.test' }]);
+    assert.equal(body.textContent, 'Hello');
+    assert.deepEqual(body.headers, { 'In-Reply-To': '<orig@demo.test>', References: '<orig@demo.test>' });
+  });
+
+  test('a separate Brevo sender address replies back to the inbox', async () => {
+    const { calls, fetchImpl } = fakeFetch(201, { messageId: '<brevo-2@smtp-relay>' });
+    const send = createEmailSender(config({ api: { key: 'xkeysib-test', fromAddress: 'tester@gmail.test' } }), { fetchImpl });
+    await send({ to: 'karthik@demo.test', subject: 'Re: Battery', text: 'Hello' });
+    const body = JSON.parse(calls[0].options.body);
+    assert.deepEqual(body.sender, { name: 'iPlanet Service', email: 'tester@gmail.test' });
+    assert.deepEqual(body.replyTo, { email: 'service@iplanet.test' });
+  });
+
+  test('a Brevo error is thrown so the queue retries it', async () => {
+    const { fetchImpl } = fakeFetch(401, { code: 'unauthorized', message: 'Key not found' });
+    const send = createBrevoSender(config({ api: { key: 'bad' } }), { fetchImpl });
+    await assert.rejects(send({ to: 'a@b.test', subject: 's', text: 't' }), /Brevo rejected the email \(401\): Key not found/);
   });
 });
 

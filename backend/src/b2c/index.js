@@ -1,5 +1,6 @@
 import { loadB2CConfig, validateAckConfig, validateImapConfig } from './b2cConfig.js';
 import { createSmtpAckSender } from './connectors/smtpAckSender.js';
+import { createBrevoAckSender } from './connectors/brevoAckSender.js';
 import { b2cModels, ensureB2CIndexes } from './b2cModels.js';
 import { B2C_ADMIN, DEFAULT_LEVELS } from './b2cDefaults.js';
 import { createAttachmentStore } from './attachments.js';
@@ -29,7 +30,7 @@ export function createB2CModule({ User, Notification, EscalationRule, Device, Cu
     customerDirectory: createCustomerDirectory(Customer),
     deviceDirectory: createDeviceDirectory(Device),
     // Acknowledgements from the separate company address (B2C_ACK_*), not the inbox.
-    ackSender: createSmtpAckSender(config.ack),
+    ackSender: config.ack.api?.key ? createBrevoAckSender(config.ack) : createSmtpAckSender(config.ack),
     // The B2B escalation rules (edited on the Escalation Matrix page) apply to B2C too.
     escalationRules: () => (EscalationRule ? EscalationRule.find({ isActive: true }).lean() : Promise.resolve([])),
     emailConnectors: createEmailConnectors({ config }),
@@ -65,7 +66,7 @@ export function reportImapConfig(imap = {}, logger = console) {
 export function reportAckConfig(ack = {}, logger = console) {
   if (!ack.enabled) { logger.info('[B2C] Acknowledgements from a company address are off (B2C_ACK_EMAIL_ENABLED is not true); the inbox connector sends them where it can.'); return { configured: false, missing: [] }; }
   const check = validateAckConfig(ack);
-  if (check.configured) logger.info(`[B2C] Acknowledgements are sent from ${ack.fromEmail} via ${ack.smtp.host}:${ack.smtp.port} (${ack.smtp.secure ? 'SSL/TLS' : 'STARTTLS'}); unmatched senders: ${ack.unmatchedPolicy === 'sender' ? 'acknowledged' : 'not acknowledged'}.`);
+  if (check.configured) logger.info(`[B2C] Acknowledgements are sent from ${ack.fromEmail} via ${ack.api?.key ? 'Brevo (HTTPS API)' : `${ack.smtp.host}:${ack.smtp.port} (${ack.smtp.secure ? 'SSL/TLS' : 'STARTTLS'})`}; unmatched senders: ${ack.unmatchedPolicy === 'sender' ? 'acknowledged' : 'not acknowledged'}.`);
   else logger.warn(`[B2C] Acknowledgements are enabled but not configured: ${check.missing.join(', ')} not set. They will fail until this is fixed.`);
   return check;
 }

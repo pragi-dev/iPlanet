@@ -344,7 +344,8 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
     if (reference) ticket = await B2CEscalation.findOne({ reference });
     const messageIds = [record.inReplyTo, ...(record.references || [])].filter(Boolean);
     if (!ticket && messageIds.length) {
-      const outbound = await B2COutboundEmail.findOne({ messageId: { $in: messageIds } }).select('ticketId').lean();
+      // Our Message-ID, or the one the sending provider reported using (e.g. Brevo).
+      const outbound = await B2COutboundEmail.findOne({ $or: [{ messageId: { $in: messageIds } }, { providerMessageId: { $in: messageIds } }] }).select('ticketId').lean();
       const inbound = outbound ? null : await B2CInboundEmail.findOne({ internetMessageId: { $in: messageIds }, ticketId: { $ne: null } }).select('ticketId').lean();
       const ticketId = outbound?.ticketId || inbound?.ticketId;
       if (ticketId) ticket = await B2CEscalation.findById(ticketId);
@@ -1186,7 +1187,7 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
   async function findThreadRegistration(record) {
     const messageIds = [record.inReplyTo, ...(record.references || [])].filter(Boolean);
     if (!messageIds.length) return null;
-    const outbound = await B2COutboundEmail.findOne({ messageId: { $in: messageIds }, kind: 'registration', ticketId: null }).select('registrationId').lean();
+    const outbound = await B2COutboundEmail.findOne({ $or: [{ messageId: { $in: messageIds } }, { providerMessageId: { $in: messageIds } }], kind: 'registration', ticketId: null }).select('registrationId').lean();
     const original = outbound ? null : await B2CInboundEmail.findOne({ internetMessageId: { $in: messageIds }, ticketId: null }).select('_id').lean();
     const request = outbound ? await B2CRegistrationRequest.findById(outbound.registrationId).lean() : original ? await B2CRegistrationRequest.findOne({ sourceEmailId: original._id }).lean() : null;
     // Only the customer the link was sent to adds to it.

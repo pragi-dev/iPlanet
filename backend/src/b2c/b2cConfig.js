@@ -37,6 +37,12 @@ export function loadAckConfig(env = process.env) {
       pass: env.B2C_ACK_SMTP_PASS || '',
       timeoutMs: positiveInt(env.B2C_ACK_SMTP_TIMEOUT_MS, 20000, 120000),
     },
+    // Optional: send through Brevo's HTTPS API instead of SMTP (used when the key is set),
+    // for hosts that block outgoing SMTP ports.
+    api: {
+      key: String(env.B2C_ACK_API_KEY || '').trim(),
+      timeoutMs: positiveInt(env.B2C_ACK_API_TIMEOUT_MS, 20000, 120000),
+    },
   };
 }
 
@@ -44,6 +50,8 @@ export function loadAckConfig(env = process.env) {
 export function validateAckConfig(ack) {
   const missing = [];
   if (!ack.fromEmail) missing.push('B2C_ACK_FROM_EMAIL');
+  // With a Brevo API key, only the sender address is needed.
+  if (ack.api?.key) return { configured: !missing.length, missing };
   if (!ack.smtp.host) missing.push('B2C_ACK_SMTP_HOST');
   if (!ack.smtp.port) missing.push('B2C_ACK_SMTP_PORT');
   if (!ack.smtp.user) missing.push('B2C_ACK_SMTP_USER');

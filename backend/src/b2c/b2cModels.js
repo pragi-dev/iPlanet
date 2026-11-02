@@ -243,6 +243,8 @@ const outboundSchema = new mongoose.Schema({
 }, { timestamps: true });
 outboundSchema.index({ status: 1, nextAttemptAt: 1 });
 outboundSchema.index({ messageId: 1 }, { sparse: true });
+// Replies may quote the Message-ID the sending provider used (e.g. Brevo) rather than ours.
+outboundSchema.index({ providerMessageId: 1 }, { sparse: true });
 
 // ---- Customer registration requests --------------------------------------------
 // One per incoming email whose sender could not be matched to a registered customer. No

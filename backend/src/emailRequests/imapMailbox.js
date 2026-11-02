@@ -36,6 +36,13 @@ export function emailInboxConfig(environment = emailSettings()) {
       secure: environment.B2B_EMAIL_SMTP_SECURE !== 'false',
       fromName: environment.B2B_EMAIL_FROM_NAME?.trim() || 'iPlanet Service',
     },
+    // Optional: send through Brevo's HTTPS API instead of SMTP (used when the key is set).
+    api: {
+      key: environment.B2B_EMAIL_API_KEY?.trim() || '',
+      // The verified Brevo sender, when it isn't the inbox itself (e.g. while testing).
+      fromAddress: environment.B2B_EMAIL_FROM_ADDRESS?.trim().toLowerCase() || '',
+      timeoutMs: Number(environment.B2B_EMAIL_API_TIMEOUT_MS) || 20000,
+    },
   };
 }
 
