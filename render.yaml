@@ -54,6 +54,18 @@ services:
       # Set to 'true' only after the optional iplanet-b2c service below is created.
       - key: B2C_SEPARATE_SERVER
         value: 'false'
+      # B2B Email Requests inbox (read over IMAP) and ticket acknowledgements. Render's free
+      # plan blocks outgoing SMTP, so set B2B_EMAIL_API_KEY (Brevo) for acknowledgements.
+      - key: B2B_EMAIL_IMAP_HOST
+        sync: false
+      - key: B2B_EMAIL_USER
+        sync: false
+      - key: B2B_EMAIL_PASSWORD
+        sync: false
+      - key: B2B_EMAIL_API_KEY
+        sync: false
+      - key: B2B_EMAIL_SMTP_HOST
+        sync: false
   # Optional: B2C escalation API and email scheduler as a separate service. Same
   # database; it accepts sign-in tokens from iplanet-backend via the shared JWT_SECRET.
   - type: web
