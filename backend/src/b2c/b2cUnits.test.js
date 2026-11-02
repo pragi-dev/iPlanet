@@ -18,6 +18,7 @@ import { createEmailConnectors } from './connectors/emailConnector.js';
 import { createCrmConnector } from './connectors/crmConnector.js';
 import { loadAckConfig, loadB2CConfig, validateAckConfig } from './b2cConfig.js';
 import { createSmtpAckSender } from './connectors/smtpAckSender.js';
+import { createBrevoAckSender } from './connectors/brevoAckSender.js';
 import { reportAckConfig } from './index.js';
 import { computeSlaEscalation, slaTargets } from '../slaEscalation.js';
 
@@ -419,6 +420,47 @@ test('SMTP acknowledgement sender: refuses bad input and classifies failures wit
   await assert.rejects(send(Object.assign(new Error('550 mailbox unavailable'), { code: 'EENVELOPE', responseCode: 550 })), { retryable: false, message: 'The SMTP server refused the message (550).' });
   await assert.rejects(send(Object.assign(new Error('421 try later'), { code: 'EMESSAGE', responseCode: 421 })), { retryable: true, message: 'The SMTP server deferred the message (421).' });
   await assert.rejects(send(Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' })), { retryable: true, message: 'Could not reach the SMTP server (ETIMEDOUT).' });
+});
+
+function fakeBrevo(status = 201, body = { messageId: '<brevo-1@smtp-relay.brevo.com>' }, { throws } = {}) {
+  const calls = [];
+  const fetchImpl = async (url, options) => { calls.push({ url, options, body: JSON.parse(options.body) }); if (throws) throw throws; return { ok: status < 300, status, json: async () => body }; };
+  return { calls, fetchImpl };
+}
+const brevoEnv = { B2C_ACK_EMAIL_ENABLED: 'true', B2C_ACK_FROM_EMAIL: 'noreply@company.test', B2C_ACK_FROM_NAME: 'Company Support', B2C_ACK_API_KEY: 'xkeysib-secret-key' };
+
+test('Brevo acknowledgement sender: only the sender address is needed with an API key', () => {
+  assert.deepEqual(validateAckConfig(loadAckConfig(brevoEnv)), { configured: true, missing: [] }, 'no SMTP settings required');
+  assert.deepEqual(validateAckConfig(loadAckConfig({ ...brevoEnv, B2C_ACK_FROM_EMAIL: '' })).missing, ['B2C_ACK_FROM_EMAIL']);
+  const logged = [];
+  reportAckConfig(loadAckConfig(brevoEnv), { info: line => logged.push(line), warn: line => logged.push(line) });
+  assert.match(logged.join('\n'), /via Brevo \(HTTPS API\)/);
+  assert.ok(!logged.join('\n').includes('secret-key'));
+});
+
+test('Brevo acknowledgement sender: company address, our Message-ID, reply-to and Brevo id recorded', async () => {
+  const { calls, fetchImpl } = fakeBrevo();
+  const sender = createBrevoAckSender(loadAckConfig(brevoEnv), { fetchImpl });
+  assert.deepEqual([sender.provider, sender.describeServer().security], ['brevo', 'HTTPS']);
+  const result = await sender.send({ to: 'customer@example.test', replyTo: 'escalations@company.test', subject: 'Ticket [B2C-2026-000001]\r\nBcc: x@evil.test', text: 'Hello', messageId: '<id-1@sabora.local>' });
+  assert.deepEqual(result, { providerMessageId: '<brevo-1@smtp-relay.brevo.com>', responseCode: 201 });
+  const [{ url, options, body }] = calls;
+  assert.equal(url, 'https://api.brevo.com/v3/smtp/email');
+  assert.equal(options.headers['api-key'], 'xkeysib-secret-key');
+  assert.deepEqual(body.sender, { name: 'Company Support', email: 'noreply@company.test' });
+  assert.deepEqual([body.to, body.replyTo, body.subject, body.textContent], [[{ email: 'customer@example.test' }], { email: 'escalations@company.test' }, 'Ticket [B2C-2026-000001] Bcc: x@evil.test', 'Hello']);
+  assert.deepEqual(body.headers, { 'Auto-Submitted': 'auto-replied', 'X-Auto-Response-Suppress': 'All', 'Message-Id': '<id-1@sabora.local>' });
+});
+
+test('Brevo acknowledgement sender: refuses bad input and classifies failures without leaking the key', async () => {
+  const send = (status, body, extra = {}, to = 'customer@example.test') => createBrevoAckSender(loadAckConfig({ ...brevoEnv, ...extra.env }), fakeBrevo(status, body, extra)).send({ to, subject: 's', text: 't', messageId: '<m@x>' });
+  await assert.rejects(send(201, {}, {}, 'customer@example.test\r\nBcc: x@evil.test'), { retryable: false, message: 'The recipient address is not valid.' });
+  await assert.rejects(send(201, {}, { env: { B2C_ACK_FROM_EMAIL: '' } }), { retryable: false, message: /B2C_ACK_FROM_EMAIL is not set/ });
+  await assert.rejects(send(401, { code: 'unauthorized', message: 'Key not found' }), error => error.retryable === false && /Check B2C_ACK_API_KEY/.test(error.message) && !/secret/.test(error.message));
+  await assert.rejects(send(400, { code: 'invalid_parameter', message: 'sender not valid' }), { retryable: false, message: 'Brevo rejected the message (400): sender not valid.' });
+  await assert.rejects(send(429, { message: 'Too many requests' }), { retryable: true });
+  await assert.rejects(send(503, {}), { retryable: true });
+  await assert.rejects(send(0, {}, { throws: Object.assign(new Error('fetch failed'), { name: 'TypeError' }) }), { retryable: true, message: 'Could not reach Brevo.' });
 });
 
 test('acknowledgement template: ticket number, issue summary, optional serial line and safe fallbacks', () => {

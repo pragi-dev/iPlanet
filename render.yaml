@@ -66,6 +66,16 @@ services:
         sync: false
       - key: B2B_EMAIL_SMTP_HOST
         sync: false
+      # B2C acknowledgements and registration links from the company address. On Render's
+      # free plan set B2C_ACK_API_KEY (Brevo); the SMTP route is blocked there.
+      - key: B2C_ACK_EMAIL_ENABLED
+        value: 'true'
+      - key: B2C_ACK_FROM_EMAIL
+        sync: false
+      - key: B2C_ACK_FROM_NAME
+        value: iPlanet Support
+      - key: B2C_ACK_API_KEY
+        sync: false
   # Optional: B2C escalation API and email scheduler as a separate service. Same
   # database; it accepts sign-in tokens from iplanet-backend via the shared JWT_SECRET.
   - type: web

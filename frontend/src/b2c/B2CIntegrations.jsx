@@ -81,7 +81,7 @@ export function B2CIntegrations() {
             ? <p className="text-muted text-small">Off. Acknowledgements are sent by the ticket's inbox where it can send (not IMAP). Set B2C_ACK_EMAIL_ENABLED=true to send them from a company address.</p>
             : !data.ackSender.configured
               ? <InlineAlert tone="warning" title="Not configured">{data.ackSender.missing.join(', ')} not set on the server. Acknowledgements fail until this is fixed.</InlineAlert>
-              : <p className="text-small">SMTP {data.ackSender.server.host}:{data.ackSender.server.port} ({data.ackSender.server.security}) · {data.ackSender.unmatchedPolicy === 'sender' ? 'unmatched senders are acknowledged too' : 'only matched customers are acknowledged, at their registered address'}</p>}
+              : <p className="text-small">{data.ackSender.server.provider === 'brevo' ? 'Brevo API (HTTPS)' : `SMTP ${data.ackSender.server.host}:${data.ackSender.server.port} (${data.ackSender.server.security})`} · {data.ackSender.unmatchedPolicy === 'sender' ? 'unmatched senders are acknowledged too' : 'only matched customers are acknowledged, at their registered address'}</p>}
           <ConnectorStatus status={data.ackSender.status} />
         </div>
       </Card>}
