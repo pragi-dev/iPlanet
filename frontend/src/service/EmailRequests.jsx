@@ -15,6 +15,17 @@ const priorities = ['Low', 'Medium', 'High', 'Critical'];
 const isOnSite = category => category === 'Health Camp' || category === 'Buyback / E-Waste';
 const FIELDS = ['companyId', 'customerId', 'deviceId', 'category', 'issueType', 'description', 'priority', 'location', 'preferredServiceDate', 'deviceCount'];
 const formFrom = draft => Object.fromEntries(FIELDS.map(field => [field, draft?.[field] == null ? '' : String(draft[field])]));
+// Why an email attachment was not imported (checked as B2C email attachments are).
+const ATTACHMENT_REJECTED = {
+  type_not_allowed: 'only PDF, JPG, PNG, HEIC and TXT files are imported',
+  content_does_not_match_type: 'the file is not the type its name says',
+  too_large: 'larger than 10 MB',
+  empty_file: 'the file is empty',
+  content_unavailable: 'the file could not be read',
+  too_many_attachments: 'only the first 10 files are imported',
+};
+// Why Claude could not read an attached file.
+const ATTACHMENT_NOT_READ = { heic_not_readable: 'HEIC photo', unsupported_type: 'file type not readable', limit: 'over the reading limit', unreadable: 'could not be opened' };
 const sizeLabel = bytes => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 
 function InboxStatus({ status, onChecked }) {
@@ -109,7 +120,11 @@ function ReviewDrawer({ id, onClose, onReviewed }) {
           <section className="stack-16" aria-label="Email">
             <div className="row-between"><h3 className="email-section-title">Email</h3><span className="cell-sub">{request.from?.address}</span></div>
             <pre className="email-body">{request.text || '(no text)'}</pre>
-            {request.attachments.length > 0 && <ul className="email-attachments">{request.attachments.map(item => <li key={item.path}><a className="cell-link" href={mediaUrl(item.path)} target="_blank" rel="noreferrer"><Paperclip size={14} aria-hidden="true" /> {item.filename}</a> <span className="cell-sub">{sizeLabel(item.size)}{/^image\//.test(item.contentType) ? ' · added to the ticket' : ''}</span></li>)}</ul>}
+            {request.attachments.length > 0 && <ul className="email-attachments">{request.attachments.map((item, index) => <li key={item.path || `${item.filename}-${index}`}>
+              {item.status === 'rejected'
+                ? <><span className="text-muted"><Paperclip size={14} aria-hidden="true" /> {item.filename}</span> <span className="cell-sub">Not imported: {ATTACHMENT_REJECTED[item.rejectReason] || 'this file cannot be used'}. Open the email in the mailbox for it.</span></>
+                : <><a className="cell-link" href={mediaUrl(item.path)} target="_blank" rel="noreferrer"><Paperclip size={14} aria-hidden="true" /> {item.filename}</a> <span className="cell-sub">{sizeLabel(item.size)} · {/^image\//.test(item.contentType) ? 'photo' : 'document'} {request.status === 'approved' ? 'added to the ticket' : 'goes to the ticket'}</span></>}
+            </li>)}</ul>}
           </section>
 
           {request.extraction?.source === 'claude' && <section className="email-claude" aria-label="What Claude found">
@@ -120,6 +135,11 @@ function ReviewDrawer({ id, onClose, onReviewed }) {
               {[...(request.extraction.serialNumbers || []), ...(request.extraction.assetIds || [])].length > 0 && <><dt>Devices mentioned</dt><dd className="mono">{[...request.extraction.serialNumbers, ...request.extraction.assetIds].join(', ')}</dd></>}
               {request.extraction.deviceModel && <><dt>Model</dt><dd>{request.extraction.deviceModel}</dd></>}
               {request.extraction.preferredDateText && <><dt>Wants service</dt><dd>“{request.extraction.preferredDateText}”</dd></>}
+              {request.extraction.invoiceNumber && <><dt>Invoice</dt><dd className="mono">{request.extraction.invoiceNumber}</dd></>}
+              {request.extraction.purchaseDateText && <><dt>Purchased</dt><dd>{request.extraction.purchaseDateText}</dd></>}
+              {request.extraction.attachmentNotes && <><dt>From the attachments</dt><dd>{request.extraction.attachmentNotes}</dd></>}
+              {request.extraction.attachmentsRead?.length > 0 && <><dt>Files read</dt><dd>{request.extraction.attachmentsRead.join(', ')}</dd></>}
+              {request.extraction.attachmentsSkipped?.length > 0 && <><dt>Not read</dt><dd>{request.extraction.attachmentsSkipped.map(item => `${item.filename} (${ATTACHMENT_NOT_READ[item.reason] || item.reason})`).join('; ')}</dd></>}
               {request.extraction.missingDetails?.length > 0 && <><dt>Missing</dt><dd>{request.extraction.missingDetails.join(', ')}</dd></>}
             </dl>
           </section>}

@@ -769,3 +769,61 @@ test('tickets created before registration under the earlier flow are reported re
   assert.ok(!JSON.stringify(found).includes('legacy@example.test'), 'no customer details');
   assert.equal(JSON.stringify([await reload(ticket), await B2CRegistrationRequest.findById(legacy._id).lean()]), snapshot, 'nothing changed');
 });
+
+// A registration form with an invoice file, sent as multipart data like the registration page.
+async function submitWithInvoice(linkToken, fields, file) {
+  const body = new FormData();
+  for (const [key, value] of Object.entries(fields)) body.append(key, String(value));
+  body.append('invoice', new Blob([file.content]), file.name);
+  const response = await fetch(`${baseUrl}/api/b2c/public/registration/${linkToken}`, { method: 'POST', body });
+  return { status: response.status, body: await response.json().catch(() => null) };
+}
+async function download(user, url) {
+  const response = await fetch(`${baseUrl}/api/b2c${url}`, { headers: { Authorization: `Bearer ${token(user)}` } });
+  return { status: response.status, headers: response.headers, content: Buffer.from(await response.arrayBuffer()) };
+}
+
+test('an invoice file can be attached: checked, stored with the registration, and downloadable by staff only', { skip }, async () => {
+  await Device.create({ serialNumber: 'REGINV0001', model: 'Model A', location: 'Test Region North' });
+  const sender = 'invoice.customer@example.test';
+  const { inbound } = await deliver({ from: sender, subject: 'Battery repair', body: 'The battery needs repair.' });
+  const linkValue = latestToken(sender);
+  const opened = await publicApi('GET', linkValue);
+  assert.deepEqual(opened.body.invoice, { required: false, maxBytes: config.maxAttachmentBytes, types: ['PDF', 'JPG', 'PNG', 'HEIC'] });
+  const details = form({ name: 'Invoice Customer', email: sender, phone: '+91 91000 00991', serialNumber: 'REGINV0001' });
+  const stored = () => fs.readdirSync(attachmentDir).length;
+  const filesBefore = stored();
+
+  // Refused before anything is saved: contents that do not match the name, and other file types.
+  for (const file of [{ name: 'invoice.pdf', content: Buffer.from('not really a pdf') }, { name: 'invoice.txt', content: Buffer.from('plain text') }, { name: 'invoice.exe', content: Buffer.from('MZ') }]) {
+    const refused = await submitWithInvoice(linkValue, details, file);
+    assert.deepEqual([refused.status, Object.keys(refused.body.fields)], [422, ['invoice']], file.name);
+  }
+  assert.equal(stored(), filesBefore, 'nothing stored for refused files');
+  assert.equal((await requestFor(inbound)).invoice?.storageKey, undefined);
+
+  const pdf = Buffer.from('%PDF-1.4\n% test invoice\n%%EOF\n');
+  const submitted = await submitWithInvoice(linkValue, details, { name: 'My invoice.pdf', content: pdf });
+  assert.deepEqual([submitted.status, submitted.body.state], [200, 'submitted']);
+  const request = await requestFor(inbound);
+  assert.deepEqual([request.status, request.invoice.filename, request.invoice.contentType, request.invoice.size], ['completed', 'My invoice.pdf', 'application/pdf', pdf.length]);
+  assert.equal(stored(), filesBefore + 1);
+  assert.ok(fs.readFileSync(path.join(attachmentDir, request.invoice.storageKey)).equals(pdf));
+
+  // Staff see it on the ticket and download it as a file; the assigned Cluster Manager too.
+  const ticket = await ticketFor(inbound);
+  const detail = await staffApi(users.cmNorth, 'GET', `/tickets/${ticket._id}`);
+  assert.deepEqual(detail.body.registration.invoice, { key: request.invoice.storageKey, filename: 'My invoice.pdf', contentType: 'application/pdf', size: pdf.length });
+  const fromTicket = await download(users.cmNorth, `/tickets/${ticket._id}/attachments/${request.invoice.storageKey}`);
+  assert.equal(fromTicket.status, 200);
+  assert.ok(fromTicket.content.equals(pdf));
+  assert.match(fromTicket.headers.get('content-disposition'), /^attachment;/);
+  assert.equal((await download(users.cmWest, `/tickets/${ticket._id}/attachments/${request.invoice.storageKey}`)).status, 404, 'not visible to another region');
+
+  // Admins also download it from the registration request; level staff cannot.
+  const registration = await staffApi(users.admin, 'GET', `/registrations/${request._id}`);
+  assert.equal(registration.body.invoice.filename, 'My invoice.pdf');
+  assert.ok((await download(users.admin, `/registrations/${request._id}/invoice/${request.invoice.storageKey}`)).content.equals(pdf));
+  assert.equal((await download(users.cmNorth, `/registrations/${request._id}/invoice/${request.invoice.storageKey}`)).status, 403);
+  assert.equal((await download(users.admin, `/registrations/${request._id}/invoice/${'0'.repeat(32)}`)).status, 404);
+});

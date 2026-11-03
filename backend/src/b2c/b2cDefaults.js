@@ -4,17 +4,22 @@
 // proposed hierarchy as configurable data. Classification keywords start empty.
 export const CATEGORIES = ['Service', 'Retail'];
 export const UNCLASSIFIED = 'Unclassified';
+// A Service case is an Enquiry (answered and closed by the B2C Admin) or an Escalation (sent to
+// the region's Cluster Manager). Enquiry keywords decide; anything else is an Escalation.
+export const CASE_TYPES = ['Enquiry', 'Escalation'];
+export const DEFAULT_ENQUIRY_KEYWORDS = ['enquiry', 'inquiry', 'price', 'pricing', 'cost of', 'quotation', 'availability', 'in stock', 'how to', 'how do i', 'information about', 'details about', 'offer', 'EMI'];
 // B2C has no priority levels. Every ticket uses this B2B priority's SLA targets (resolution within 24 hours).
 export const STANDARD_PRIORITY = 'Medium';
 export const B2C_ADMIN = 'b2c_admin';
 
+// The flow is Cluster Manager → Service Executive: the region's Cluster Manager receives
+// the ticket and assigns it to a Service Executive, who does the work.
 export const DEFAULT_LEVELS = [
   { key: 'cluster_manager', label: 'Cluster Manager' },
-  { key: 'rbh', label: 'Regional Business Head' },
-  { key: 'trainer', label: 'Trainer' },
-  { key: 'cd_team_am', label: 'CD Team Assistant Manager' },
-  { key: 'service_excellence_lead', label: 'Service Excellence Lead' },
+  { key: 'service_excellence_lead', label: 'Service Executive' },
 ];
+// Levels of the earlier five-level hierarchy, removed from settings, tickets and staff on startup.
+export const REMOVED_LEVEL_KEYS = ['rbh', 'trainer', 'cd_team_am'];
 export const LEVEL_KEYS = DEFAULT_LEVELS.map(level => level.key);
 export const B2C_ROLES = [B2C_ADMIN, ...LEVEL_KEYS];
 
@@ -25,7 +30,7 @@ export const DEFAULT_IDENTIFIER_RULES = [
   { key: 'serial-labelled', type: 'serialNumber', label: 'Serial number written after a "Serial No / S/N" label', pattern: '\\b(?:serial\\s*(?:no\\.?|number|#)?|s\\/n)\\s*[:#-]?\\s*([A-Z0-9]{8,14})\\b', flags: 'i', enabled: true, confirmed: false },
 ];
 
-export const TEMPLATE_KEYS = ['acknowledgement', 'clarification', 'final_resolution', 'registration_request'];
+export const TEMPLATE_KEYS = ['acknowledgement', 'clarification', 'final_resolution', 'registration_request', 'retail_transfer'];
 export const DEFAULT_TEMPLATES = [
   // The ticket number is in [brackets] in the subject so replies thread to the ticket.
   // The serial number line is left out when no verified serial number is known.
@@ -35,6 +40,9 @@ export const DEFAULT_TEMPLATES = [
   // Sent when the sender cannot be matched to a registered customer. The link carries a
   // single-use token issued as the email is sent; it is never stored with the message.
   { key: 'registration_request', label: 'Customer registration request (sent automatically)', subject: 'Customer Registration Required – Complete Your Details', body: 'Dear Customer,\n\nThank you for contacting our support team.\n\nWe could not confidently match your customer and device details with our existing records. To help us process your support request, please complete the customer and mobile purchase registration form using the secure link below.\n\nComplete your registration: {{registrationLink}}\n\nThe link can be used once and expires on {{linkExpiry}}.\n\nPlease provide accurate customer and purchase information so that we can identify your registered device and direct your request to the appropriate regional support team.\n\nAfter you submit the form, our system will validate your information and continue processing your support request.\n\nIf you believe your details are already registered, please contact our support team rather than submitting duplicate information.\n\nRegards,\n{{companyName}} Support Team', approved: false },
+  // To the retail team from the Retail matrix, not to the customer: an internal hand-over, so it
+  // starts approved (a B2C admin can still edit it).
+  { key: 'retail_transfer', label: 'Retail case transfer (to the retail team)', subject: 'Retail case transferred: {{issueSummary}}', body: 'Hello {{retailTeam}},\n\nA customer case has been transferred to you for closure as per the Retail process.\n\nReference: {{reference}}\nCustomer: {{customerName}} ({{customerEmail}})\nRegion: {{region}}\nSubject: {{subject}}\n\nNote from the B2C desk:\n{{message}}\n\nThe customer wrote:\n{{emailText}}\n\nRegards,\n{{companyName}} B2C Escalations', approved: true },
 ];
 
 export function defaultSettings({ testInboxAddress }) {
@@ -48,9 +56,13 @@ export function defaultSettings({ testInboxAddress }) {
       { category: 'Retail', keywords: [], enabled: true },
     ],
     workflowLevels: DEFAULT_LEVELS.map((level, index) => ({ ...level, order: index + 1, enabled: true })),
-    // 'next_level': the next level on the ticket's path validates (B2C admin at the top).
+    // 'executive_direct': the Service Executive's repair needs no approval; a repair the Cluster
+    // Manager did is approved by a B2C admin.
     // 'level': one configured level validates. 'none': resolutions are not validated.
-    validation: { mode: 'next_level', levelKey: null },
+    validation: { mode: 'executive_direct', levelKey: null },
+    caseTypeRules: { enquiryKeywords: DEFAULT_ENQUIRY_KEYWORDS, enabled: true },
+    // Retail teams Retail cases are transferred to: { key, region, name, email, enabled }.
+    retailMatrix: [],
     templates: DEFAULT_TEMPLATES,
   };
 }

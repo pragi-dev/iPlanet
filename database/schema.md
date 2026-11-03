@@ -372,7 +372,7 @@ A single document with `key: "default"`.
 | identifierRules | [subdoc] | `{ key, type: IDENTIFIER_TYPES, label, pattern, flags (default 'i'), enabled, confirmed }` |
 | classificationRules | [subdoc] | `{ category: CATEGORIES, keywords: [String], enabled }` |
 | workflowLevels | [subdoc] | `{ key, label, order, enabled }` |
-| validation | subdoc | `{ mode: 'next_level' \| 'level' \| 'none' (default 'next_level'), levelKey (default null) }` |
+| validation | subdoc | `{ mode: 'previous_level' \| 'level' \| 'none' (default 'previous_level'), levelKey (default null) }` |
 | templates | [subdoc] | `{ key: TEMPLATE_KEYS, label, subject, body, approved, approvedBy, approvedAt }` |
 | updatedBy | String | |
 

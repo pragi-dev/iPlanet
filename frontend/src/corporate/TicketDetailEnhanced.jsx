@@ -4,7 +4,7 @@ import { ChevronLeft, FilePlus2, Sparkles, Star } from 'lucide-react';
 import { Shell } from './components';
 import { getTicket, mediaUrl } from './api';
 import {
-  ActivityTimeline, Avatar, Badge, Button, CoverageTiles, DeviceIcon, ErrorState, Evidence, InfoList, Lightbox, NextAction, PageHeader, PageSkeleton, SLAPanel, Section, ServiceJourney, Surface,
+  ActivityTimeline, Avatar, Badge, Button, CoverageTiles, DeviceIcon, ErrorState, Evidence, TicketAttachments, InfoList, Lightbox, NextAction, PageHeader, PageSkeleton, SLAPanel, Section, ServiceJourney, Surface,
   formatDate, formatDateTime, formatRelative, formatTat, friendlyError, riskLabel, riskTone, slaBadgeText, slaLabel, slaRisk, statusTone, useAIAssistant, useAsync,
 } from '../ui';
 
@@ -100,7 +100,7 @@ export function TicketDetailEnhanced() {
               <CoverageTiles device={device} />
             </div>
           </Section>
-          <Section stacked title="Evidence" description="Original photos and damage markings"><Evidence ticket={ticket} resolve={mediaUrl} onOpen={setSelectedImage} /></Section>
+          <Section stacked title="Evidence" description="Original photos, damage markings and attached files"><Evidence ticket={ticket} resolve={mediaUrl} onOpen={setSelectedImage} /><TicketAttachments ticket={ticket} resolve={mediaUrl} /></Section>
           <Section stacked title="Timeline" description="Every update on this request, newest first"><ActivityTimeline events={timeline} limit={6} /></Section>
         </Surface>
       </div>

@@ -96,7 +96,16 @@ and a new link is sent only to the original address, within the resend limits.
 | | Brand, model | no |
 | Purchase | Purchase date, store or city of purchase | yes |
 | | Purchase region (only the regions on the device records), dealer, invoice number | no |
+| | Invoice file: one PDF, JPG, PNG or HEIC, up to `B2C_MAX_ATTACHMENT_MB` (10 MB) | no |
 | | Confirmation that the details are accurate | yes |
+
+**Invoice file.** With a file the form is sent as `multipart/form-data` (file field `invoice`);
+without one, as JSON as before. The file is held in memory only until it is checked like an email
+attachment: an allowed type, contents that match it (a renamed file is refused) and the size limit.
+A refused file is a field error (`fields.invoice`) and counts as a rejected submission; nothing is
+stored. An accepted file is stored in the attachment store (`B2C_ATTACHMENT_DIR`) under a random
+key, with its name, type, size and SHA-256 on the request (`invoice`). It is removed again if the
+submission cannot be saved. The invoice does not change verification.
 
 All validation is repeated on the server (`registration.js`). Each rejected submission is counted;
 after `B2C_REGISTRATION_MAX_SUBMIT_ATTEMPTS` the link is withdrawn for manual review. The public
@@ -169,6 +178,11 @@ submitted. Actions:
 The dashboard shows *Awaiting registration* and *Registrations to decide* to admins. On a ticket,
 the **Customer registration** panel shows the request and whether the ticket was created after
 registration or by an admin.
+
+The invoice file, when attached, appears as a download on the request (B2C admins,
+`GET /api/b2c/registrations/:id/invoice/:key`) and in the ticket's **Customer registration** panel
+for everyone who can see the ticket (`GET /api/b2c/tickets/:id/attachments/:key`). It always
+downloads as a file and is never opened in the browser; each download is recorded in the history.
 
 ## Tickets created before this change
 

@@ -8,6 +8,23 @@ import { indiaToday } from '../ai/serviceDate.js';
 import { isOnSiteRequest, ticketRequestCheck } from '../ticketRequests.js';
 import { PRIORITIES } from './emailExtractor.js';
 import { buildDraft } from './emailRequestMatching.js';
+import { inspectAttachment, sanitiseFilename } from '../b2c/attachments.js';
+
+// The same limits as B2C email attachments (B2C_MAX_ATTACHMENT_MB, B2C_MAX_ATTACHMENTS defaults).
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_ATTACHMENTS = 10;
+
+// Every attachment kept from the email goes with the ticket created from it: photos as its
+// images, other files (an invoice PDF, a text note) as its attachments. Files that could not
+// be kept stay listed on the email request only.
+export function ticketFilesFromEmail(attachments = []) {
+  const kept = attachments.filter(item => item.path && (item.status || 'stored') === 'stored');
+  const isImage = item => /^image\//.test(item.contentType || '');
+  return {
+    images: kept.filter(isImage).map(item => item.path),
+    attachments: kept.filter(item => !isImage(item)).map(({ filename, contentType, size, path: filePath }) => ({ filename, contentType, size, path: filePath })),
+  };
+}
 
 // B2B service requests received by email. The inbox is checked on a schedule (and on
 // demand); Claude prepares a draft from each new message, and an iPlanet Service user
@@ -50,7 +67,8 @@ const listItem = request => ({
 const detail = request => ({
   ...listItem(request),
   text: request.text,
-  attachments: (request.attachments || []).map(({ filename, contentType, size, path: filePath }) => ({ filename, contentType, size, path: filePath })),
+  // Requests stored before attachments were checked have no status: they were all kept.
+  attachments: (request.attachments || []).map(({ filename, contentType, size, path: filePath, status, rejectReason }) => ({ filename, contentType, size, path: filePath || null, status: status || 'stored', rejectReason: rejectReason || null })),
   extraction: request.extraction,
   draft: {
     ...Object.fromEntries(DRAFT_FIELDS.map(field => [field, request.draft?.[field] ?? null])),
@@ -98,32 +116,49 @@ export function createEmailRequestModule({ models, auth, allowRoles, mailbox, ex
   const serviceAuth = [auth, allowRoles('iplanet_service')];
   const state = { running: null, lastCheckedAt: null, lastError: null, lastReceived: 0 };
 
+  // Email attachments are untrusted. Each is checked as B2C email attachments are (an allowed
+  // document or image type, contents that match it, a size limit) and stored under a random
+  // name. A file that cannot be kept is recorded with the reason, so the reviewer knows to open
+  // the email in the mailbox for it.
   async function saveAttachments(attachments = []) {
     const saved = [];
-    for (const item of attachments) {
-      const name = `email-${crypto.randomBytes(16).toString('hex')}${safeExtension(item.filename, item.contentType)}`;
+    for (const [index, item] of attachments.entries()) {
+      const filename = sanitiseFilename(item.filename).slice(-200);
+      if (index >= MAX_ATTACHMENTS) { saved.push({ filename, size: Number(item.size) || 0, status: 'rejected', rejectReason: 'too_many_attachments' }); continue; }
+      const inspected = inspectAttachment({ filename, content: item.content, size: item.size }, { maxBytes: MAX_ATTACHMENT_BYTES });
+      if (!inspected.ok) { saved.push({ filename, size: inspected.size, status: 'rejected', rejectReason: inspected.rejectReason }); continue; }
+      const name = `email-${crypto.randomBytes(16).toString('hex')}${safeExtension(inspected.filename, inspected.contentType)}`;
       await fs.writeFile(path.join(uploadDir, name), item.content);
-      saved.push({ filename: String(item.filename).slice(0, 200), contentType: item.contentType, size: item.size, path: `/uploads/${name}` });
+      saved.push({ filename: inspected.filename, contentType: inspected.contentType, size: inspected.size, path: `/uploads/${name}`, status: 'stored' });
     }
     return saved;
   }
 
   async function storeMessage(message) {
     if (await EmailRequest.exists({ messageId: message.messageId })) return null;
+    // Files are checked and stored first; Claude then reads the email together with the ones kept.
+    const attachments = await saveAttachments(message.attachments);
+    // saveAttachments returns one entry per file, in order; the checked type is the reliable one.
+    const kept = message.attachments
+      .map((item, index) => ({ content: item.content, saved: attachments[index] }))
+      .filter(({ saved }) => saved?.status === 'stored')
+      .map(({ content, saved }) => ({ filename: saved.filename, contentType: saved.contentType, content }));
     let extraction = { source: 'none' };
     let details = null;
     if (!extract) extraction.error = 'Claude is not configured (ANTHROPIC_API_KEY), so the details were not read automatically.';
     else {
       try {
-        details = await extract({ from: message.from, subject: message.subject, text: message.text, attachmentNames: message.attachments.map(item => item.filename), today: indiaToday(now()) });
-        extraction = { source: 'claude', isServiceRequest: details.isServiceRequest, summary: details.summary, serialNumbers: details.serialNumbers, assetIds: details.assetIds, deviceModel: details.deviceModel, contactName: details.contactName, contactPhone: details.contactPhone, preferredDateText: details.preferredDateText, missingDetails: details.missingDetails };
+        details = await extract({ from: message.from, subject: message.subject, text: message.text, attachmentNames: message.attachments.map(item => item.filename), attachments: kept, today: indiaToday(now()) });
+        extraction = {
+          source: 'claude', isServiceRequest: details.isServiceRequest, summary: details.summary, serialNumbers: details.serialNumbers, assetIds: details.assetIds, deviceModel: details.deviceModel, contactName: details.contactName, contactPhone: details.contactPhone, preferredDateText: details.preferredDateText, missingDetails: details.missingDetails,
+          invoiceNumber: details.invoiceNumber, purchaseDateText: details.purchaseDateText, attachmentNotes: details.attachmentNotes, attachmentsRead: details.attachmentsRead || [], attachmentsSkipped: details.attachmentsSkipped || [],
+        };
       } catch (error) {
         logger.warn(`[Email requests] Claude could not read a message: ${error?.message || error}`);
         extraction.error = 'Claude could not read this email. Fill in the details from the message.';
       }
     }
     const { draft, matchNotes } = await buildDraft({ models, from: message.from, extraction: details, now: now() });
-    const attachments = await saveAttachments(message.attachments);
     try {
       return await EmailRequest.create({ messageId: message.messageId, inReplyTo: message.inReplyTo, from: message.from, subject: message.subject, text: message.text.slice(0, 50000), receivedAt: message.receivedAt, attachments, extraction, draft, matchNotes });
     } catch (error) {

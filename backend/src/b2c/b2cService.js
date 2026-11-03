@@ -1,17 +1,18 @@
 import crypto from 'node:crypto';
 import mongoose from 'mongoose';
-import { B2C_ADMIN, B2C_ROLES, CATEGORIES, DEFAULT_TEMPLATES, IDENTIFIER_TYPES, STANDARD_PRIORITY, UNCLASSIFIED, defaultSettings } from './b2cDefaults.js';
+import { B2C_ADMIN, B2C_ROLES, CATEGORIES, DEFAULT_ENQUIRY_KEYWORDS, DEFAULT_TEMPLATES, IDENTIFIER_TYPES, STANDARD_PRIORITY, UNCLASSIFIED, defaultSettings } from './b2cDefaults.js';
 import { normaliseInboundEmail, ticketReferenceIn } from './emailContent.js';
 import { extractIdentifiers } from './identifiers.js';
-import { classifyEscalation } from './classifier.js';
-import { storeAttachments } from './attachments.js';
+import { classifyCaseType, classifyEscalation } from './classifier.js';
+import { inspectAttachment, storeAttachments } from './attachments.js';
+import { coverageReport, withCoverage } from '../coverage.js';
 import { renderTemplate, templateVars } from './templates.js';
 import { maskEmail, redactDetails, safeErrorMessage } from './redact.js';
 import { ConnectorError } from './connectors/connectorErrors.js';
 import { validateSettingsUpdate } from './settingsValidation.js';
 import { computeSlaEscalation, slaTargets } from '../slaEscalation.js';
 import { regionKey, serialFromIdentifiers } from './deviceRegion.js';
-import { assessCustomerRegion, extractContacts, matchCustomer, normalisePhone, serialForLookup } from './customerMatch.js';
+import { assessCustomerRegion, extractContacts, matchCustomer, normaliseName, normalisePhone, serialForLookup } from './customerMatch.js';
 import { REGISTRATION_FIELDS, hashRegistrationToken, isRegistrationToken, newRegistrationToken, resolveRegistration, validateRegistration } from './registration.js';
 import { OPEN_REGISTRATION, REGISTRATION_STATUSES } from './b2cModels.js';
 import {
@@ -46,9 +47,9 @@ const SYSTEM = { userId: null, name: 'System', role: 'system' };
 // (digits from normalisePhone) and findBySerial → Customer records. Names are compared
 // with the records these return, never searched. create(record) adds the purchase record of
 // a customer who completed registration.
-const NO_DEVICES = { findBySerial: async () => [], regions: async () => [] };
+const NO_DEVICES = { findBySerial: async () => [], regions: async () => [], coverage: async () => [], coverageBySerial: async () => null };
 const NO_CUSTOMERS = { findByEmail: async () => [], findByPhone: async () => [], findBySerial: async () => [], create: async () => { throw new Error('No customer directory is configured.'); } };
-export function createB2CService({ models, User, notifyUsers = async () => {}, escalationRules = async () => [], deviceDirectory = NO_DEVICES, customerDirectory = NO_CUSTOMERS, ackSender = null, emailConnectors, crmConnector, attachmentStore, config, logger = console, now = () => new Date() }) {
+export function createB2CService({ models, User, notifyUsers = async () => {}, escalationRules = async () => [], deviceDirectory = NO_DEVICES, customerDirectory = NO_CUSTOMERS, ackSender = null, emailConnectors, crmConnector, attachmentStore, attachmentReader = null, config, logger = console, now = () => new Date() }) {
   const { B2CSettings, B2CInboundEmail, B2CEscalation, B2CAuditEvent, B2COutboundEmail, B2CIntegrationStatus, B2CCounter, B2CRegistrationRequest } = models;
   const registrationConfig = config.registration || { enabled: false };
   const scheduler = { running: false, lastRunAt: null, lastResult: null, lastError: null };
@@ -59,6 +60,12 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
     // Templates added in a later release join existing settings, unapproved.
     const missing = settings ? DEFAULT_TEMPLATES.filter(template => !settings.templates.some(item => item.key === template.key)) : [];
     for (const template of missing) await B2CSettings.updateOne({ key: 'default', 'templates.key': { $ne: template.key } }, { $push: { templates: template } });
+    // Sections added in a later release start with their defaults: the enquiry keywords and an
+    // empty Retail matrix.
+    if (settings && (!settings.caseTypeRules || !settings.retailMatrix)) {
+      await B2CSettings.updateOne({ key: 'default' }, { $set: { ...(!settings.caseTypeRules ? { caseTypeRules: { enquiryKeywords: DEFAULT_ENQUIRY_KEYWORDS, enabled: true } } : {}), ...(!settings.retailMatrix ? { retailMatrix: [] } : {}) } });
+      missing.push('sections');
+    }
     if (missing.length) settings = await B2CSettings.findOne({ key: 'default' }).lean();
     if (settings) return settings;
     try { await B2CSettings.create(defaultSettings(config)); } catch (error) { if (error?.code !== 11000) throw error; }
@@ -90,6 +97,11 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
       if (classification.category !== UNCLASSIFIED) {
         ticket.category = classification.category;
         ticket.classification = { source: classification.source, matched: classification.matched, note: classification.reason };
+        // Now a Service case: Enquiry or Escalation, by the same keywords as a new ticket.
+        if (ticket.category === 'Service' && !ticket.caseType) {
+          const caseType = classifyCaseType({ subject: record.subject, body: record.bodyText }, settings.caseTypeRules);
+          Object.assign(ticket, { caseType: caseType.caseType, caseTypeSource: caseType.source, caseTypeMatched: caseType.matched });
+        }
         await ticket.save();
         await audit(ticket, 'category_identified', { details: { category: ticket.category, classifiedBy: classification.source } });
       }
@@ -331,11 +343,50 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
       await B2CRegistrationRequest.updateOne({ _id: waiting._id }, { $addToSet: { relatedEmailIds: record._id } });
       return finish('processed', 'appended_to_registration');
     }
+    // The attachments are read before deciding: a serial number on the invoice can identify the
+    // device, and the buyer's details the customer.
+    await readEmailAttachments(record);
     // A sender who must register first gets a registration request, not a ticket.
     const held = await holdForRegistration(record, settings);
     if (held) return finish('processed', held.outcome, held.ticketId);
     const ticket = await createTicketFromEmail(record, settings);
     return finish('processed', 'ticket_created', ticket._id);
+  }
+
+  // ---- Attachments read by Claude -------------------------------------------------------
+  // Once per email: the stored PDFs, photos and text files go to Claude (attachmentReading.js),
+  // and what it finds is kept on the email. A failure is recorded and never stops the ticket:
+  // the email is then handled from its text alone, as before.
+  async function readEmailAttachments(record) {
+    if (record.attachmentReading?.status) return record.attachmentReading;
+    const stored = (record.attachments || []).filter(item => item.status === 'stored' && item.storageKey);
+    if (!stored.length) return null;
+    let reading;
+    if (!attachmentReader) reading = { status: 'not_configured' };
+    else {
+      try {
+        const files = [];
+        for (const item of stored) files.push({ filename: item.filename, contentType: item.contentType, content: await attachmentStore.read(item.storageKey) });
+        reading = await attachmentReader({ files, subject: record.subject });
+      } catch (error) {
+        logger.warn(`[B2C] Reading the attachments of an email failed: ${safeErrorMessage(error)}`);
+        reading = { status: 'failed', error: safeErrorMessage(error).slice(0, 300) };
+      }
+    }
+    record.attachmentReading = { ...reading, readAt: now() };
+    await B2CInboundEmail.updateOne({ _id: record._id }, { $set: { attachmentReading: record.attachmentReading } });
+    return record.attachmentReading;
+  }
+  // The email's identifiers: those in its subject and text, plus serial numbers read from its
+  // attachments (source 'attachment') that the text does not already give.
+  function emailIdentifiers(record, settings) {
+    const identifiers = extractIdentifiers({ subject: record.subject, body: record.bodyText }, settings.identifierRules);
+    const known = new Set(identifiers.filter(item => item.type === 'serialNumber').map(item => item.value.toUpperCase()));
+    for (const serial of record.attachmentReading?.serialNumbers || []) {
+      if (!known.has(serial.toUpperCase())) identifiers.push({ type: 'serialNumber', value: serial.toUpperCase(), ruleKey: 'attachment', source: 'attachment' });
+      known.add(serial.toUpperCase());
+    }
+    return identifiers;
   }
 
   async function findThreadTicket(record) {
@@ -374,13 +425,16 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
     let ticket = await B2CEscalation.findOne({ sourceEmailId: record._id });
     if (!ticket) {
       const inbox = settings.inboxes.find(item => item.key === record.inboxKey) || { key: record.inboxKey, address: record.inboxAddress };
-      const identifiers = extractIdentifiers({ subject: record.subject, body: record.bodyText }, settings.identifierRules);
+      const identifiers = emailIdentifiers(record, settings);
       const classification = classifyEscalation({ inbox, subject: record.subject, body: record.bodyText }, settings.classificationRules);
+      // Enquiry or Escalation, for a Service case (decided again if triage makes it Service).
+      const caseType = classification.category === 'Service' ? classifyCaseType({ subject: record.subject, body: record.bodyText }, settings.caseTypeRules) : null;
       try {
         ticket = await B2CEscalation.create({
           reference: await nextReference(), sourceEmailId: record._id, inboxKey: inbox.key, inboxAddress: inbox.address,
           subject: record.subject, summary: String(record.bodyText || '').slice(0, 500),
           category: classification.category, classification: { source: classification.source, matched: classification.matched, note: classification.reason },
+          caseType: caseType?.caseType || null, caseTypeSource: caseType?.source || null, caseTypeMatched: caseType?.matched || [],
           // The region comes only from the matched customer's registered device (or triage),
           // never from the inbox, the customer's address or an unverified serial number.
           identifiers, customer: { email: record.from.address, name: record.from.name || '' }, customerMatch: { status: 'pending' }, region: '', regionAssignment: { status: 'pending' },
@@ -431,6 +485,10 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
   // `fallback` the ticket's customer when the email record is gone.
   async function matchEmail({ source, identifiers, settings, fallback = {} }) {
     const contacts = extractContacts({ from: source?.from?.address || fallback.email, fromName: source?.from?.name ?? fallback.name, subject: source?.subject, body: source?.bodyText, ignore: settings.inboxes.map(inbox => inbox.address) });
+    // The buyer on an attached invoice counts like a name or number written in the email.
+    const fromFiles = source?.attachmentReading || {};
+    if (normaliseName(fromFiles.customerName).length >= 2) contacts.names = [...new Set([...contacts.names, normaliseName(fromFiles.customerName)])];
+    if (normalisePhone(fromFiles.customerPhone)) contacts.phones = [...new Set([...contacts.phones, normalisePhone(fromFiles.customerPhone)])];
     const emails = [contacts.senderEmail, ...contacts.emails].filter(Boolean);
     const candidates = [];
     for (const email of emails) candidates.push(...await customerDirectory.findByEmail(email));
@@ -451,7 +509,7 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
     // Copied: a Mongoose nested path reads through to the current values.
     const { status, region, reason } = ticket.regionAssignment || {};
     const previousMatch = ticket.customerMatch?.status;
-    const source = record || await B2CInboundEmail.findById(ticket.sourceEmailId).select('from subject bodyText').lean();
+    const source = record || await B2CInboundEmail.findById(ticket.sourceEmailId).select('from subject bodyText attachmentReading').lean();
     const { match, assessment } = await matchEmail({ source, identifiers: ticket.identifiers, settings, fallback: ticket.customer || {} });
 
     ticket.customerMatch = { status: match.status, method: match.method, matchedBy: match.matchedBy, customerIds: match.records.map(item => item.customerId).filter(Number.isInteger), name: match.records[0]?.name, email: match.records[0]?.email, evaluatedAt: now() };
@@ -545,12 +603,17 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
     return reasons;
   }
 
+  // Cases the B2C Admin handles instead of the Cluster Manager: a Retail case is transferred to
+  // the retail team (Retail matrix), a Service Enquiry is answered and closed.
+  const adminCaseReasons = ticket => (ticket.category === 'Retail' ? ['retail_transfer'] : ticket.category === 'Service' && ticket.caseType === 'Enquiry' ? ['enquiry_answer'] : []);
+
   async function evaluateTriage(ticket, settings) {
     const found = triageReasons(ticket);
     // Routing needs only the category and the region. Once both are known the ticket
     // completes triage by itself; CRM findings and identifier gaps are recorded, not blocking.
+    // Retail cases and Enquiries always wait for the B2C Admin.
     const ready = ticket.category !== UNCLASSIFIED && Boolean(ticket.region);
-    const reasons = ready ? [] : found;
+    const reasons = [...(ready ? [] : found), ...adminCaseReasons(ticket)];
     // A known region that nobody holds the first level for is a configuration gap: it is
     // flagged for an admin instead of being left in a queue nobody watches.
     const firstLevel = defaultPath(settings)[0];
@@ -560,7 +623,8 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
       ticket.triage = { reasons };
       await ticket.save();
       if (changed) {
-        const alerted = await notify(await admins(), ticket, 'Escalation needs triage', `${ticket.reference} needs review before it can be routed (${reasons.map(reason => reason.replace(/_/g, ' ')).join(', ')}).`);
+        const title = reasons.includes('enquiry_answer') ? 'Enquiry to answer' : reasons.includes('retail_transfer') ? 'Retail case to transfer' : 'Escalation needs triage';
+        const alerted = await notify(await admins(), ticket, title, `${ticket.reference} needs review before it can be routed (${reasons.map(reason => reason.replace(/_/g, ' ')).join(', ')}).`);
         await audit(ticket, 'queued_for_triage', { details: { reasons }, alerted });
       }
       return false;
@@ -582,6 +646,7 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
     const fromStatus = ticket.status;
     const assignee = chosen || await autoAssignee(path[0], ticket);
     ticket.workflow = { path, currentLevel: path[0], assignee, assignedAt: assignee ? now() : null };
+    startAssignReminder(ticket, path);
     ticket.status = statusForAssignment(assignee);
     ticket.triage = { reasons: [], resolvedAt: now(), resolvedBy: actor.name };
     if (assignee) addParticipant(ticket, assignee.userId);
@@ -592,6 +657,93 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
     const assignment = chosen ? 'manual' : assignee ? 'automatic' : 'queue';
     await audit(ticket, 'routed', { actor, fromStatus, toStatus: ticket.status, details: { level: levelLabel(settings, path[0]), assignee: assignee?.name || null, assignment, path: path.map(key => levelLabel(settings, key)), region: ticket.region || null, regionSource: ticket.regionAssignment?.source || null }, alerted });
     if (assignee) await queueAcknowledgement(ticket, { onAssignment: true });
+  }
+
+  // ---- Assignment reminder ------------------------------------------------------------
+  // A ticket that reaches the first level (the Cluster Manager) must be handed to a Service
+  // Executive within B2C_ASSIGN_REMINDER_HOURS (3). If it is still at the first level then,
+  // the Cluster Manager (or, while nobody owns it, every Cluster Manager of the region) gets a
+  // second notification, once. Handing it on, rerouting it or closing it cancels the reminder.
+  const REMINDER = { userId: null, name: 'Assignment reminder', role: 'system' };
+  const REMINDABLE = [STATUS.OPEN, STATUS.ASSIGNED, STATUS.ACCEPTED, STATUS.INVESTIGATING, STATUS.AWAITING_CUSTOMER, STATUS.REOPENED];
+  function startAssignReminder(ticket, path) {
+    const atFirstLevel = path.length > 1 && ticket.workflow?.currentLevel === path[0];
+    ticket.assignReminderAt = atFirstLevel && config.assignReminderHours ? new Date(now().getTime() + config.assignReminderHours * 3_600_000) : null;
+    ticket.assignReminderSentAt = null;
+  }
+  async function sendAssignmentReminders() {
+    if (!config.assignReminderHours) return [];
+    const settings = await getSettings();
+    const due = await B2CEscalation.find({ assignReminderAt: { $ne: null, $lte: now() } }).sort({ assignReminderAt: 1 }).limit(50);
+    const reminded = [];
+    for (const ticket of due) {
+      const path = effectivePath(ticket, settings);
+      const waiting = REMINDABLE.includes(ticket.status) && path.length > 1 && ticket.workflow?.currentLevel === path[0];
+      ticket.assignReminderAt = null;
+      if (waiting) ticket.assignReminderSentAt = now();
+      try { await ticket.save(); } catch (error) {
+        if (error instanceof mongoose.Error.VersionError) continue;
+        throw error;
+      }
+      if (!waiting) continue;
+      const level = levelLabel(settings, path[0]);
+      const next = levelLabel(settings, path[1]);
+      const hours = `${config.assignReminderHours} hour${config.assignReminderHours === 1 ? '' : 's'}`;
+      const owner = ticket.workflow.assignee?.userId ? [ticket.workflow.assignee] : await levelStaff(path[0], ticket);
+      const alerted = await notify(owner.length ? owner : await admins(), ticket, `Reminder: assign to a ${next}`,
+        `${ticket.reference} has been with the ${level} for ${hours} without being assigned to a ${next}. Please review and assign it now.`);
+      await audit(ticket, 'assignment_reminder', { actor: REMINDER, details: { hours: config.assignReminderHours, level, next, recipient: ticket.workflow.assignee?.name || null }, alerted });
+      reminded.push(ticket._id);
+    }
+    return reminded;
+  }
+  // ---- Start-work reminder ------------------------------------------------------------
+  // Once a Service Executive (the last level) has the ticket, they must accept it and start the
+  // work within B2C_START_REMINDER_HOURS (3). If it has not started by then, the executive is
+  // reminded, and so is whoever assigned it to them, once. Starting the work, handing the
+  // ticket to someone else (which starts the time again), rerouting or closing it cancels it.
+  const START_REMINDER = { userId: null, name: 'Start-work reminder', role: 'system' };
+  const NOT_STARTED = [STATUS.ASSIGNED, STATUS.ACCEPTED];
+  function startStartReminder(ticket, path, assignedBy = null) {
+    const withExecutive = path.length > 1 && ticket.workflow?.currentLevel === path[path.length - 1] && ticket.workflow?.assignee?.userId && NOT_STARTED.includes(ticket.status);
+    ticket.startReminderAt = withExecutive && config.startReminderHours ? new Date(now().getTime() + config.startReminderHours * 3_600_000) : null;
+    ticket.startReminderSentAt = null;
+    ticket.startAssignedBy = withExecutive && assignedBy?.userId ? assignedBy : undefined;
+  }
+  async function sendStartReminders() {
+    if (!config.startReminderHours) return [];
+    const settings = await getSettings();
+    const due = await B2CEscalation.find({ startReminderAt: { $ne: null, $lte: now() } }).sort({ startReminderAt: 1 }).limit(50);
+    const reminded = [];
+    for (const ticket of due) {
+      const path = effectivePath(ticket, settings);
+      const executive = ticket.workflow?.assignee;
+      const waiting = NOT_STARTED.includes(ticket.status) && path.length > 1 && ticket.workflow?.currentLevel === path[path.length - 1] && executive?.userId;
+      ticket.startReminderAt = null;
+      if (waiting) ticket.startReminderSentAt = now();
+      try { await ticket.save(); } catch (error) {
+        if (error instanceof mongoose.Error.VersionError) continue;
+        throw error;
+      }
+      if (!waiting) continue;
+      const hours = `${config.startReminderHours} hour${config.startReminderHours === 1 ? '' : 's'}`;
+      const stage = ticket.status === STATUS.ACCEPTED ? 'accepted but the work has not started' : 'not accepted yet';
+      const alerted = await notify([executive], ticket, 'Reminder: accept and start the work',
+        `${ticket.reference} was assigned to you ${hours} ago and is ${stage}. Please ${ticket.status === STATUS.ACCEPTED ? 'start the work' : 'accept it and start the work'} now.`);
+      const assigner = ticket.startAssignedBy?.userId && String(ticket.startAssignedBy.userId) !== String(executive.userId) ? ticket.startAssignedBy : null;
+      if (assigner) {
+        alerted.push(...await notify([assigner], ticket, `${executive.name} has not started ${ticket.reference}`,
+          `${ticket.reference} was assigned to ${executive.name} ${hours} ago and is ${stage}. Follow up, or assign it to another ${levelLabel(settings, path[path.length - 1])}.`));
+      }
+      await audit(ticket, 'start_reminder', { actor: START_REMINDER, details: { hours: config.startReminderHours, executive: executive.name, accepted: ticket.status === STATUS.ACCEPTED, assignedBy: assigner?.name || null }, alerted });
+      reminded.push(ticket._id);
+    }
+    return reminded;
+  }
+
+  // Work on a timer of its own (every 15 seconds): automatic closes and the reminders.
+  async function runTimedWork() {
+    return { autoClosed: await closeDueTickets(), reminded: await sendAssignmentReminders(), startReminded: await sendStartReminders() };
   }
 
   // Tells the assignee, or everyone who could take the ticket at its level.
@@ -788,7 +940,7 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
   // ('not_found', 'insufficient'), or null: a customer was identified, the details conflict or
   // fit several customers, or a device record gives the email a region.
   async function registrationTrigger(record, settings) {
-    const identifiers = extractIdentifiers({ subject: record.subject, body: record.bodyText }, settings.identifierRules);
+    const identifiers = emailIdentifiers(record, settings);
     const { match, assessment } = await matchEmail({ source: record, identifiers, settings });
     return REGISTRATION_TRIGGERS.includes(match.status) && assessment.status !== 'automatic' ? match.status : null;
   }
@@ -986,6 +1138,7 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
       state: 'valid', reference: request.reference || null, expiresAt: request.expiresAt, companyName: config.ack?.companyName || 'iPlanet',
       regions: await deviceDirectory.regions(),
       fields: Object.entries(REGISTRATION_FIELDS).map(([key, rule]) => ({ key, label: rule.label, required: rule.required, maxLength: rule.max })),
+      invoice: { required: false, maxBytes: config.maxAttachmentBytes, types: ['PDF', 'JPG', 'PNG', 'HEIC'] },
     };
   }
 
@@ -993,11 +1146,14 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
   // request: nothing in the submission can choose them. The answer is the same whether or not
   // the details were verified, so the form cannot be used to test what is on record; the
   // ticket number reaches the customer in the acknowledgement.
-  async function submitRegistration(token, input) {
+  async function submitRegistration(token, input, file = null) {
     const request = await findRegistration(token);
     assertUsable(request);
     const settings = await getSettings();
-    const { values, errors } = validateRegistration(input, { regions: await deviceDirectory.regions(), now: now() });
+    const validated = validateRegistration(input, { regions: await deviceDirectory.regions(), now: now() });
+    const invoiceCheck = checkInvoice(file);
+    const errors = validated.errors || invoiceCheck.error ? { ...validated.errors, ...(invoiceCheck.error ? { invoice: invoiceCheck.error } : {}) } : null;
+    const { values } = validated;
     if (errors) {
       const counted = await B2CRegistrationRequest.findOneAndUpdate({ _id: request._id, status: { $in: OPEN_REGISTRATION } }, { $inc: { failedAttempts: 1 } }, { new: true });
       if (counted && counted.failedAttempts >= registrationConfig.maxSubmitAttempts) {
@@ -1007,12 +1163,16 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
       throw linkError(422, 'validation', 'Some details need correcting.', { fields: errors });
     }
     const at = now();
+    const invoice = invoiceCheck.invoice ? { ...invoiceCheck.invoice, storageKey: await attachmentStore.save(file.buffer) } : null;
     // Claimed together with the validated submission, so a run that stops part-way is finished
     // by the processing cycle from what the customer submitted.
     const claimed = await B2CRegistrationRequest.findOneAndUpdate(
       { _id: request._id, tokenHash: request.tokenHash, expiresAt: { $gt: at }, $or: [{ status: { $in: OPEN_REGISTRATION } }, { status: 'processing', lockedUntil: { $lt: at } }] },
-      { $set: { status: 'processing', lockedUntil: new Date(at.getTime() + LOCK_MS), submission: values, submittedAt: at } }, { new: true });
-    if (!claimed) throw linkError(409, 'used', 'This registration link has already been used.');
+      { $set: { status: 'processing', lockedUntil: new Date(at.getTime() + LOCK_MS), submission: values, submittedAt: at, ...(invoice ? { invoice } : {}) } }, { new: true });
+    if (!claimed) {
+      if (invoice) await attachmentStore.remove(invoice.storageKey).catch(() => {});
+      throw linkError(409, 'used', 'This registration link has already been used.');
+    }
     try {
       await saveRegistration(claimed);
     } catch (error) {
@@ -1026,8 +1186,29 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
 
   // A submission that could not be saved: the link can be used again, and nothing was completed.
   async function releaseSubmission(claimed) {
-    await B2CRegistrationRequest.updateOne({ _id: claimed._id, status: 'processing', lockedUntil: claimed.lockedUntil }, { $set: { status: 'in_progress', lockedUntil: null }, $unset: { submission: '', submittedAt: '' } });
+    const released = await B2CRegistrationRequest.updateOne({ _id: claimed._id, status: 'processing', lockedUntil: claimed.lockedUntil }, { $set: { status: 'in_progress', lockedUntil: null }, $unset: { submission: '', submittedAt: '', invoice: '' } });
+    if (released.modifiedCount && claimed.invoice?.storageKey) await attachmentStore.remove(claimed.invoice.storageKey).catch(() => {});
   }
+
+  // The invoice is optional: a PDF or a photo, checked like an email attachment (allowed type,
+  // contents that match it, size limit). Returns { invoice } (without its storage key) or { error }.
+  const INVOICE_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/heic'];
+  const INVOICE_ERRORS = {
+    empty_file: 'The invoice file is empty.',
+    too_large: `The invoice must be ${Math.floor(config.maxAttachmentBytes / 1048576)} MB or smaller.`,
+    type_not_allowed: 'Attach the invoice as a PDF, JPG, PNG or HEIC file.',
+    content_does_not_match_type: 'The invoice file is damaged or is not the type its name says.',
+  };
+  function checkInvoice(file) {
+    if (!file) return {};
+    const inspected = inspectAttachment({ filename: file.originalname, content: file.buffer }, { maxBytes: config.maxAttachmentBytes });
+    if (!inspected.ok) return { error: INVOICE_ERRORS[inspected.rejectReason] || INVOICE_ERRORS.type_not_allowed };
+    if (!INVOICE_TYPES.includes(inspected.contentType)) return { error: INVOICE_ERRORS.type_not_allowed };
+    const { filename, contentType, size, sha256 } = inspected;
+    return { invoice: { filename, contentType, size, sha256 } };
+  }
+  // For staff: the invoice's name, type and size, and the key it is downloaded by.
+  const invoiceInfo = request => (request?.invoice?.storageKey ? { key: request.invoice.storageKey, filename: request.invoice.filename, contentType: request.invoice.contentType, size: request.invoice.size } : null);
 
   // Checks the claimed submission against the device and customer records and saves the
   // result: the customer's purchase record when a new one is needed, and the request's outcome,
@@ -1267,6 +1448,7 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
       openedAt: request.openedAt, submittedAt: request.submittedAt, completedAt: request.completedAt, expiresAt: request.expiresAt, sendCount: request.sendCount, maxSends: registrationConfig.maxSends,
       failedAttempts: request.failedAttempts, outcome: request.outcome ? { customerRecord: request.outcome.customerRecord, region: request.outcome.region, checks: request.outcome.checks } : null,
       submission: review ? request.submission : null, assigned: Boolean(ticket.workflow?.assignee?.userId), ticketCreatedBy: request.ticketCreatedBy || null,
+      invoice: invoiceInfo(request),
     };
   }
   async function registrationActionAllowed(ticket) {
@@ -1322,8 +1504,16 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
     return {
       ...registrationRow(request), ticketId: request.ticketId ? String(request.ticketId) : null, reference: request.reference || null, ticketCreatedBy: request.ticketCreatedBy || null,
       submission: request.status === 'manual_review' ? request.submission || null : null,
+      invoice: invoiceInfo(request),
       history: history.map(event => ({ _id: String(event._id), action: event.action, actor: { name: event.actor?.name || 'System', role: event.actor?.role || 'system' }, at: event.at, details: event.details || {}, note: event.note || null })),
     };
+  }
+  // The invoice of a registration request (B2C admins), also before it has a ticket.
+  async function registrationInvoice(id, downloadKey, user) {
+    const request = await loadRequest(id);
+    if (!request.invoice?.storageKey || request.invoice.storageKey !== String(downloadKey)) throw new B2CError('Invoice not found', 404);
+    await auditRequest(request, 'attachment_downloaded', { actor: user, details: { filename: request.invoice.filename } });
+    return { ...request.toObject().invoice, content: await attachmentStore.read(request.invoice.storageKey) };
   }
   async function registrationAction(id, action, payload = {}, user) {
     const request = await loadRequest(id);
@@ -1480,7 +1670,10 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
       const registrations = await sweepRegistrations();
       const sent = await sendPendingOutbound();
       const slaEscalated = await evaluateSlaEscalations();
-      scheduler.lastResult = { trigger, polled, processed: processed.length, crmRetried: crmRetried.length, registrationsExpired: registrations.expired, sent: sent.length, slaEscalated: slaEscalated.length };
+      const autoClosed = await closeDueTickets();
+      const reminded = await sendAssignmentReminders();
+      const startReminded = await sendStartReminders();
+      scheduler.lastResult = { trigger, polled, processed: processed.length, crmRetried: crmRetried.length, registrationsExpired: registrations.expired, sent: sent.length, slaEscalated: slaEscalated.length, autoClosed: autoClosed.length, reminded: reminded.length, startReminded: startReminded.length };
       scheduler.lastError = null;
       return scheduler.lastResult;
     } catch (error) {
@@ -1533,8 +1726,42 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
   async function resolveTicket(ticket, { summary, customerMessage, user }) {
     ticket.status = STATUS.RESOLVED;
     ticket.resolution = { summary, resolvedBy: person(user), resolvedAt: now() };
+    ticket.autoCloseAt = config.autoCloseMinutes ? new Date(now().getTime() + config.autoCloseMinutes * 60_000) : null;
     const outbound = await queueOutbound(ticket, { kind: 'final', templateKey: 'final_resolution', vars: { message: customerMessage }, dedupeKey: `final:${ticket._id}:${ticket.reopenCount || 0}`, createdBy: person(user) });
     ticket.resolution.finalMessageId = outbound._id;
+  }
+
+  // A completed escalation closes by itself B2C_AUTO_CLOSE_MINUTES after completion (5 by
+  // default), unless staff closed or reopened it first. Run by its own short timer and by every
+  // processing cycle; a ticket changed meanwhile by staff is left alone.
+  const AUTO_CLOSE = { userId: null, name: 'Auto-close', role: 'system' };
+  async function closeDueTickets() {
+    if (!config.autoCloseMinutes) return [];
+    const due = await B2CEscalation.find({ status: STATUS.RESOLVED, autoCloseAt: { $ne: null, $lte: now() } }).sort({ autoCloseAt: 1 }).limit(50);
+    const closed = [];
+    for (const ticket of due) {
+      ticket.status = STATUS.CLOSED;
+      ticket.closedAt = now();
+      ticket.autoCloseAt = null;
+      ticket.lastActivityAt = now();
+      ticket.closure = { reason: 'Resolved', by: { userId: null, name: AUTO_CLOSE.name } };
+      try { await ticket.save(); } catch (error) {
+        if (error instanceof mongoose.Error.VersionError) continue;
+        throw error;
+      }
+      await audit(ticket, 'auto_closed', { actor: AUTO_CLOSE, fromStatus: STATUS.RESOLVED, toStatus: STATUS.CLOSED, details: { minutes: config.autoCloseMinutes } });
+      closed.push(ticket._id);
+    }
+    return closed;
+  }
+
+  // Emails the B2C Admin sends when closing a case (the enquiry answer, the retail hand-over)
+  // go from the company address when it is on; otherwise through the ticket's inbox.
+  const customerChannel = ticket => (ackSender?.enabled ? { via: 'company_sender', from: ackSender.fromEmail, replyTo: ticket.inboxAddress } : {});
+  // Closed by the B2C Admin: triage settles, the timers stop, and the case leaves the queues.
+  function closeByAdmin(ticket, user, reason) {
+    if (ticket.status === STATUS.TRIAGE) ticket.triage = { reasons: ticket.triage?.reasons || [], resolvedAt: now(), resolvedBy: user.name };
+    Object.assign(ticket, { status: STATUS.CLOSED, closedAt: now(), closure: { reason, by: person(user) }, autoCloseAt: null, assignReminderAt: null, startReminderAt: null });
   }
 
   // Actions that give the ticket an engineer, after which it must have an acknowledgement.
@@ -1550,8 +1777,53 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
     let afterSave = async () => {};
 
     switch (action) {
+      case 'resolve_enquiry': {
+        // The B2C Admin answers an Enquiry: the answer goes to the customer as the final email,
+        // and the case closes without reaching a Cluster Manager.
+        const customerMessage = requiredText(payload, 'customerMessage').slice(0, LIMITS.customerMessage);
+        note = optionalText(payload, 'note', LIMITS.note);
+        details.fromCaseType = ticket.caseType || null;
+        if (ticket.category !== 'Service') ticket.classification = { source: 'manual', matched: [], note: null };
+        Object.assign(ticket, { category: 'Service', caseType: 'Enquiry', caseTypeSource: 'manual', caseTypeMatched: [] });
+        ticket.resolution = { summary: `Enquiry answered: ${customerMessage.replace(/\s+/g, ' ').slice(0, 300)}`, resolvedBy: person(user), resolvedAt: now() };
+        closeByAdmin(ticket, user, 'Enquiry answered');
+        await cancelRegistration(ticket, user);
+        afterSave = async () => {
+          const outbound = await queueOutbound(ticket, { kind: 'final', templateKey: 'final_resolution', vars: { message: customerMessage }, dedupeKey: `final:${ticket._id}:${ticket.reopenCount || 0}`, createdBy: person(user), ...customerChannel(ticket) });
+          await B2CEscalation.updateOne({ _id: ticket._id }, { $set: { 'resolution.finalMessageId': outbound._id } });
+        };
+        break;
+      }
+      case 'transfer_retail': {
+        // The B2C Admin hands a Retail case to the retail team of the Retail matrix, which closes
+        // it as per the Retail process: the case is emailed to the team and closed here.
+        const entry = (settings.retailMatrix || []).find(item => item.enabled && item.key === payload.matrixKey);
+        if (!entry) throw new B2CError('Choose a retail team from the Retail matrix (B2C Settings).');
+        note = optionalText(payload, 'note', LIMITS.note);
+        const customerMessage = optionalText(payload, 'customerMessage', LIMITS.customerMessage);
+        if (ticket.category !== 'Retail') ticket.classification = { source: 'manual', matched: [], note: null };
+        Object.assign(ticket, { category: 'Retail', caseType: null, caseTypeSource: null, caseTypeMatched: [] });
+        ticket.retailTransfer = { key: entry.key, name: entry.name, email: entry.email, region: entry.region || '', by: person(user), at: now() };
+        closeByAdmin(ticket, user, `Transferred to Retail: ${entry.name}`);
+        await cancelRegistration(ticket, user);
+        Object.assign(details, { team: entry.name, region: entry.region || null, customerNotified: Boolean(customerMessage) });
+        afterSave = async () => {
+          const source = await B2CInboundEmail.findById(ticket.sourceEmailId).select('bodyText').lean();
+          const handover = await queueOutbound(ticket, {
+            kind: 'retail_transfer', templateKey: 'retail_transfer', to: entry.email, dedupeKey: `retail:${ticket._id}:${ticket.reopenCount || 0}`, createdBy: person(user), ...customerChannel(ticket),
+            vars: { retailTeam: entry.name, customerEmail: ticket.customer?.email || '', region: entry.region || ticket.region || '', message: note || 'None', emailText: String(source?.bodyText || ticket.summary || '').slice(0, 4000), companyName: config.ack?.companyName || 'iPlanet' },
+          });
+          await B2CEscalation.updateOne({ _id: ticket._id }, { $set: { 'retailTransfer.outboundId': handover._id } });
+          if (customerMessage) await queueOutbound(ticket, { kind: 'final', templateKey: 'final_resolution', vars: { message: customerMessage }, dedupeKey: `final:${ticket._id}:${ticket.reopenCount || 0}`, createdBy: person(user), ...customerChannel(ticket) });
+        };
+        break;
+      }
       case 'complete_triage': {
         if (!CATEGORIES.includes(payload.category)) throw new B2CError('Choose Service or Retail.');
+        // Retail cases go to the retail team, and Enquiries are answered here; only a Service
+        // Escalation is routed to the Cluster Manager.
+        if (payload.category === 'Retail') throw new B2CError('Retail cases are transferred to the retail team: use Transfer to Retail, or choose Service.');
+        Object.assign(ticket, { caseType: 'Escalation', caseTypeSource: 'manual', caseTypeMatched: [] });
         const added = cleanIdentifiers(payload.identifiers);
         // A manual region must be one already defined on device records.
         const regions = await deviceDirectory.regions();
@@ -1613,23 +1885,37 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
         ticket.workflow.assignee = person(user);
         ticket.workflow.assignedAt = now();
         ticket.status = STATUS.ACCEPTED;
+        // An executive taking it from the queue still has to start the work in time.
+        startStartReminder(ticket, effectivePath(ticket, settings));
         break;
       case 'accept':
         ticket.status = STATUS.ACCEPTED;
         break;
+      // To a colleague at the same level, or onward to someone at the next level on the
+      // path (the Cluster Manager handing the ticket to a Service Executive).
       case 'assign': {
-        const assignee = await chooseStaff(payload.userId, ticket.workflow.currentLevel, ticket);
+        const forward = payload.levelKey && payload.levelKey !== ticket.workflow.currentLevel ? nextLevel(ticket, settings) : null;
+        if (payload.levelKey && payload.levelKey !== ticket.workflow.currentLevel && payload.levelKey !== forward) throw new B2CError('Assign to someone at this level or the next level on the path.');
+        const assignee = await chooseStaff(payload.userId, forward || ticket.workflow.currentLevel, ticket);
         details.from = ticket.workflow.assignee?.name || null;
         details.to = assignee.name;
+        if (forward) {
+          Object.assign(details, { fromLevel: levelLabel(settings, ticket.workflow.currentLevel), toLevel: levelLabel(settings, forward) });
+          ticket.workflow.currentLevel = forward;
+          ticket.assignReminderAt = null;
+        }
         ticket.workflow.assignee = assignee;
         ticket.workflow.assignedAt = now();
         addParticipant(ticket, assignee.userId);
         if (ticket.status !== STATUS.AWAITING_CUSTOMER) ticket.status = STATUS.ASSIGNED;
+        // A Service Executive given the ticket has the time to accept and start it from now.
+        startStartReminder(ticket, effectivePath(ticket, settings), person(user));
         afterSave = () => notify([assignee], ticket, 'Escalation assigned to you', `${ticket.reference} (${ticket.category}) was assigned to you by ${user.name}.`);
         break;
       }
       case 'start':
         ticket.status = STATUS.INVESTIGATING;
+        ticket.startReminderAt = null;
         break;
       case 'reroute': {
         note = requiredText(payload, 'reason');
@@ -1644,8 +1930,10 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
         ticket.workflow.currentLevel = target;
         ticket.workflow.assignee = assignee;
         ticket.workflow.assignedAt = assignee ? now() : null;
+        startAssignReminder(ticket, effectivePath(ticket, settings));
         if (assignee) addParticipant(ticket, assignee.userId);
         ticket.status = statusForAssignment(assignee);
+        startStartReminder(ticket, effectivePath(ticket, settings), assignee ? person(user) : null);
         afterSave = () => notifyLevel(ticket, settings, 'Escalation rerouted');
         break;
       }
@@ -1706,6 +1994,9 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
       case 'close':
         ticket.status = STATUS.CLOSED;
         ticket.closedAt = now();
+        ticket.autoCloseAt = null;
+        ticket.assignReminderAt = null;
+        ticket.startReminderAt = null;
         ticket.closure = { reason: 'Resolved', by: person(user) };
         note = optionalText(payload, 'note', LIMITS.note);
         break;
@@ -1714,6 +2005,8 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
         const customerMessage = optionalText(payload, 'customerMessage', LIMITS.customerMessage);
         ticket.status = STATUS.CLOSED;
         ticket.closedAt = now();
+        ticket.assignReminderAt = null;
+        ticket.startReminderAt = null;
         ticket.closure = { reason: note, by: person(user) };
         details.customerNotified = Boolean(customerMessage);
         await cancelRegistration(ticket, user);
@@ -1725,6 +2018,10 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
         ticket.status = STATUS.REOPENED;
         ticket.reopenCount = (ticket.reopenCount || 0) + 1;
         ticket.closedAt = null;
+        ticket.autoCloseAt = null;
+        // Reopened with the Cluster Manager: the time to assign it starts again.
+        startAssignReminder(ticket, effectivePath(ticket, settings));
+        ticket.startReminderAt = null;
         ticket.validation = {};
         afterSave = () => notifyLevel(ticket, settings, 'Escalation reopened');
         break;
@@ -1748,9 +2045,53 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
   }
 
   // ---- Queries ----------------------------------------------------------------------------
+  // B2C staff with their open workload (active escalations assigned to them), so whoever assigns
+  // can pick someone available, as in the B2B engineer list.
   async function staffForUser() {
-    const staff = await staffQuery({ b2cRole: { $in: B2C_ROLES } });
-    return staff.map(item => ({ _id: item._id, name: item.name, email: item.email, b2cRole: item.b2cRole, b2cRegions: item.b2cRegions || [] }));
+    const [staff, load] = await Promise.all([
+      staffQuery({ b2cRole: { $in: B2C_ROLES } }),
+      B2CEscalation.aggregate([{ $match: { status: { $in: ACTIVE_STATUSES.filter(status => status !== STATUS.TRIAGE) }, 'workflow.assignee.userId': { $ne: null } } }, { $group: { _id: '$workflow.assignee.userId', count: { $sum: 1 } } }]),
+    ]);
+    const open = new Map(load.map(item => [String(item._id), item.count]));
+    return staff.map(item => ({ _id: item._id, name: item.name, email: item.email, b2cRole: item.b2cRole, b2cRegions: item.b2cRegions || [], activeTickets: open.get(String(item._id)) || 0 }));
+  }
+
+  // Warranty & Coverage, as in the iPlanet Service portal: every device for a B2C admin, and
+  // the devices in their regions for a Cluster Manager or Service Executive (all regions when
+  // they have no region restriction).
+  async function coverage(user) {
+    return coverageReport(await deviceDirectory.coverage(isAdmin(user) ? [] : user.b2cRegions || []));
+  }
+
+  // Every file that came with the escalation, in one list: attachments of the customer's emails
+  // (the first one and every reply) and the invoice uploaded with the registration form. Anyone
+  // who can see the ticket (the B2C admin, its Cluster Manager and Service Executive) can
+  // download them through attachmentFor, as files, never opened in the browser.
+  async function ticketFiles(ticket, inbound) {
+    const files = inbound.flatMap(email => (email.attachments || []).filter(item => item.status === 'stored' && item.storageKey).map(item => ({
+      downloadKey: item.storageKey, filename: item.filename, contentType: item.contentType, size: item.size, source: 'email', addedAt: email.receivedAt, from: email.from?.address || null,
+    })));
+    const request = ticket.registration?.requestId ? await B2CRegistrationRequest.findById(ticket.registration.requestId).select('invoice submittedAt').lean() : null;
+    if (request?.invoice?.storageKey) files.push({ downloadKey: request.invoice.storageKey, filename: request.invoice.filename, contentType: request.invoice.contentType, size: request.invoice.size, source: 'registration', addedAt: request.submittedAt || null, from: null });
+    return files.sort((a, b) => new Date(a.addedAt || 0) - new Date(b.addedAt || 0));
+  }
+
+  // Earlier and later escalations for the same device (by serial number): what was reported,
+  // when, and how it ended. A summary only; `canOpen` says whether the user may open one.
+  async function serviceHistory(ticket, user) {
+    const serialNumbers = [...new Set([ticket.regionAssignment?.serialNumber, ...(ticket.identifiers || []).filter(item => item.type === 'serialNumber').map(item => item.value)].filter(Boolean))];
+    if (!serialNumbers.length) return { serialNumbers, tickets: [] };
+    const others = await B2CEscalation.find({ _id: { $ne: ticket._id }, $or: [{ 'regionAssignment.serialNumber': { $in: serialNumbers } }, { identifiers: { $elemMatch: { type: 'serialNumber', value: { $in: serialNumbers } } } }] })
+      .select('reference status subject category region createdAt resolution.summary resolution.resolvedAt closedAt closure.reason workflow participants regionAssignment.serialNumber validation.validatorLevel validation.proposedBy')
+      .sort({ createdAt: -1 }).limit(20).lean();
+    return {
+      serialNumbers,
+      tickets: others.map(item => ({
+        _id: String(item._id), reference: item.reference, status: item.status, subject: item.subject || '', category: item.category, region: item.region || '', createdAt: item.createdAt,
+        resolution: item.resolution?.summary || null, resolvedAt: item.resolution?.resolvedAt || null, closedAt: item.closedAt || null, closureReason: item.closure?.reason || null,
+        handledBy: item.workflow?.assignee?.name || null, canOpen: canView(item, user),
+      })),
+    };
   }
 
   async function getTicketDetail(id, user) {
@@ -1758,13 +2099,19 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
     const ticket = await loadVisibleTicket(id, user);
     // Evaluated on read as well, like B2B tickets, so the SLA shown is current.
     await evaluateSla(ticket, settings, await escalationRules());
-    const [inbound, outbound, auditTrail] = await Promise.all([
-      B2CInboundEmail.find({ ticketId: ticket._id }).select('from to cc subject bodyText bodyTruncated receivedAt attachments autoGenerated status outcome').sort({ receivedAt: 1 }).lean(),
-      B2COutboundEmail.find({ ticketId: ticket._id }).select('kind to subject bodyText status heldReason lastError sentAt createdAt mode provider responseCode createdBy attempts templateKey vars').sort({ createdAt: 1 }).lean(),
+    // Our own emails to the customer (acknowledgements, clarifications, final emails) are shown
+    // to B2C admins only; level staff see what the customer wrote, and the device's service history.
+    const admin = isAdmin(user);
+    const serialNumber = ticket.regionAssignment?.serialNumber || (ticket.identifiers || []).find(item => item.type === 'serialNumber')?.value;
+    const [inbound, outbound, auditTrail, history, deviceRecord] = await Promise.all([
+      B2CInboundEmail.find({ ticketId: ticket._id }).select('from to cc subject bodyText bodyTruncated receivedAt attachments attachmentReading autoGenerated status outcome').sort({ receivedAt: 1 }).lean(),
+      admin ? B2COutboundEmail.find({ ticketId: ticket._id }).select('kind to subject bodyText status heldReason lastError sentAt createdAt mode provider responseCode createdBy attempts templateKey vars').sort({ createdAt: 1 }).lean() : [],
       B2CAuditEvent.find({ ticketId: ticket._id }).sort({ at: 1 }).lean(),
+      serviceHistory(ticket, user),
+      serialNumber ? deviceDirectory.coverageBySerial(serialNumber) : null,
     ]);
     const conversation = [
-      ...inbound.map(item => ({ _id: item._id, direction: 'inbound', at: item.receivedAt, from: item.from, to: item.to, subject: item.subject, bodyText: item.bodyText, bodyTruncated: item.bodyTruncated, attachments: (item.attachments || []).map(({ storageKey, ...rest }) => ({ ...rest, downloadKey: storageKey || null })) })),
+      ...inbound.map(item => ({ _id: item._id, direction: 'inbound', at: item.receivedAt, from: item.from, to: item.to, subject: item.subject, bodyText: item.bodyText, bodyTruncated: item.bodyTruncated, attachments: (item.attachments || []).map(({ storageKey, ...rest }) => ({ ...rest, downloadKey: storageKey || null })), attachmentReading: item.attachmentReading?.status ? item.attachmentReading : null })),
       ...outbound.map(item => {
         // Unsent messages show what will be sent; sent ones show what was sent.
         const template = settings.templates.find(entry => entry.key === item.templateKey);
@@ -1777,6 +2124,11 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
     return {
       ticket: { ...plain, path: effectivePath(plain, settings) },
       conversation,
+      outboundHidden: !admin,
+      serviceHistory: history,
+      // The device record's warranty, AMC and coverage, as on the Warranty & Coverage page.
+      deviceCoverage: deviceRecord ? withCoverage(deviceRecord) : null,
+      files: await ticketFiles(ticket, inbound),
       audit: auditTrail,
       allowedActions: allowedActions({ ticket, user, settings }).filter(action => action !== 'send_registration' || offerRegistration),
       registration: await registrationSummary(ticket, user),
@@ -1784,9 +2136,12 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
         levels: enabledLevels(settings).map(level => ({ key: level.key, label: level.label })),
         nextLevel: nextLevel(ticket, settings),
         validatorLevel: ticket.status === STATUS.INVESTIGATING ? validatorLevelFor(ticket, settings) : ticket.validation?.validatorLevel ?? null,
-        validationMode: settings.validation?.mode || 'next_level',
+        validationMode: settings.validation?.mode || 'executive_direct',
+        autoCloseMinutes: config.autoCloseMinutes,
         // For the triage form: the level a routed ticket starts at, and the regions it can choose.
         firstLevel: defaultPath(settings)[0] || null,
+        // For Transfer to Retail (B2C admins): the retail teams that can take a case.
+        retailMatrix: admin ? (settings.retailMatrix || []).filter(item => item.enabled).map(({ key, region, name, email }) => ({ key, region, name, email })) : [],
         regions: await deviceDirectory.regions(),
       },
       templates: Object.fromEntries(settings.templates.map(item => [item.key, { approved: Boolean(item.approved), subject: item.subject, body: item.body }])),
@@ -1992,10 +2347,12 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
     return B2COutboundEmail.findById(id).select('status attempts lastError sentAt').lean();
   }
 
+  // An email attachment of the ticket, or the invoice from its customer registration.
   async function attachmentFor(ticketId, downloadKey, user) {
     const ticket = await loadVisibleTicket(ticketId, user);
     const record = await B2CInboundEmail.findOne({ ticketId: ticket._id, 'attachments.storageKey': String(downloadKey) }).select('attachments').lean();
-    const attachment = record?.attachments.find(item => item.storageKey === String(downloadKey) && item.status === 'stored');
+    const registration = record || !ticket.registration?.requestId ? null : await B2CRegistrationRequest.findOne({ _id: ticket.registration.requestId, 'invoice.storageKey': String(downloadKey) }).select('invoice').lean();
+    const attachment = registration?.invoice || record?.attachments.find(item => item.storageKey === String(downloadKey) && item.status === 'stored');
     if (!attachment) throw new B2CError('Attachment not found', 404);
     await audit(ticket, 'attachment_downloaded', { actor: user, details: { filename: attachment.filename } });
     return { ...attachment, content: await attachmentStore.read(attachment.storageKey) };
@@ -2069,10 +2426,10 @@ export function createB2CService({ models, User, notifyUsers = async () => {}, e
   return {
     getSettings, updateSettings, ingestMessage, pollInbox, processPendingInbound, processInbound, retryCrmLookups, sendPendingOutbound, runCycle,
     performAction, getTicketDetail, listTickets, dashboard, reports, health, listInbound, retryInbound, listOutbound, retryOutbound, attachmentFor,
-    injectTestEmail, testOutbox, verifyImap, staffForUser, schedulerStatus: () => ({ ...scheduler }),
+    injectTestEmail, testOutbox, verifyImap, staffForUser, coverage, closeDueTickets, sendAssignmentReminders, sendStartReminders, runTimedWork, autoCloseMinutes: config.autoCloseMinutes, assignReminderHours: config.assignReminderHours, startReminderHours: config.startReminderHours, schedulerStatus: () => ({ ...scheduler }),
     // Public, token-only customer registration.
     openRegistration, submitRegistration, renewRegistration, sweepRegistrations,
     // Registration requests without a ticket (B2C admins).
-    listRegistrations, getRegistration, registrationAction,
+    listRegistrations, getRegistration, registrationAction, registrationInvoice,
   };
 }

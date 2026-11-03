@@ -63,10 +63,27 @@ export function validateSettingsUpdate(input = {}, current = {}, user = {}) {
   }
   if (input.validation !== undefined) {
     const mode = input.validation?.mode;
-    if (!['next_level', 'level', 'none'].includes(mode)) fail('Validation mode is invalid.');
+    if (!['executive_direct', 'level', 'none'].includes(mode)) fail('Validation mode is invalid.');
     const levelKey = mode === 'level' ? input.validation.levelKey : null;
     if (mode === 'level' && !LEVEL_KEYS.includes(levelKey)) fail('Choose the level that validates resolutions.');
     update.validation = { mode, levelKey };
+  }
+  if (input.caseTypeRules !== undefined) {
+    const keywords = (Array.isArray(input.caseTypeRules?.enquiryKeywords) ? input.caseTypeRules.enquiryKeywords : []).map(word => text(word, 80, 'Keyword')).filter(Boolean);
+    if (keywords.length > 100) fail('Up to 100 enquiry keywords.');
+    update.caseTypeRules = { enquiryKeywords: [...new Set(keywords)], enabled: bool(input.caseTypeRules?.enabled) };
+  }
+  if (input.retailMatrix !== undefined) {
+    if (!Array.isArray(input.retailMatrix) || input.retailMatrix.length > 50) fail('Up to 50 retail teams can be configured.');
+    update.retailMatrix = input.retailMatrix.map((entry, index) => {
+      const name = text(entry.name, 80, 'Retail team name', { required: true });
+      const email = normaliseAddress(entry.email);
+      if (!email) fail(`Retail team "${name}" needs a valid email address.`);
+      const key = text(entry.key, 40, 'Retail team key').toLowerCase() || `retail-${index + 1}`;
+      if (!/^[a-z0-9-]{2,40}$/.test(key)) fail('Retail team keys use lowercase letters, digits and hyphens.');
+      return { key, region: text(entry.region, 80, 'Region'), name, email, enabled: bool(entry.enabled) };
+    });
+    unique(update.retailMatrix, 'key', 'Retail team key');
   }
   if (input.templates !== undefined) {
     if (!Array.isArray(input.templates)) fail('Templates must be a list.');

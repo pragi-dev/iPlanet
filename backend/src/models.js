@@ -23,7 +23,7 @@ const deviceSchema = new mongoose.Schema({ assetId: String, serialNumber: { type
 deviceSchema.index({ companyId: 1, assetId: 1 }, { unique: true, partialFilterExpression: { assetId: { $type: 'string' } } });
 const deviceMasterSchema = new mongoose.Schema({ serialNumber: { type: String, unique: true }, deviceType: String, model: String, assetId: String, purchaseDate: Date, warrantyStatus: String, warrantyExpiry: Date, amcStatus: String, amcExpiry: Date });
 const engineerSchema = new mongoose.Schema({ name: String, employeeId: { type: String, unique: true }, email: { type: String, unique: true }, phone: String, location: String, status: { type: String, default: 'Available' }, userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' } });
-const ticketSchema = new mongoose.Schema({ ticketId: { type: String, unique: true }, customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, category: String, issueType: String, description: String, images: [String], originalImages: [String], annotatedImages: [String], location: String, preferredServiceDate: Date, deviceCount: Number, closedAt: Date, priority: String, status: { type: String, default: 'Open' }, assignedEngineer: String, assignedEngineerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Engineer' }, assignedAt: Date, expectedTAT: String, responseTarget: String, resolutionTarget: String, slaTargetAt: Date, slaStatus: { type: String, enum: ['Healthy', 'At Risk', 'Escalated', 'SLA Breached', 'Resolved'], default: 'Healthy' }, escalationLevel: { type: Number, default: 0 }, escalationStatus: { type: String, enum: ['Not Escalated', 'At Risk', 'Escalated', 'SLA Breached', 'Resolved'], default: 'Not Escalated' }, escalationReason: String, escalatedAt: Date, serviceFollowUpId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceFollowUp' }, emailSource: { address: String, name: String, messageId: String, subject: String, trackingToken: String } }, { timestamps: true });
+const ticketSchema = new mongoose.Schema({ ticketId: { type: String, unique: true }, customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' }, serviceCentreId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCentre' }, deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device' }, category: String, issueType: String, description: String, images: [String], originalImages: [String], annotatedImages: [String], attachments: [{ _id: false, filename: String, contentType: String, size: Number, path: String }], location: String, preferredServiceDate: Date, deviceCount: Number, closedAt: Date, priority: String, status: { type: String, default: 'Open' }, assignedEngineer: String, assignedEngineerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Engineer' }, assignedAt: Date, expectedTAT: String, responseTarget: String, resolutionTarget: String, slaTargetAt: Date, slaStatus: { type: String, enum: ['Healthy', 'At Risk', 'Escalated', 'SLA Breached', 'Resolved'], default: 'Healthy' }, escalationLevel: { type: Number, default: 0 }, escalationStatus: { type: String, enum: ['Not Escalated', 'At Risk', 'Escalated', 'SLA Breached', 'Resolved'], default: 'Not Escalated' }, escalationReason: String, escalatedAt: Date, serviceFollowUpId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceFollowUp' }, emailSource: { address: String, name: String, messageId: String, subject: String, trackingToken: String } }, { timestamps: true });
 // The public tracking link mailed to whoever raised the ticket by email.
 ticketSchema.index({ 'emailSource.trackingToken': 1 }, { unique: true, partialFilterExpression: { 'emailSource.trackingToken': { $type: 'string' } } });
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
@@ -182,7 +182,9 @@ const emailRequestSchema = new mongoose.Schema({
   subject: String,
   text: String,
   receivedAt: Date,
-  attachments: [{ filename: String, contentType: String, size: Number, path: String }],
+  // status 'stored' (path set) or 'rejected' (with rejectReason: not an allowed type, contents
+  // that do not match it, too large, too many); none on records stored before files were checked.
+  attachments: [{ filename: String, contentType: String, size: Number, path: String, status: String, rejectReason: String }],
   status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
   extraction: {
     source: { type: String, enum: ['claude', 'none'], default: 'none' },
@@ -195,6 +197,13 @@ const emailRequestSchema = new mongoose.Schema({
     contactPhone: String,
     preferredDateText: String,
     missingDetails: [String],
+    // Read from the email or its attached files (invoices, photos, device lists).
+    invoiceNumber: String,
+    purchaseDateText: String,
+    attachmentNotes: String,
+    // Attached files Claude read, and those it could not (HEIC photos, other types, over the limit).
+    attachmentsRead: [String],
+    attachmentsSkipped: [{ _id: false, filename: String, reason: String }],
     error: String,
   },
   draft: {

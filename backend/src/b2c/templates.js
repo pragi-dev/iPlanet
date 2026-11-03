@@ -3,10 +3,11 @@
 // and line breaks are removed from anything placed in the subject so a value
 // can never add an email header.
 // `ticketNumber` is the same as `reference`.
-// `registrationLink` and `linkExpiry` are given only to the registration request.
-const PLACEHOLDERS = ['reference', 'ticketNumber', 'customerName', 'subject', 'category', 'message', 'serialNumber', 'issueSummary', 'companyName', 'registrationLink', 'linkExpiry'];
+// `registrationLink` and `linkExpiry` are given only to the registration request;
+// `retailTeam`, `customerEmail`, `region` and `emailText` only to the retail transfer.
+const PLACEHOLDERS = ['reference', 'ticketNumber', 'customerName', 'subject', 'category', 'message', 'serialNumber', 'issueSummary', 'companyName', 'registrationLink', 'linkExpiry', 'retailTeam', 'customerEmail', 'region', 'emailText'];
 // A line using one of these is left out when its value is empty (e.g. no verified serial number).
-const OPTIONAL_LINE = ['serialNumber'];
+const OPTIONAL_LINE = ['serialNumber', 'region'];
 
 const oneLine = value => String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
 const valueOf = (vars, name) => (name === 'ticketNumber' ? vars.reference : vars[name]) ?? '';

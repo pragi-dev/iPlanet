@@ -113,11 +113,9 @@ before(async () => {
   users.cm = await make('cluster', 'cluster_manager', { b2cRegions: ['Test Region North', 'Test Region West'] });
   // Revoked: still lists East, but holds no B2C role, so must never be assigned.
   users.formerEast = await make('former-east', null, { b2cRegions: ['Test Region East'] });
-  users.rbh1 = await make('rbh-one', 'rbh');
-  users.rbh2 = await make('rbh-two', 'rbh');
-  users.trainer = await make('trainer', 'trainer');
-  users.cd = await make('cd-am', 'cd_team_am');
+  // Two Service Executives cover every region.
   users.sel = await make('sel', 'service_excellence_lead');
+  users.sel2 = await make('sel-two', 'service_excellence_lead');
   users.desk = await make('desk', null, { role: 'iplanet_service' });
   users.corporate = await User.create({ name: 'corp', email: 'corp@staff.test', password: hashPassword('Test@123'), role: 'corporate_admin' });
   const app = express();
@@ -194,7 +192,7 @@ test('one email becomes one enriched, routed ticket; the acknowledgement waits f
 
   const approved = await api(users.admin, 'PUT', '/settings', { templates: DEFAULT_TEMPLATES.map(template => ({ ...template, approved: true })) });
   assert.equal(approved.status, 200);
-  assert.ok(approved.body.templates.every(template => template.approved && template.approvedBy === 'admin'));
+  assert.ok(approved.body.templates.filter(template => template.key !== 'retail_transfer').every(template => template.approved && template.approvedBy === 'admin'), 'customer templates are approved by an admin; the internal retail hand-over starts approved');
   await service.runCycle('test');
   ticket = await ticketOf(inbound);
   assert.equal(ticket.acknowledgement.status, 'sent');
@@ -234,7 +232,7 @@ test('emails from an unregistered sender without an identifier go to the admin-o
   const inbound = await deliver({ from: UNREGISTERED, subject: 'Store experience', body: 'The store staff did not help me.' });
   let ticket = await ticketOf(inbound);
   assert.equal(ticket.status, 'Pending Triage');
-  assert.deepEqual(ticket.triage.reasons, ['missing_identifier', 'crm_no_match', 'customer_not_found']);
+  assert.deepEqual(ticket.triage.reasons, ['missing_identifier', 'crm_no_match', 'customer_not_found', 'retail_transfer'], 'a Retail case waits for the B2C Admin to transfer it');
   assert.equal(ticket.category, 'Retail');
   assert.equal(ticket.acknowledgement.status, 'sent', 'the customer is still acknowledged');
   assert.equal((await api(users.cm, 'GET', `/tickets/${ticket._id}`)).status, 404);
@@ -244,9 +242,10 @@ test('emails from an unregistered sender without an identifier go to the admin-o
   const detail = await api(users.admin, 'GET', `/tickets/${ticket._id}`);
   assert.ok(detail.body.allowedActions.includes('complete_triage'));
   assert.equal((await act(users.admin, ticket, 'complete_triage', { category: 'Gadgets' })).status, 400);
-  // A serial number added in triage finds the device, and its region is used even though
-  // the sender is not its registered customer.
-  const triaged = await act(users.admin, ticket, 'complete_triage', { category: 'Retail', identifiers: [{ type: 'serialNumber', value: 'testserial02' }] });
+  assert.match((await act(users.admin, ticket, 'complete_triage', { category: 'Retail' })).body.message, /Transfer to Retail/, 'Retail cases are transferred, not routed to a Cluster Manager');
+  // Treated as a Service escalation instead: a serial number added in triage finds the device,
+  // and its region is used even though the sender is not its registered customer.
+  const triaged = await act(users.admin, ticket, 'complete_triage', { category: 'Service', identifiers: [{ type: 'serialNumber', value: 'testserial02' }] });
   assert.equal(triaged.status, 200);
   ticket = triaged.body.ticket;
   assert.equal(ticket.status, 'Engineer Assigned');
@@ -333,7 +332,7 @@ test('attachments: only safe files are stored and they download only for authori
   assert.match(download.headers.get('content-disposition'), /^attachment;/);
   assert.equal(download.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(download.body.toString(), '%PDF-1.4 test invoice');
-  assert.equal((await api(users.rbh1, 'GET', `/tickets/${ticket._id}/attachments/${pdf.downloadKey}`)).status, 404);
+  assert.equal((await api(users.sel2, 'GET', `/tickets/${ticket._id}/attachments/${pdf.downloadKey}`)).status, 404);
   assert.equal((await api(users.cm, 'GET', `/tickets/${ticket._id}/attachments/..%2F..%2Fsecret`)).status, 404);
   assert.ok(await B2CAuditEvent.exists({ ticketId: ticket._id, action: 'attachment_downloaded' }));
 });
@@ -344,9 +343,9 @@ test('access control: only B2C staff, admin-only areas, no data from other queue
   assert.equal((await api(users.corporate, 'GET', '/dashboard')).status, 403);
   for (const url of ['/settings', '/integrations/health', '/inbound', '/outbound', '/test-adapter/outbox']) assert.equal((await api(users.cm, 'GET', url)).status, 403, url);
   assert.equal((await api(users.cm, 'PUT', '/settings', { validation: { mode: 'none' } })).status, 403);
-  const rbhQueue = await api(users.rbh1, 'GET', '/tickets');
-  assert.equal(rbhQueue.status, 200);
-  assert.equal(rbhQueue.body.total, 0, 'nothing has reached the RBH level yet');
+  const executiveQueue = await api(users.sel2, 'GET', '/tickets');
+  assert.equal(executiveQueue.status, 200);
+  assert.equal(executiveQueue.body.total, 0, 'nothing has reached the Service Executive level yet');
   // B2C-only accounts are kept out of B2B data; B2B accounts are unaffected.
   assert.equal((await fetch(`${baseUrl}/api/coverage`, { headers: { Authorization: `Bearer ${token(users.cm)}` } })).status, 403);
   assert.equal((await fetch(`${baseUrl}/api/coverage`, { headers: { Authorization: `Bearer ${token(users.desk)}` } })).status, 200);
@@ -356,7 +355,7 @@ test('access control: only B2C staff, admin-only areas, no data from other queue
   assert.ok(cmNotifications.body.length > 0);
   assert.ok(cmNotifications.body.every(item => String(item.user) === String(users.cm._id) && item.portalRole === 'b2c_staff' && item.action.route.startsWith('/b2c/tickets/')));
   assert.ok((await api(users.cm, 'GET', '/notifications/unread-count')).body.count > 0);
-  assert.equal((await api(users.rbh1, 'PATCH', `/notifications/${cmNotifications.body[0]._id}/read`, {})).status, 404);
+  assert.equal((await api(users.sel2, 'PATCH', `/notifications/${cmNotifications.body[0]._id}/read`, {})).status, 404);
   assert.equal((await api(users.cm, 'PATCH', '/notifications/read-all', {})).status, 200);
   assert.equal((await api(users.cm, 'GET', '/notifications/unread-count')).body.count, 0);
   // Revoking the role takes effect without waiting for the token to expire.
@@ -368,7 +367,7 @@ test('access control: only B2C staff, admin-only areas, no data from other queue
 test('full escalation: accept, start work, clarify, customer reply, reroute, claim, validate, reject, resolve, close, reopen', { skip }, async () => {
   const first = await B2CEscalation.findOne({ reference: /-000001$/ }).lean();
   const ref = first.reference;
-  assert.equal((await act(users.rbh1, first, 'start')).status, 404, 'not visible to other levels');
+  assert.equal((await act(users.sel, first, 'start')).status, 404, 'not visible to the next level yet');
   assert.equal((await act(users.cm, first, 'start')).status, 403, 'work starts only after the engineer accepts');
   assert.equal((await act(users.cm, first, 'accept')).body.ticket.status, 'Engineer Accepted');
   assert.equal((await act(users.cm, first, 'start')).body.ticket.status, 'In Progress');
@@ -389,44 +388,36 @@ test('full escalation: accept, start work, clarify, customer reply, reroute, cla
   assert.notEqual(String(stranger.ticketId), String(first._id));
 
   assert.equal((await act(users.cm, first, 'escalate', { reason: 'x' })).status, 404, 'no manual escalation; the SLA escalates');
-  assert.equal((await act(users.cm, first, 'reroute', { levelKey: 'rbh' })).status, 400, 'a reason is required');
-  const escalated = await act(users.cm, first, 'reroute', { levelKey: 'rbh', reason: 'Needs regional approval for goodwill replacement.' });
-  assert.equal(escalated.body.ticket.workflow.currentLevel, 'rbh');
-  assert.equal(escalated.body.ticket.status, 'Open', 'two RBHs: it waits in the RBH queue');
+  assert.equal((await act(users.cm, first, 'reroute', { levelKey: 'service_excellence_lead' })).status, 400, 'a reason is required');
+  const escalated = await act(users.cm, first, 'reroute', { levelKey: 'service_excellence_lead', reason: 'Needs a replacement unit.' });
+  assert.equal(escalated.body.ticket.workflow.currentLevel, 'service_excellence_lead');
+  assert.equal(escalated.body.ticket.status, 'Open', 'two Service Executives: it waits in their queue');
   assert.deepEqual(escalated.body.allowedActions, ['add_note'], 'the former assignee keeps read access only');
-  const queue = await api(users.rbh2, 'GET', '/tickets?assignee=unassigned');
+  const queue = await api(users.sel2, 'GET', '/tickets?assignee=unassigned');
   assert.ok(queue.body.items.some(item => item.reference === ref));
 
-  const claimed = (await act(users.rbh1, first, 'claim')).body.ticket;
-  assert.equal(claimed.workflow.assignee.name, 'rbh-one');
+  const claimed = (await act(users.sel, first, 'claim')).body.ticket;
+  assert.equal(claimed.workflow.assignee.name, 'sel');
   assert.equal(claimed.status, 'Engineer Accepted', 'taking ownership accepts the work');
-  assert.equal((await act(users.rbh2, first, 'claim')).status, 403);
-  await act(users.rbh1, first, 'start');
-  assert.equal((await act(users.rbh1, first, 'propose_resolution', { resolutionSummary: 'Approved replacement.' })).status, 400);
-  const proposed = await act(users.rbh1, first, 'propose_resolution', { resolutionSummary: 'Approved replacement unit.', customerMessage: 'We will replace your device this week.' });
-  assert.equal(proposed.body.ticket.status, 'Pending Validation');
-  assert.equal(proposed.body.ticket.validation.validatorLevel, 'trainer', 'validated by the next level on the path');
-  assert.equal((await act(users.rbh1, first, 'approve_resolution')).status, 403, 'no self-validation');
-  assert.equal((await act(users.cm, first, 'approve_resolution')).status, 403);
-  assert.equal((await api(users.trainer, 'GET', `/tickets/${first._id}`)).status, 200);
-
-  const rejected = await act(users.trainer, first, 'reject_resolution', { reason: 'Attach the RBH approval note.' });
-  assert.equal(rejected.body.ticket.status, 'In Progress');
-  await act(users.rbh1, first, 'propose_resolution', { resolutionSummary: 'Approved replacement unit (note attached).', customerMessage: 'We will replace your device this week.' });
-  const approved = await act(users.trainer, first, 'approve_resolution', {});
-  assert.equal(approved.body.ticket.status, 'Completed');
+  assert.equal((await act(users.sel2, first, 'claim')).status, 403);
+  await act(users.sel, first, 'start');
+  assert.equal((await act(users.sel, first, 'propose_resolution', { resolutionSummary: 'Approved replacement.' })).status, 400);
+  const completed = await act(users.sel, first, 'propose_resolution', { resolutionSummary: 'Approved replacement unit.', customerMessage: 'We will replace your device this week.' });
+  assert.equal(completed.body.ticket.status, 'Completed', 'the Service Executive\'s repair needs no approval');
+  assert.equal(new Date(completed.body.ticket.autoCloseAt).getTime(), now().getTime() + 5 * 60_000, 'closes automatically 5 minutes later');
   await service.runCycle('test');
   const final = sent().find(message => message.subject === `[${ref}] Update on your concern`);
   assert.match(final.text, /We will replace your device this week\./);
 
-  assert.equal((await act(users.rbh1, first, 'close')).body.ticket.status, 'Closed');
-  assert.equal((await act(users.trainer, first, 'reopen', { reason: 'x' })).status, 403);
+  const closed = (await act(users.sel, first, 'close')).body.ticket;
+  assert.deepEqual([closed.status, closed.autoCloseAt], ['Closed', null], 'closing it first cancels the automatic close');
+  assert.equal((await act(users.cm, first, 'reopen', { reason: 'x' })).status, 403);
   const reopened = await act(users.admin, first, 'reopen', { reason: 'Customer reports the replacement has the same fault.' });
   assert.equal(reopened.body.ticket.status, 'Reopened');
   assert.equal(reopened.body.ticket.reopenCount, 1);
 
   const audit = reopened.body.audit.map(event => event.action);
-  for (const action of ['accept', 'start', 'request_clarification', 'customer_replied', 'reroute', 'claim', 'propose_resolution', 'reject_resolution', 'approve_resolution', 'close', 'reopen']) assert.ok(audit.includes(action), action);
+  for (const action of ['accept', 'start', 'request_clarification', 'customer_replied', 'reroute', 'claim', 'propose_resolution', 'close', 'reopen']) assert.ok(audit.includes(action), action);
   assert.ok(reopened.body.audit.filter(event => event.actor?.role !== 'system').every(event => event.actor.name));
   assert.equal(reopened.body.conversation.filter(item => item.direction === 'inbound').length, 2);
 });
@@ -455,7 +446,7 @@ test('SLA escalation follows the B2B rules: at risk, then breached and escalated
   const breach = notifications.filter(item => item.title === 'SLA breached');
   assert.equal(breach.length, 1, 'recorded and notified once');
   const told = breach[0].users.map(user => String(user._id));
-  for (const person of [users.cm, users.rbh1, users.rbh2, users.admin]) assert.ok(told.includes(String(person._id)), 'owner, the next level and admins are notified');
+  for (const person of [users.cm, users.sel, users.sel2, users.admin]) assert.ok(told.includes(String(person._id)), 'owner, the next level and admins are notified');
   const audit = await B2CAuditEvent.find({ ticketId: ticket._id, action: 'sla_escalation' }).lean();
   assert.equal(audit.length, 2);
   assert.equal(audit[1].actor.name, 'SLA Monitor');
@@ -559,14 +550,15 @@ test('staff provisioning: grant, revoke and list B2C roles; corporate accounts a
   assert.equal((await api(lead, 'GET', '/me')).body.b2cRole, 'service_excellence_lead');
 
   // An existing Service account keeps its role and gains B2C access.
-  await run(['grant', '--email', 'desk@staff.test', '--role', 'trainer']);
+  await run(['grant', '--email', 'desk@staff.test', '--role', 'cluster_manager']);
   const desk = await User.findOne({ email: 'desk@staff.test' }).lean();
   assert.equal(desk.role, 'iplanet_service');
   assert.equal((await api(desk, 'GET', '/me')).status, 200);
 
   await assert.rejects(run(['grant', '--email', 'corp@staff.test', '--role', 'b2c_admin']), StaffCommandError);
   await assert.rejects(run(['grant', '--email', 'x@staff.test', '--role', 'superuser', '--name', 'X']), StaffCommandError);
-  await assert.rejects(run(['grant', '--email', 'nobody@staff.test', '--role', 'rbh']), /needs --name/);
+  await assert.rejects(run(['grant', '--email', 'nobody@staff.test', '--role', 'cluster_manager']), /needs --name/);
+  await assert.rejects(run(['grant', '--email', 'desk@staff.test', '--role', 'rbh']), StaffCommandError, 'removed levels cannot be granted');
   assert.ok((await run(['list'])).lines.some(line => line.startsWith('new.lead@staff.test\tservice_excellence_lead')));
 
   await run(['revoke', '--email', 'desk@staff.test']);
@@ -665,7 +657,7 @@ test('manual review: only an admin, only a region defined on devices, a reason w
   assert.match((await triage({})).body.message, /No device record gives/);
   assert.equal((await triage({ region: 'Atlantis', regionReason: 'x' })).status, 400, 'not a region on any device');
   assert.match((await triage({ region: 'Test Region North' })).body.message, /reason/);
-  assert.equal((await triage({ region: 'Test Region North', regionReason: 'Confirmed with the customer', userId: String(users.rbh1._id) })).status, 400, 'not a Cluster Manager');
+  assert.equal((await triage({ region: 'Test Region North', regionReason: 'Confirmed with the customer', userId: String(users.sel2._id) })).status, 400, 'not a Cluster Manager');
   assert.equal((await triage({ identifiers: [{ type: 'serialNumber', value: '<script>' }] })).status, 400, 'malformed serial');
   // Nothing was recorded by the refused attempts.
   assert.equal(await B2CAuditEvent.countDocuments({ ticketId: ticket._id, action: { $in: ['region_set', 'triage_completed'] } }), 0);
@@ -698,7 +690,7 @@ test('manual review: only an admin, only a region defined on devices, a reason w
 
 test('retries and reprocessing never overwrite a manual or progressed assignment', { skip }, async () => {
   const west = regionTickets.west;
-  assert.equal((await act(users.admin, west, 'reroute', { levelKey: 'rbh', userId: String(users.rbh1._id), reason: 'Goodwill decision needed' })).status, 200);
+  assert.equal((await act(users.admin, west, 'reroute', { levelKey: 'service_excellence_lead', userId: String(users.sel._id), reason: 'Goodwill decision needed' })).status, 200);
   const manual = regionTickets.manual;
   assert.equal((await act(users.cm, manual, 'accept')).status, 200);
   // Even if the device record changes afterwards.
@@ -862,7 +854,7 @@ test('customer and device details are visible only to B2C staff who can see the 
   const ticket = await B2CEscalation.findOne({ 'customerMatch.status': 'matched', 'workflow.assignee.userId': users.cm._id }).lean();
   assert.equal((await api(users.cm, 'GET', `/tickets/${ticket._id}`)).body.ticket.customerMatch.status, 'matched');
   for (const user of [users.corporate, users.desk]) assert.equal((await api(user, 'GET', `/tickets/${ticket._id}`)).status, 403);
-  assert.equal((await api(users.rbh1, 'GET', `/tickets/${ticket._id}`)).status, 404, 'not visible to other levels');
+  assert.equal((await api(users.sel2, 'GET', `/tickets/${ticket._id}`)).status, 404, 'not visible to other levels');
   assert.equal((await api(null, 'GET', `/tickets/${ticket._id}`)).status, 401);
 });
 
@@ -1144,4 +1136,254 @@ test('IMAP connection check: admin only, no secrets, recorded, rate limited; SMT
   assert.equal((await api(users.admin, 'POST', '/integrations/imap/verify')).status, 429);
   advanceMinutes(16);
   assert.equal((await api(users.admin, 'POST', '/integrations/imap/verify')).status, 200);
+});
+
+test('the flow: the region\'s Cluster Manager is notified and assigns to a Service Executive', { skip }, async () => {
+  {
+    const inbound = await deliver({ from: 'default.flow@example.test', subject: 'repair needed', body: 'My phone needs a repair.\nSerial No: TESTSERIAL01' });
+    const ticket = await ticketOf(inbound);
+    assert.deepEqual([ticket.workflow.path, ticket.workflow.currentLevel, ticket.workflow.assignee?.name], [['cluster_manager', 'service_excellence_lead'], 'cluster_manager', 'cluster']);
+    assert.ok(await Notification.exists({ user: users.cm._id, message: new RegExp(ticket.reference) }), 'the Cluster Manager is notified');
+
+    const detail = await api(users.cm, 'GET', `/tickets/${ticket._id}`);
+    assert.equal(detail.body.workflow.nextLevel, 'service_excellence_lead');
+    // Level staff see what the customer wrote, not our replies, and the device's other escalations.
+    assert.equal(detail.body.outboundHidden, true);
+    assert.ok(detail.body.conversation.length > 0 && detail.body.conversation.every(message => message.direction === 'inbound'));
+    assert.equal((await api(users.admin, 'GET', `/tickets/${ticket._id}`)).body.outboundHidden, false, 'admins see every email');
+    assert.deepEqual(detail.body.serviceHistory.serialNumbers, ['TESTSERIAL01']);
+    const earlier = await B2CEscalation.countDocuments({ _id: { $ne: ticket._id }, $or: [{ 'regionAssignment.serialNumber': 'TESTSERIAL01' }, { identifiers: { $elemMatch: { type: 'serialNumber', value: 'TESTSERIAL01' } } }] });
+    assert.ok(earlier > 0, 'the suite has earlier escalations for this device');
+    assert.equal(detail.body.serviceHistory.tickets.length, Math.min(earlier, 20));
+    assert.ok(detail.body.serviceHistory.tickets.every(item => item._id !== String(ticket._id) && typeof item.canOpen === 'boolean'));
+    // Warranty & Coverage, as in the iPlanet Service portal: the ticket's device, and the devices in each person's regions.
+    await Device.updateOne({ serialNumber: 'TESTSERIAL01' }, { warrantyStatus: 'Active', warrantyExpiry: new Date('2027-03-01'), amcStatus: 'Expired' });
+    const withCoverage = (await api(users.cm, 'GET', `/tickets/${ticket._id}`)).body.deviceCoverage;
+    assert.deepEqual([withCoverage.serialNumber, withCoverage.warrantyStatus, withCoverage.amcStatus, withCoverage.coverageStatus, withCoverage.entitlements], ['TESTSERIAL01', 'Active', 'Expired', 'Covered', ['Repair', 'Parts Replacement', 'Remote Support']]);
+    const cmCoverage = await api(users.cm, 'GET', '/coverage');
+    assert.equal(cmCoverage.status, 200);
+    const regionOf = location => String(location || '').trim().replace(/\s+/g, ' ');
+    assert.ok(cmCoverage.body.devices.length > 0 && cmCoverage.body.devices.every(device => ['Test Region North', 'Test Region West'].includes(regionOf(device.location))), 'a Cluster Manager sees the devices in their regions');
+    assert.ok(cmCoverage.body.devices.some(device => device.serialNumber === 'TESTSERIAL02'), 'region names match however they are spaced');
+    assert.ok(!cmCoverage.body.devices.some(device => device.serialNumber === 'DEVEAST001'));
+    assert.ok(cmCoverage.body.summary.warrantyActive >= 1 && cmCoverage.body.summary.total === cmCoverage.body.devices.length);
+    const allDevices = await Device.countDocuments();
+    assert.equal((await api(users.sel, 'GET', '/coverage')).body.devices.length, allDevices, 'no region restriction: every device');
+    assert.equal((await api(users.admin, 'GET', '/coverage')).body.devices.length, allDevices);
+    assert.equal((await api(users.desk, 'GET', '/coverage')).status, 403, 'B2C staff only');
+    assert.equal((await act(users.cm, ticket, 'assign', { userId: String(users.admin._id), levelKey: 'b2c_admin' })).status, 400, 'only this level or the next one');
+    assert.equal((await act(users.cm, ticket, 'assign', { userId: String(users.cm._id), levelKey: 'service_excellence_lead' })).status, 400, 'the person must hold the next level');
+    const handed = await act(users.cm, ticket, 'assign', { userId: String(users.sel._id), levelKey: 'service_excellence_lead' });
+    assert.equal(handed.status, 200);
+    assert.deepEqual([handed.body.ticket.workflow.currentLevel, handed.body.ticket.workflow.assignee.name, handed.body.ticket.status], ['service_excellence_lead', 'sel', 'Engineer Assigned']);
+    assert.ok(await Notification.exists({ user: users.sel._id, message: new RegExp(`${ticket.reference}.*assigned to you`) }), 'the Service Executive is notified');
+    // The staff list shows each person's open workload, to choose someone available.
+    const openFor = async user => (await api(users.cm, 'GET', '/staff')).body.find(item => String(item._id) === String(user._id)).activeTickets;
+    assert.equal(await openFor(users.sel), await B2CEscalation.countDocuments({ 'workflow.assignee.userId': users.sel._id, status: { $nin: ['Pending Triage', 'Completed', 'Closed'] } }));
+    assert.ok(await openFor(users.sel) >= 1);
+    assert.equal((await api(users.cm, 'GET', `/tickets/${ticket._id}`)).status, 200, 'the Cluster Manager can still follow it');
+
+    assert.equal((await act(users.sel, ticket, 'accept')).body.ticket.status, 'Engineer Accepted');
+    assert.equal((await act(users.sel, ticket, 'start')).body.ticket.status, 'In Progress');
+    const completed = await act(users.sel, ticket, 'propose_resolution', { resolutionSummary: 'Charging port replaced.', customerMessage: 'Your phone has been repaired.' });
+    assert.equal(completed.body.ticket.status, 'Completed', 'no approval for the Service Executive\'s repair');
+    assert.equal(completed.body.workflow.autoCloseMinutes, 5);
+    // Closed automatically 5 minutes after completion, not before.
+    advanceMinutes(4);
+    assert.deepEqual(await service.closeDueTickets(), []);
+    advanceMinutes(1);
+    assert.deepEqual((await service.closeDueTickets()).map(String), [String(ticket._id)]);
+    const autoClosed = await B2CEscalation.findById(ticket._id).lean();
+    assert.deepEqual([autoClosed.status, autoClosed.closure.reason, autoClosed.closure.by.name, autoClosed.autoCloseAt], ['Closed', 'Resolved', 'Auto-close', null]);
+    assert.ok(await B2CAuditEvent.exists({ ticketId: ticket._id, action: 'auto_closed', 'actor.name': 'Auto-close' }));
+    assert.deepEqual(await service.closeDueTickets(), [], 'closed once');
+
+    // A repair the Cluster Manager does itself is approved by a B2C admin, then closes the same way.
+    const own = await ticketOf(await deliver({ from: 'own.repair@example.test', subject: 'repair needed', body: 'Screen flickers.\nSerial No: TESTSERIAL01' }));
+    await act(users.cm, own, 'accept');
+    await act(users.cm, own, 'start');
+    const proposed = await act(users.cm, own, 'propose_resolution', { resolutionSummary: 'Display cable reseated.', customerMessage: 'Your phone has been repaired.' });
+    assert.deepEqual([proposed.body.ticket.status, proposed.body.ticket.validation.validatorLevel], ['Pending Validation', null], 'a B2C admin approves');
+    assert.equal((await act(users.cm, own, 'approve_resolution')).status, 403, 'no self-validation');
+    assert.equal((await act(users.admin, own, 'reject_resolution', { reason: 'Add the test result.' })).body.ticket.status, 'In Progress');
+    await act(users.cm, own, 'propose_resolution', { resolutionSummary: 'Display cable reseated; tested OK.', customerMessage: 'Your phone has been repaired.' });
+    const approved = await act(users.admin, own, 'approve_resolution', {});
+    assert.equal(approved.body.ticket.status, 'Completed');
+    // Reopening before it closes cancels the automatic close.
+    assert.equal((await act(users.admin, own, 'reopen', { reason: 'Still flickers.' })).body.ticket.autoCloseAt, null);
+    advanceMinutes(6);
+    assert.equal((await service.closeDueTickets()).length, 0);
+    assert.equal((await B2CEscalation.findById(own._id).lean()).status, 'Reopened');
+  }
+});
+
+test('removed levels are cleared on startup: settings, staff and tickets move to Cluster Manager → Service Executive', { skip }, async () => {
+  // State an earlier five-level version could have left behind.
+  await b2cModels.B2CSettings.collection.updateOne({ key: 'default' }, { $push: { workflowLevels: { $each: [{ key: 'rbh', label: 'Regional Business Head', order: 2, enabled: true }, { key: 'trainer', label: 'Trainer', order: 3, enabled: false }] } }, $set: { validation: { mode: 'level', levelKey: 'trainer' } } });
+  const former = await User.create({ name: 'former-rbh', email: 'former-rbh@staff.test', password: hashPassword('Test@123'), role: 'b2c_staff', b2cRole: 'rbh' });
+  const base = (await B2CEscalation.findOne({ reference: /-000001$/ }).lean());
+  const raw = (reference, extra) => ({ ...base, _id: new mongoose.Types.ObjectId(), reference, sourceEmailId: undefined, ...extra });
+  const working = raw('B2C-2026-990001', { status: 'In Progress', workflow: { path: ['cluster_manager', 'rbh', 'trainer', 'service_excellence_lead'], currentLevel: 'rbh', assignee: { userId: former._id, name: 'former-rbh' }, assignedAt: new Date() } });
+  const validating = raw('B2C-2026-990002', { status: 'Pending Validation', workflow: { path: ['cluster_manager', 'rbh', 'service_excellence_lead'], currentLevel: 'cluster_manager', assignee: { userId: users.cm._id, name: 'cluster' } }, validation: { validatorLevel: 'rbh', proposedBy: { userId: users.cm._id, name: 'cluster' } } });
+  delete working.sourceEmailId; delete validating.sourceEmailId;
+  await B2CEscalation.collection.insertMany([working, validating]);
+
+  await ensureB2CIndexes();
+  await ensureB2CIndexes(); // repeating it changes nothing more
+
+  const settings = await b2cModels.B2CSettings.findOne({ key: 'default' }).lean();
+  assert.deepEqual(settings.workflowLevels.map(level => level.key).sort(), ['cluster_manager', 'service_excellence_lead']);
+  assert.deepEqual([settings.validation.mode, settings.validation.levelKey], ['executive_direct', null]);
+  assert.equal((await User.findById(former._id).lean()).b2cRole, null, 'staff of a removed level lose B2C access');
+  assert.equal((await api(former, 'GET', '/me')).status, 403);
+  const moved = await B2CEscalation.findById(working._id).lean();
+  assert.deepEqual([moved.workflow.path, moved.workflow.currentLevel, moved.workflow.assignee, moved.status], [['cluster_manager', 'service_excellence_lead'], 'cluster_manager', null, 'Open'], 'back to the Cluster Manager queue');
+  const pending = await B2CEscalation.findById(validating._id).lean();
+  assert.deepEqual([pending.workflow.path, pending.status, pending.validation.validatorLevel], [['cluster_manager', 'service_excellence_lead'], 'Pending Validation', null], 'proposed at the first level: a B2C admin validates');
+  const events = await B2CAuditEvent.find({ ticketId: { $in: [working._id, validating._id] }, action: 'workflow_level_removed' }).lean();
+  assert.equal(events.length, 2, 'recorded once per ticket');
+  assert.equal(events.find(event => String(event.ticketId) === String(working._id)).details.removedLevel, 'Regional Business Head');
+  assert.equal((await api(users.cm, 'GET', `/tickets/${working._id}`)).body.allowedActions.includes('claim'), true, 'a Cluster Manager can take it again');
+});
+
+test('a Cluster Manager who has not assigned an escalation to a Service Executive within 3 hours is reminded once', { skip }, async () => {
+  const ids = list => list.map(String);
+  const ticket = await ticketOf(await deliver({ from: 'reminder.one@example.test', subject: 'repair needed', body: 'Phone will not charge.\nSerial No: TESTSERIAL01' }));
+  assert.deepEqual([ticket.workflow.currentLevel, ticket.workflow.assignee.name], ['cluster_manager', 'cluster']);
+  assert.equal(new Date(ticket.assignReminderAt).getTime(), now().getTime() + 3 * 3_600_000, 'due 3 hours after it reached the Cluster Manager');
+  // Handed on in time: no reminder.
+  const handed = await ticketOf(await deliver({ from: 'reminder.two@example.test', subject: 'repair needed', body: 'Screen cracked.\nSerial No: TESTSERIAL01' }));
+  assert.equal((await act(users.cm, handed, 'assign', { userId: String(users.sel._id), levelKey: 'service_excellence_lead' })).status, 200);
+  assert.equal((await B2CEscalation.findById(handed._id).lean()).assignReminderAt, null);
+
+  notifications.length = 0;
+  advanceMinutes(179);
+  assert.ok(!ids(await service.sendAssignmentReminders()).includes(String(ticket._id)), 'not before 3 hours');
+  advanceMinutes(1);
+  const reminded = ids(await service.sendAssignmentReminders());
+  assert.ok(reminded.includes(String(ticket._id)));
+  assert.ok(!reminded.includes(String(handed._id)), 'already with a Service Executive');
+  const reminder = notifications.find(item => item.title === 'Reminder: assign to a Service Executive' && item.message.includes(ticket.reference));
+  assert.deepEqual(reminder.users.map(user => String(user._id || user.userId)), [String(users.cm._id)], 'the Cluster Manager who holds it');
+  assert.match(reminder.message, /for 3 hours without being assigned to a Service Executive/);
+  const stored = await B2CEscalation.findById(ticket._id).lean();
+  assert.deepEqual([stored.assignReminderAt, Boolean(stored.assignReminderSentAt)], [null, true]);
+  assert.ok(await B2CAuditEvent.exists({ ticketId: ticket._id, action: 'assignment_reminder', 'actor.name': 'Assignment reminder' }));
+  advanceMinutes(240);
+  assert.ok(!ids(await service.sendAssignmentReminders()).includes(String(ticket._id)), 'reminded once');
+  const detail = await api(users.cm, 'GET', `/tickets/${ticket._id}`);
+  assert.ok(detail.body.ticket.assignReminderSentAt);
+});
+
+test('a Service Executive who has not accepted and started the work within 3 hours is reminded, and so is the Cluster Manager', { skip }, async () => {
+  const ids = list => list.map(String);
+  const late = await ticketOf(await deliver({ from: 'start.late@example.test', subject: 'repair needed', body: 'Speaker crackles.\nSerial No: TESTSERIAL01' }));
+  const onTime = await ticketOf(await deliver({ from: 'start.ontime@example.test', subject: 'repair needed', body: 'Button stuck.\nSerial No: TESTSERIAL01' }));
+  for (const [ticket, executive] of [[late, users.sel], [onTime, users.sel2]]) {
+    assert.equal((await act(users.cm, ticket, 'assign', { userId: String(executive._id), levelKey: 'service_excellence_lead' })).status, 200);
+  }
+  const assigned = await B2CEscalation.findById(late._id).lean();
+  assert.equal(new Date(assigned.startReminderAt).getTime(), now().getTime() + 3 * 3_600_000, 'due 3 hours after assignment');
+  assert.equal(assigned.startAssignedBy.name, 'cluster');
+  // Accepted and started in time: no reminder.
+  await act(users.sel2, onTime, 'accept');
+  assert.equal((await act(users.sel2, onTime, 'start')).body.ticket.startReminderAt, null);
+
+  notifications.length = 0;
+  advanceMinutes(179);
+  assert.ok(!ids(await service.sendStartReminders()).includes(String(late._id)), 'not before 3 hours');
+  advanceMinutes(1);
+  const reminded = ids(await service.sendStartReminders());
+  assert.ok(reminded.includes(String(late._id)));
+  assert.ok(!reminded.includes(String(onTime._id)), 'already started');
+  const recipients = title => notifications.filter(item => item.title === title && item.message.includes(late.reference)).flatMap(item => item.users.map(user => String(user._id || user.userId)));
+  assert.deepEqual(recipients('Reminder: accept and start the work'), [String(users.sel._id)]);
+  assert.deepEqual(recipients(`sel has not started ${late.reference}`), [String(users.cm._id)], 'the Cluster Manager who assigned it is told');
+  assert.ok(notifications.some(item => item.title === 'Reminder: accept and start the work' && /is not accepted yet/.test(item.message)));
+  const event = await B2CAuditEvent.findOne({ ticketId: late._id, action: 'start_reminder' }).lean();
+  assert.deepEqual([event.actor.name, event.details.executive, event.details.accepted, event.details.assignedBy], ['Start-work reminder', 'sel', false, 'cluster']);
+  advanceMinutes(240);
+  assert.ok(!ids(await service.sendStartReminders()).includes(String(late._id)), 'reminded once');
+  // Handing it to another executive starts the 3 hours again.
+  const reassigned = await act(users.admin, late, 'assign', { userId: String(users.sel2._id) });
+  assert.equal(reassigned.status, 200);
+  assert.equal(new Date(reassigned.body.ticket.startReminderAt).getTime(), now().getTime() + 3 * 3_600_000);
+});
+
+test('attachments: the serial number on an attached invoice routes the ticket, and the file is on the ticket for the Cluster Manager and Service Executive', { skip }, async () => {
+  const seen = [];
+  const attachmentReader = async ({ files }) => { seen.push(...files.map(file => [file.filename, file.contentType, file.content.subarray(0, 5).toString('latin1')])); return { status: 'read', serialNumbers: ['testserial01'], deviceModel: 'Test Device Model A', purchaseDateText: '1 March 2026', invoiceNumber: 'INV-77', storeName: 'Test Store', customerName: null, customerPhone: null, summary: 'Invoice for a Test Device Model A', read: files.map(file => file.filename), skipped: [] }; };
+  const reading = createB2CService({ ...serviceOptions, models: b2cModels, config, attachmentReader });
+  const invoice = Buffer.from('%PDF-1.4\n% purchase invoice\n');
+  const inbound = await deliver({ from: 'invoice.only@example.test', subject: 'repair needed', body: 'My phone needs a repair. The bill is attached.', attachments: [{ filename: 'invoice.pdf', contentType: 'application/pdf', content: invoice }] }, reading);
+  assert.deepEqual(seen, [['invoice.pdf', 'application/pdf', '%PDF-']], 'Claude gets the stored file');
+  const stored = await B2CInboundEmail.findById(inbound._id).lean();
+  assert.deepEqual([stored.attachmentReading.status, stored.attachmentReading.invoiceNumber, stored.attachmentReading.serialNumbers], ['read', 'INV-77', ['testserial01']]);
+  const ticket = await ticketOf(inbound);
+  assert.deepEqual(ticket.identifiers.filter(item => item.type === 'serialNumber').map(item => [item.value, item.source]), [['TESTSERIAL01', 'attachment']]);
+  assert.deepEqual([ticket.region, ticket.workflow.currentLevel, ticket.workflow.assignee?.name], ['Test Region North', 'cluster_manager', 'cluster'], 'routed by the device on the invoice');
+
+  const detail = await api(users.cm, 'GET', `/tickets/${ticket._id}`);
+  assert.deepEqual(detail.body.files.map(file => [file.filename, file.source]), [['invoice.pdf', 'email']]);
+  assert.equal(detail.body.conversation[0].attachmentReading.invoiceNumber, 'INV-77');
+  const download = async user => {
+    const response = await fetch(`${baseUrl}/api/b2c/tickets/${ticket._id}/attachments/${detail.body.files[0].downloadKey}`, { headers: { Authorization: `Bearer ${jwt.sign({ id: user._id, role: user.role, name: user.name }, JWT_SECRET)}` } });
+    return { status: response.status, content: Buffer.from(await response.arrayBuffer()) };
+  };
+  assert.ok((await download(users.cm)).content.equals(invoice), 'the Cluster Manager can open it');
+  assert.equal((await download(users.sel)).status, 404, 'not before the ticket is theirs');
+  await act(users.cm, ticket, 'assign', { userId: String(users.sel._id), levelKey: 'service_excellence_lead' });
+  assert.ok((await download(users.sel)).content.equals(invoice), 'the Service Executive can open it once assigned');
+  assert.deepEqual((await api(users.sel, 'GET', `/tickets/${ticket._id}`)).body.files.map(file => file.filename), ['invoice.pdf']);
+
+  // Without a Claude key the email is handled from its text alone, and the reason is kept.
+  const plain = createB2CService({ ...serviceOptions, models: b2cModels, config });
+  const unread = await deliver({ from: 'no.reader@example.test', subject: 'repair needed', body: 'Broken.', attachments: [{ filename: 'bill.pdf', contentType: 'application/pdf', content: invoice }] }, plain);
+  assert.equal((await B2CInboundEmail.findById(unread._id).lean()).attachmentReading.status, 'not_configured');
+});
+
+test('Enquiries are answered and closed by the B2C Admin; Retail cases are transferred to the retail team and closed', { skip }, async () => {
+  const saved = await api(users.admin, 'PUT', '/settings', { retailMatrix: [{ key: 'north-retail', region: 'Test Region North', name: 'North Retail Team', email: 'retail.north@company.test', enabled: true }, { key: 'old-team', region: 'Test Region West', name: 'Old Team', email: 'old@company.test', enabled: false }] });
+  assert.equal(saved.status, 200);
+  assert.ok(saved.body.caseTypeRules.enquiryKeywords.includes('price'), 'enquiry keywords start with defaults');
+  assert.equal((await api(users.admin, 'PUT', '/settings', { retailMatrix: [{ name: 'No email', email: 'not-an-address' }] })).status, 400);
+
+  // Enquiry: a keyword makes the Service case an Enquiry; it waits for the B2C Admin, not the Cluster Manager.
+  const enquiry = await ticketOf(await deliver({ subject: 'Price of screen repair', body: 'What is the price to repair a cracked screen? Serial No: TESTSERIAL01' }));
+  assert.deepEqual([enquiry.category, enquiry.caseType, enquiry.caseTypeSource, enquiry.status, enquiry.triage.reasons], ['Service', 'Enquiry', 'rule', 'Pending Triage', ['enquiry_answer']]);
+  assert.ok(enquiry.caseTypeMatched.includes('price'));
+  assert.equal(enquiry.workflow.assignee?.userId, undefined, 'not routed to a Cluster Manager');
+  assert.equal((await act(users.cm, enquiry, 'resolve_enquiry', { customerMessage: 'x' })).status, 404);
+  assert.equal((await act(users.admin, enquiry, 'resolve_enquiry', {})).status, 400, 'the answer is required');
+  const answered = await act(users.admin, enquiry, 'resolve_enquiry', { customerMessage: 'A screen replacement costs Rs 8,000 including parts.', note: 'Quoted from the price list.' });
+  assert.equal(answered.status, 200);
+  assert.deepEqual([answered.body.ticket.status, answered.body.ticket.closure.reason, answered.body.ticket.caseTypeSource], ['Closed', 'Enquiry answered', 'manual']);
+  await service.runCycle('test');
+  assert.ok(sent().some(message => message.to === CUSTOMER_ONE && message.subject.includes(enquiry.reference) && /Rs 8,000/.test(message.text)), 'the answer is emailed to the customer');
+
+  // Without an enquiry keyword a Service case is an Escalation and goes to the Cluster Manager; the admin can still answer it as an enquiry.
+  const escalation = await ticketOf(await deliver({ subject: 'Repair delayed', body: 'My repair is delayed. Serial No: TESTSERIAL01' }));
+  assert.deepEqual([escalation.caseType, escalation.caseTypeSource, escalation.workflow.currentLevel], ['Escalation', 'default', 'cluster_manager']);
+  assert.ok((await api(users.admin, 'GET', `/tickets/${escalation._id}`)).body.allowedActions.includes('resolve_enquiry'));
+  assert.ok(!(await api(users.cm, 'GET', `/tickets/${escalation._id}`)).body.allowedActions.includes('resolve_enquiry'), 'only the B2C Admin');
+  const converted = await act(users.admin, escalation, 'resolve_enquiry', { customerMessage: 'Your repair will be ready tomorrow.' });
+  assert.deepEqual([converted.body.ticket.caseType, converted.body.ticket.status], ['Enquiry', 'Closed']);
+
+  // Retail: waits for the B2C Admin; transferred to the region's retail team, which gets the case by email.
+  const retail = await ticketOf(await deliver({ from: CUSTOMER_TWO, subject: 'Store experience', body: 'The store staff were rude when I bought my phone. Serial No: TESTSERIAL02' }));
+  assert.deepEqual([retail.category, retail.caseType, retail.status, retail.triage.reasons], ['Retail', null, 'Pending Triage', ['retail_transfer']]);
+  const detail = await api(users.admin, 'GET', `/tickets/${retail._id}`);
+  assert.deepEqual(detail.body.workflow.retailMatrix.map(item => item.key), ['north-retail'], 'only enabled teams are offered');
+  assert.deepEqual((await api(users.cm, 'GET', `/tickets/${escalation._id}`)).body.workflow.retailMatrix, []);
+  assert.equal((await act(users.admin, retail, 'transfer_retail', { matrixKey: 'old-team' })).status, 400, 'a disabled team cannot be chosen');
+  const transferred = await act(users.admin, retail, 'transfer_retail', { matrixKey: 'north-retail', note: 'Customer complaint about store staff.', customerMessage: 'Your concern has been passed to our retail team, who will contact you.' });
+  assert.equal(transferred.status, 200);
+  assert.deepEqual([transferred.body.ticket.status, transferred.body.ticket.closure.reason, transferred.body.ticket.retailTransfer.name], ['Closed', 'Transferred to Retail: North Retail Team', 'North Retail Team']);
+  await service.runCycle('test');
+  const handover = sent().find(message => message.to === 'retail.north@company.test');
+  assert.ok(handover, 'the retail team gets the case');
+  for (const part of [retail.reference, CUSTOMER_TWO, 'Test Region North', 'Customer complaint about store staff.', 'The store staff were rude']) assert.ok(handover.text.includes(part), part);
+  assert.ok(sent().some(message => message.to === CUSTOMER_TWO && /passed to our retail team/.test(message.text)), 'the customer is told');
+  const events = (await B2CAuditEvent.find({ ticketId: retail._id }).lean()).map(event => event.action);
+  assert.ok(events.includes('transfer_retail'));
 });

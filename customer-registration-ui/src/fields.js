@@ -19,10 +19,19 @@ export const FIELDS = {
 export const SECTIONS = [
   { title: 'Customer information', description: 'How we can reach you about your support request.', fields: ['name', 'email', 'phone'] },
   { title: 'Mobile device', description: 'The device you are contacting support about.', fields: ['serialNumber', 'model'] },
-  { title: 'Purchase information', description: 'Used to match your device with our purchase records.', fields: ['purchaseDate', 'purchaseLocation', 'purchaseRegion', 'dealer', 'invoiceNumber'] },
+  { title: 'Purchase information', description: 'Used to match your device with our purchase records.', fields: ['purchaseDate', 'purchaseLocation', 'purchaseRegion', 'dealer', 'invoiceNumber', 'invoice'] },
 ];
 
-export const EMPTY_FORM = { ...Object.fromEntries(Object.keys(FIELDS).map(key => [key, ''])), confirm: false };
+// The invoice file is optional: a PDF or photo, checked again (type, contents, size) by the
+// server. The size limit comes from the server in api mode.
+export const INVOICE_FILE = {
+  label: 'Invoice',
+  extensions: ['pdf', 'jpg', 'jpeg', 'png', 'heic'],
+  accept: '.pdf,.jpg,.jpeg,.png,.heic,application/pdf,image/jpeg,image/png,image/heic',
+  maxBytes: 10 * 1048576,
+};
+
+export const EMPTY_FORM = { ...Object.fromEntries(Object.keys(FIELDS).map(key => [key, ''])), invoice: null, confirm: false };
 
 const VALID_EMAIL = /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/;
 const NAME = /^\p{L}[\p{L}\p{M} .'-]*$/u;
@@ -46,7 +55,7 @@ const clean = value => String(value ?? '').trim().replace(/\s+/g, ' ');
 export const todayIso = () => new Date().toISOString().slice(0, 10);
 
 // Returns { field: message } for every problem; empty when the form can be submitted.
-export function validate(form, { regions = [], now = new Date() } = {}) {
+export function validate(form, { regions = [], now = new Date(), invoiceMaxBytes = INVOICE_FILE.maxBytes } = {}) {
   const errors = {};
   const raw = Object.fromEntries(Object.keys(FIELDS).map(key => [key, clean(form[key])]));
   for (const [key, rule] of Object.entries(FIELDS)) {
@@ -68,9 +77,16 @@ export function validate(form, { regions = [], now = new Date() } = {}) {
   if (!errors.purchaseLocation && raw.purchaseLocation.length < 2) errors.purchaseLocation = 'Enter the store or city where the device was bought.';
   if (!errors.purchaseRegion && raw.purchaseRegion && !regions.some(region => region.toLowerCase() === raw.purchaseRegion.toLowerCase())) errors.purchaseRegion = 'Choose a region from the list, or leave it empty.';
   if (!errors.invoiceNumber && raw.invoiceNumber && !INVOICE.test(raw.invoiceNumber)) errors.invoiceNumber = 'Use letters, digits and - . / only.';
+  if (form.invoice) {
+    const extension = String(form.invoice.name || '').split('.').pop().toLowerCase();
+    if (!INVOICE_FILE.extensions.includes(extension)) errors.invoice = 'Attach the invoice as a PDF, JPG, PNG or HEIC file.';
+    else if (!form.invoice.size) errors.invoice = 'The invoice file is empty.';
+    else if (form.invoice.size > invoiceMaxBytes) errors.invoice = `The invoice must be ${Math.floor(invoiceMaxBytes / 1048576)} MB or smaller.`;
+  }
   if (form.confirm !== true) errors.confirm = 'Confirm that the details are accurate.';
   return errors;
 }
 
-// The submission body, trimmed, in the shape the backend expects.
+// The submission body, trimmed, in the shape the backend expects. The invoice file is sent
+// alongside it (see registrationService.js).
 export const toPayload = form => ({ ...Object.fromEntries(Object.keys(FIELDS).map(key => [key, clean(form[key])])), confirm: form.confirm === true });

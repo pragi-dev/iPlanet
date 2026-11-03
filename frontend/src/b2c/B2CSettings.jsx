@@ -7,7 +7,7 @@ import { B2CShell, IDENTIFIER_LABELS, NoB2CAccess } from './shared';
 // B2C administrators maintain the rules TCM confirms here. Nothing on this
 // page is a TCM-approved default: rules show whether they are confirmed and
 // templates whether their wording is approved.
-const PLACEHOLDERS = '{{reference}} (or {{ticketNumber}}), {{customerName}}, {{subject}}, {{issueSummary}}, {{category}}, {{message}}, {{companyName}}, {{serialNumber}} (a line using it is left out when no verified serial number is known), and in the registration request only {{registrationLink}} and {{linkExpiry}}';
+const PLACEHOLDERS = '{{reference}} (or {{ticketNumber}}), {{customerName}}, {{subject}}, {{issueSummary}}, {{category}}, {{message}}, {{companyName}}, {{serialNumber}} (a line using it is left out when no verified serial number is known), in the registration request only {{registrationLink}} and {{linkExpiry}}, and in the retail transfer only {{retailTeam}}, {{customerEmail}}, {{region}} and {{emailText}} (the customer\'s email)';
 
 function useSection(initial, key, onSaved) {
   const [value, setValue] = useState(initial);
@@ -45,6 +45,8 @@ function SettingsForm({ settings, onSaved }) {
   const levels = useSection(settings.workflowLevels, 'workflowLevels', onSaved);
   const validation = useSection(settings.validation, 'validation', onSaved);
   const templates = useSection(settings.templates, 'templates', onSaved);
+  const caseTypes = useSection(settings.caseTypeRules || { enquiryKeywords: [], enabled: true }, 'caseTypeRules', onSaved);
+  const retail = useSection(settings.retailMatrix || [], 'retailMatrix', onSaved);
   const orderedLevels = [...levels.value].sort((a, b) => a.order - b.order);
   const unconfirmed = settings.identifierRules.filter(rule => rule.enabled && !rule.confirmed).length;
   const unapproved = settings.templates.filter(template => !template.approved).length;
@@ -94,6 +96,29 @@ function SettingsForm({ settings, onSaved }) {
       </div>
     </Card>
 
+    <Card title="Enquiry or Escalation" description="For Service cases. An email with one of these words (whole words, not case sensitive) is an Enquiry: it waits for a B2C admin to answer and close it. Any other Service case is an Escalation and goes to the Cluster Manager. A B2C admin can change either on the ticket.">
+      <div className="stack-16">
+        <label className="row text-small"><input type="checkbox" checked={caseTypes.value.enabled !== false} onChange={event => caseTypes.setValue({ ...caseTypes.value, enabled: event.target.checked })} />Detect enquiries automatically (off: every Service case is an Escalation)</label>
+        <Field label="Enquiry keywords" hint="One per line">{props => <textarea {...props} rows={6} value={(caseTypes.value.enquiryKeywords || []).join('\n')} onChange={event => caseTypes.setValue({ ...caseTypes.value, enquiryKeywords: event.target.value.split('\n') })} />}</Field>
+        <SaveBar section={caseTypes} label="Enquiry keywords" />
+      </div>
+    </Card>
+
+    <Card title="Retail matrix" description="The retail teams Retail cases are transferred to, by region. A B2C admin transfers a Retail case from its ticket: the case is emailed to the team (the retail transfer template below) and closes here.">
+      <div className="stack-16">
+        {retail.value.length === 0 && <p className="text-muted text-small">No retail teams yet. Retail cases wait in triage until one is added.</p>}
+        {retail.value.map((team, index) => <div className="b2c-settings-row" key={index}>
+          <Field label="Region" hint="As on the device records">{props => <input {...props} value={team.region} onChange={event => retail.setValue(update(retail.value, index, { region: event.target.value }))} />}</Field>
+          <Field label="Team name">{props => <input {...props} value={team.name} onChange={event => retail.setValue(update(retail.value, index, { name: event.target.value }))} />}</Field>
+          <Field label="Email" className="b2c-wide">{props => <input {...props} type="email" value={team.email} onChange={event => retail.setValue(update(retail.value, index, { email: event.target.value }))} />}</Field>
+          <label className="row text-small"><input type="checkbox" checked={team.enabled} onChange={event => retail.setValue(update(retail.value, index, { enabled: event.target.checked }))} />Active</label>
+          <Button size="sm" variant="ghost" icon={Trash2} onClick={() => retail.setValue(retail.value.filter((_, other) => other !== index))}>Remove</Button>
+        </div>)}
+        <div><Button size="sm" icon={Plus} disabled={retail.value.length >= 50} onClick={() => retail.setValue([...retail.value, { key: '', region: '', name: '', email: '', enabled: true }])}>Add retail team</Button></div>
+        <SaveBar section={retail} label="Retail matrix" />
+      </div>
+    </Card>
+
     <Card title="Workflow levels" description="The escalation hierarchy. Level keys are the roles held by staff accounts and cannot be renamed here; new escalations pass through every enabled level, in order.">
       <div className="stack-16">
         {orderedLevels.map(level => { const index = levels.value.indexOf(level); return <div className="b2c-settings-row" key={level.key}>
@@ -110,7 +135,7 @@ function SettingsForm({ settings, onSaved }) {
       <div className="stack-16">
         <div className="grid-2">
           <Field label="Validated by">{props => <select {...props} value={validation.value.mode} onChange={event => validation.setValue({ ...validation.value, mode: event.target.value })}>
-            <option value="next_level">The next level on the escalation's path (B2C admin at the top)</option>
+            <option value="executive_direct">Service Executive: no approval · Cluster Manager: a B2C admin</option>
             <option value="level">One specific level</option>
             <option value="none">No validation — the owner resolves directly</option>
           </select>}</Field>

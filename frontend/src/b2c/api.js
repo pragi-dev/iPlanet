@@ -15,7 +15,9 @@ export const getB2CTickets = (filters = {}) => request(`/b2c/tickets${query(filt
 export const getB2CTicket = id => request(`/b2c/tickets/${id}`);
 export const b2cTicketAction = (id, action, payload) => post(`/b2c/tickets/${id}/actions/${action}`, payload);
 export const downloadB2CAttachment = (ticketId, key, filename) => downloadProtectedFile(`/b2c/tickets/${ticketId}/attachments/${key}`, filename);
-export const getB2CReports = (filters = {}) => request(`/b2c/reports${query(filters)}`);
+export const downloadB2CRegistrationInvoice = (registrationId, key, filename) => downloadProtectedFile(`/b2c/registrations/${registrationId}/invoice/${key}`, filename);
+export const getB2CCoverage = () => request('/b2c/coverage');
+export const getB2CReports =(filters = {}) => request(`/b2c/reports${query(filters)}`);
 export const getB2CSettings = () => request('/b2c/settings');
 export const saveB2CSettings = payload => request('/b2c/settings', { method: 'PUT', body: JSON.stringify(payload) });
 export const getB2CHealth = () => request('/b2c/integrations/health');

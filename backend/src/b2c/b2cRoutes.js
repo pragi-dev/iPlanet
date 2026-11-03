@@ -1,6 +1,20 @@
 import express from 'express';
+import multer from 'multer';
 import { B2C_ADMIN, B2C_ROLES } from './b2cDefaults.js';
 import { safeErrorMessage } from './redact.js';
+
+// Always a download, never rendered inline by the browser.
+function sendAttachment(res, attachment) {
+  res.set({
+    'Content-Type': attachment.contentType,
+    'Content-Length': String(attachment.content.length),
+    'Content-Disposition': `attachment; filename="${attachment.filename.replace(/[^\w.() -]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(attachment.filename)}`,
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "default-src 'none'; sandbox",
+    'Cache-Control': 'private, no-store',
+  });
+  res.end(attachment.content);
+}
 
 // /api/b2c — B2C escalation management. Every route requires a B2C-only
 // ('b2c_staff') or iPlanet Service login whose user record holds a B2C role.
@@ -39,22 +53,11 @@ export function createB2CRouter({ service, auth, User, Notification, logger = co
   router.get('/me', handle(req => ({ ...req.b2cUser, isAdmin: req.b2cUser.b2cRole === B2C_ADMIN })));
   router.get('/dashboard', handle(req => service.dashboard(req.b2cUser)));
   router.get('/staff', handle(() => service.staffForUser()));
+  router.get('/coverage', handle(req => service.coverage(req.b2cUser)));
   router.get('/tickets', handle(req => service.listTickets(req.query, req.b2cUser)));
   router.get('/tickets/:id', handle(req => service.getTicketDetail(req.params.id, req.b2cUser)));
   router.post('/tickets/:id/actions/:action', handle(req => service.performAction(req.params.id, req.params.action, req.body || {}, req.b2cUser)));
-  router.get('/tickets/:id/attachments/:key', handle(async (req, res) => {
-    const attachment = await service.attachmentFor(req.params.id, req.params.key, req.b2cUser);
-    // Always a download, never rendered inline by the browser.
-    res.set({
-      'Content-Type': attachment.contentType,
-      'Content-Length': String(attachment.content.length),
-      'Content-Disposition': `attachment; filename="${attachment.filename.replace(/[^\w.() -]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(attachment.filename)}`,
-      'X-Content-Type-Options': 'nosniff',
-      'Content-Security-Policy': "default-src 'none'; sandbox",
-      'Cache-Control': 'private, no-store',
-    });
-    res.end(attachment.content);
-  }));
+  router.get('/tickets/:id/attachments/:key', handle(async (req, res) => sendAttachment(res, await service.attachmentFor(req.params.id, req.params.key, req.b2cUser))));
   router.get('/reports', handle(req => service.reports(req.query, req.b2cUser)));
 
   // B2C notifications for the signed-in user (the B2B notification centre
@@ -80,6 +83,7 @@ export function createB2CRouter({ service, auth, User, Notification, logger = co
   // Emails waiting for the customer to register: no ticket exists for them yet.
   router.get('/registrations', adminOnly, handle(req => service.listRegistrations(req.query)));
   router.get('/registrations/:id', adminOnly, handle(req => service.getRegistration(req.params.id)));
+  router.get('/registrations/:id/invoice/:key', adminOnly, handle(async (req, res) => sendAttachment(res, await service.registrationInvoice(req.params.id, req.params.key, req.b2cUser))));
   router.post('/registrations/:id/actions/:action', adminOnly, handle(req => service.registrationAction(req.params.id, req.params.action, req.body || {}, req.b2cUser)));
   router.get('/outbound', adminOnly, handle(req => service.listOutbound(req.query)));
   router.post('/outbound/:id/retry', adminOnly, handle(req => service.retryOutbound(req.params.id)));
@@ -132,8 +136,20 @@ export function createB2CPublicRouter({ service, logger = console, limits = {} }
       res.status(500).json({ code: 'error', message: 'Something went wrong. Please try again later.' });
     }
   };
+  // The form is sent as JSON, or as multipart form data when an invoice file is attached
+  // (field "invoice", one file, held in memory only until it is checked and stored).
+  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: limits.invoiceBytes ?? 10 * 1048576, files: 1, fields: 30, fieldSize: 1024 } }).single('invoice');
+  const invoiceUpload = (req, res, next) => upload(req, res, error => {
+    if (!error) {
+      // Multipart fields are text: the confirmation box arrives as 'true'.
+      if (req.is('multipart/form-data') && req.body) req.body.confirm = req.body.confirm === 'true';
+      return next();
+    }
+    const message = error.code === 'LIMIT_FILE_SIZE' ? `The invoice must be ${Math.floor((limits.invoiceBytes ?? 10 * 1048576) / 1048576)} MB or smaller.` : 'Attach one invoice file only.';
+    res.status(422).json({ code: 'validation', message: 'Some details need correcting.', fields: { invoice: message } });
+  });
   router.get('/registration/:token', viewLimit, handle(req => service.openRegistration(req.params.token)));
-  router.post('/registration/:token', submitLimit, handle(req => service.submitRegistration(req.params.token, req.body || {})));
+  router.post('/registration/:token', submitLimit, invoiceUpload, handle(req => service.submitRegistration(req.params.token, req.body || {}, req.file || null)));
   router.post('/registration/:token/renew', renewLimit, handle(req => service.renewRegistration(req.params.token)));
   return router;
 }

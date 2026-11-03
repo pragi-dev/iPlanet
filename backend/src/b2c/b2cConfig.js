@@ -117,6 +117,14 @@ export function loadB2CConfig(env = process.env) {
   return {
     // Minutes between inbox polls; 0 disables the in-process poller (use the cron endpoint).
     pollMinutes: env.B2C_EMAIL_POLL_MINUTES === '0' ? 0 : positiveInt(env.B2C_EMAIL_POLL_MINUTES, 2, 1440),
+    // A completed escalation closes by itself this many minutes later; 0 leaves closing to staff.
+    autoCloseMinutes: env.B2C_AUTO_CLOSE_MINUTES === '0' ? 0 : positiveInt(env.B2C_AUTO_CLOSE_MINUTES, 5, 10080),
+    // Hours a Cluster Manager has to assign a new escalation to a Service Executive before they
+    // are reminded (once); 0 turns the reminder off.
+    assignReminderHours: env.B2C_ASSIGN_REMINDER_HOURS === '0' ? 0 : positiveInt(env.B2C_ASSIGN_REMINDER_HOURS, 3, 168),
+    // Hours a Service Executive has to accept and start an assigned escalation before they, and
+    // whoever assigned it, are reminded (once); 0 turns the reminder off.
+    startReminderHours: env.B2C_START_REMINDER_HOURS === '0' ? 0 : positiveInt(env.B2C_START_REMINDER_HOURS, 3, 168),
     // Shared secret for POST /api/internal/b2c/run; unset disables the endpoint.
     cronSecret: env.B2C_CRON_SECRET || '',
     referencePrefix: /^[A-Z]{2,6}$/.test(env.B2C_REFERENCE_PREFIX || '') ? env.B2C_REFERENCE_PREFIX : 'B2C',

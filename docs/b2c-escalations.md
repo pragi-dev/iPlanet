@@ -89,17 +89,58 @@ Every ticket follows the same six stages as B2B service tickets:
 | Engineer accepted | `Engineer Accepted` | The assignee accepts, or someone takes ownership |
 | Work started | `In Progress` (`Awaiting Customer`, `Pending Validation` inside it) | Start work |
 | Repair completed | `Completed` | Complete repair (after validation, if required) |
-| Closed | `Closed` | Close, or close without resolution |
+| Closed | `Closed` | Automatically 5 minutes after completion, Close, or close without resolution |
 
 `Reopened` returns a ticket to its owner before work restarts. Tickets saved
 with the earlier names (`Assigned`, `Investigating`, `Resolved`) are renamed on
 startup. The ticket page shows these stages as a **Service journey**.
 
-Levels (configurable labels, order and on/off): Cluster Manager → Regional
-Business Head → Trainer → CD Team Assistant Manager → Service Excellence Lead.
+**Before the workflow: the B2C Admin's own cases (the BRD's CEC step).**
+
+- **Enquiry or Escalation.** A Service case whose email contains an enquiry keyword
+  (B2C Settings → *Enquiry or Escalation*; defaults such as "price", "enquiry",
+  "how to", "availability") is an **Enquiry**; any other Service case is an
+  **Escalation**. Escalations are routed to the Cluster Manager as below.
+- **Enquiries wait for the B2C Admin** (triage reason `enquiry_answer`). *Answer
+  enquiry and close* emails the answer to the customer (the final-communication
+  template, from the company address when it is on) and closes the case as
+  *Enquiry answered*, without a Cluster Manager. *Treat as escalation* (Complete
+  triage) sends it to the Cluster Manager instead. The admin can also answer an
+  escalation that is already with a Cluster Manager as an enquiry.
+- **Retail cases wait for the B2C Admin** (triage reason `retail_transfer`).
+  *Transfer to Retail* picks a team from the **Retail matrix** (B2C Settings:
+  region, team name, email, active), emails the case to it (the internal
+  *retail transfer* template: reference, customer, region, the admin's note and
+  the customer's email text) and closes the case as *Transferred to Retail:
+  <team>*. The customer can be told in the same step. Complete triage no longer
+  routes Retail cases; choose Service to treat one as a Service escalation.
+- The case type is shown on the ticket and in the queue, with how it was decided.
+
+**The flow: Cluster Manager → Service Executive.** These are the only two levels.
+
+1. The ticket is routed to the Cluster Manager of the device's region, who is
+   notified (assigned directly when they are the only one for the region).
+2. The Cluster Manager uses **Assign** to hand it to a Service Executive for
+   that region, chosen from a list showing each executive's open workload. The
+   ticket moves to that level and the executive is notified.
+3. The Service Executive accepts, starts work and completes the repair.
+   As the last level, the resolution is validated by a B2C admin (see
+   Validation below).
+
+The level names can be changed in B2C Settings (the Service Executive level's key
+is still `service_excellence_lead`). The Regional Business Head, Trainer and CD
+Team Assistant Manager levels of the earlier hierarchy were removed. On startup
+they are taken out of the settings and of every ticket's path, staff who held
+them lose B2C access, an open ticket waiting at one returns to the Cluster
+Manager queue, and a resolution waiting for one to validate it goes to the next
+level left on the path (or a B2C admin). Each moved ticket gets a
+*Workflow level removed* entry in its history.
 
 - Every new ticket's **path** runs through all enabled levels in order, for
   both Service and Retail. An admin can change the path of a single ticket.
+- **Assign** offers people at the ticket's current level and at the next level
+  on its path. Choosing someone at the next level moves the ticket there; no
+  reason is needed. Reroute (with a reason) moves it to any other level.
 - The ticket's region is the one on the matched customer's device record (see
   [Regional routing](#regional-routing-by-device-region)). When exactly one
   person holds the level for that region, the ticket is assigned to them.
@@ -108,9 +149,50 @@ Business Head → Trainer → CD Team Assistant Manager → Service Excellence L
   clarification (emails the customer), reroute to any
   level, complete the repair, approve or return it, close, close without resolution, reopen,
   and add internal notes.
-- **Validation** of a proposed resolution: `next_level` (default; the next
-  level on the path validates, or a B2C admin at the top), `level` (one fixed
-  level), or `none`. Nobody can validate their own resolution.
+- **Validation** of a proposed resolution: `executive_direct` (default; the
+  **Service Executive's repair needs no approval** and is completed straight
+  away, while a repair the Cluster Manager did is approved by a B2C admin),
+  `level` (one fixed level), or `none`. Nobody can validate their own
+  resolution, and a B2C admin can always validate. Settings saved with the
+  earlier `next_level` rule move to `executive_direct` on startup; a resolution
+  already waiting keeps waiting, for a B2C admin if the Cluster Manager proposed
+  it, or for the Cluster Manager who assigned it if a Service Executive did (a
+  *Validator changed* entry in its history).
+- **Attachments**: every file the customer sends (with the first email, with
+  each reply, and the invoice uploaded with the registration form) is listed in
+  the ticket's **Attachments** section. Anyone who can see the ticket, including
+  its Cluster Manager and the Service Executive it is assigned to, can download
+  them; files always download and are never opened in the browser, and each
+  download is recorded. Before a ticket is created, Claude reads the email's
+  PDFs, photos and text files once (`backend/src/attachmentReading.js`, needs
+  `ANTHROPIC_API_KEY`): a serial number on an attached invoice or label counts
+  like one written in the email (identifier source *attachment*), and the
+  buyer's name and phone on an invoice help identify the customer. What was
+  read is shown under the email; if reading fails, or no key is set, the email
+  is handled from its text alone and the reason is shown.
+- **Assignment reminder**: the Cluster Manager must hand a new escalation to a
+  Service Executive within `B2C_ASSIGN_REMINDER_HOURS` (3) hours of receiving
+  it. If it is still at the Cluster Manager level then, they get a second
+  notification, *Reminder: assign to a Service Executive* (every Cluster
+  Manager of the region while nobody owns it), once, recorded as *Assignment
+  reminder sent*. Assigning it on, rerouting or closing it cancels the
+  reminder; reopening it with the Cluster Manager starts the 3 hours again. The
+  ticket page shows the deadline. Checked every 15 seconds.
+- **Start-work reminder**: once a Service Executive has the escalation
+  (assigned by the Cluster Manager, rerouted to them, or taken from the queue),
+  they must accept it and start the work within `B2C_START_REMINDER_HOURS` (3)
+  hours. If it has not started by then, they get *Reminder: accept and start
+  the work*, and whoever assigned it gets *<executive> has not started
+  <reference>*, once, recorded as *Start-work reminder sent*. Starting the work,
+  rerouting or closing it cancels the reminder; assigning it to another
+  executive starts the 3 hours again. The ticket page shows the deadline.
+- **Automatic close**: a completed escalation closes by itself
+  `B2C_AUTO_CLOSE_MINUTES` (5) minutes after completion, as *Closed
+  automatically* by *Auto-close* in its history. The check runs every 15
+  seconds (and in every processing cycle). Closing or reopening it first
+  cancels the automatic close. The final customer email is queued at completion
+  as before. On Render's free plan a sleeping server closes due tickets as soon
+  as it wakes.
 - The API enforces every permission. The UI only shows the actions the API
   reports as allowed. Tickets a user may not see return 404.
 - Every change is written to an append-only audit trail (`B2CAuditEvent`).
@@ -177,8 +259,8 @@ and the wording of the email are never used to pick a region. The code is in
    names must be spelled the same as on the devices (`b2c:staff --regions`).
    Exactly one such person → assigned to them. More than one → that level's
    regional queue. **Nobody** → triage with `no_regional_assignee`, so a
-   configuration gap is visible. The later levels (RBH, Trainer, CD Team AM,
-   Service Excellence Lead) are unchanged.
+   configuration gap is visible. The Cluster Manager then assigns it onward to
+   a Service Executive.
 
 The customer match is stored on the ticket as `customerMatch` (status, method,
 the details that matched, the customer's ID and name; nothing for an
@@ -266,8 +348,8 @@ confirmed them for B2C.
 | `iplanet_service` + `b2cRole` | `npm run b2c:staff -- grant …` (existing address) | Unchanged | Per role; B2C group added to the Service navigation |
 | `corporate_admin` | unchanged | Unchanged | None; the CLI refuses to grant |
 
-`b2cRole` is `b2c_admin` or a level key (`cluster_manager`, `rbh`, `trainer`,
-`cd_team_am`, `service_excellence_lead`). `b2cRegions` limits a level user to
+`b2cRole` is `b2c_admin`, `cluster_manager` or `service_excellence_lead`
+(Service Executive). `b2cRegions` limits a level user to
 tickets in those regions; leaving it empty means all regions. Roles are re-read
 from the database on every request, so revoking one takes effect immediately.
 
@@ -275,12 +357,19 @@ from the database on every request, so revoking one takes effect immediately.
   failed-processing queues and retries.
 - **Level staff**: tickets at their level and region, tickets assigned to
   them, tickets they have worked on, and resolutions they must validate.
+- **Warranty & Coverage** (`/b2c/coverage`, `GET /api/b2c/coverage`), for every
+  B2C role: the same view as the iPlanet Service portal (warranty, AMC,
+  coverage, entitlements and expiry of each device record), limited to the
+  devices whose location is one of the user's `b2cRegions` (every device for a
+  B2C admin or a user without a region restriction). The ticket page's
+  **Device & coverage** panel shows the same for the ticket's device. The rules
+  are shared with the service portal (`backend/src/coverage.js`).
 
 ```bash
 cd backend
 npm run b2c:staff -- grant --email lead@tcm.example --role b2c_admin --name "Full Name"
 npm run b2c:staff -- grant --email cm.north@tcm.example --role cluster_manager --name "Full Name" --regions "North"
-npm run b2c:staff -- grant --email existing.service.user@iplanet.example --role rbh   # keeps B2B Service access
+npm run b2c:staff -- grant --email existing.service.user@iplanet.example --role service_excellence_lead   # keeps B2B Service access
 npm run b2c:staff -- revoke --email cm.north@tcm.example
 npm run b2c:staff -- list
 ```
@@ -302,8 +391,8 @@ can be applied without a deploy:
 | Identifier patterns | Two generic placeholders (labelled "Case ID …", "Serial No …"), marked **unconfirmed** |
 | Service/Retail keywords | **Empty**, so every ticket goes to triage until TCM provides rules |
 | Inbox default category | None |
-| Workflow levels | The proposed five-level hierarchy, all enabled |
-| Validation mode | `next_level` |
+| Workflow levels | Cluster Manager → Service Executive |
+| Validation mode | `previous_level` (the Cluster Manager approves the Service Executive) |
 | Customer email templates | Generic placeholder wording, **not approved**. Nothing is sent until an admin approves each template |
 
 An inbox's stored `defaultRegion` is no longer used for routing (the region is
@@ -317,6 +406,9 @@ stored in MongoDB or sent to the browser):
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `B2C_EMAIL_POLL_MINUTES` | `2` | In-process poll interval; `0` disables (use the cron endpoint) |
+| `B2C_ASSIGN_REMINDER_HOURS` | `3` | Hours the Cluster Manager has to assign a new escalation to a Service Executive before a reminder; `0` turns it off |
+| `B2C_START_REMINDER_HOURS` | `3` | Hours a Service Executive has to accept and start an assigned escalation before a reminder (to them and whoever assigned it); `0` turns it off |
+| `B2C_AUTO_CLOSE_MINUTES` | `5` | A completed escalation closes by itself this many minutes later; `0` leaves closing to staff |
 | `B2C_CRON_SECRET` | – | Enables `POST /api/internal/b2c/run` with `Authorization: Bearer <secret>` |
 | `B2C_GRAPH_TENANT_ID`, `B2C_GRAPH_CLIENT_ID`, `B2C_GRAPH_CLIENT_SECRET` | – | Microsoft Graph mailbox connector |
 | `IMAP_HOST`, `IMAP_USER`, `IMAP_PASS` | – (all required) | Mailbox read by inboxes with provider `imap`, e.g. MilesWeb `mail.aavoraa.com`. `IMAP_PASS` is secret |
@@ -341,7 +433,7 @@ stored in MongoDB or sent to the browser):
 | `B2C_MAX_ATTACHMENT_MB`, `B2C_MAX_ATTACHMENTS` | `10`, `10` | Per-file and per-email limits |
 | `B2C_MAX_PROCESSING_ATTEMPTS`, `B2C_MAX_SEND_ATTEMPTS`, `B2C_MAX_CRM_ATTEMPTS` | `5` | Retries before parking as failed |
 | `B2C_POLL_BATCH_SIZE` | `25` | Messages fetched per inbox per poll |
-| `B2C_DEMO_ACCOUNTS` | `true` | Local demo staff (`b2c.<role>@iplanet.local` / `Demo@123`); never created when `NODE_ENV=production` |
+| `B2C_DEMO_ACCOUNTS` | `true` | Local demo staff, password `Demo@123`: `b2c.admin@`, `b2c.cluster-manager@` and `b2c.service-excellence-lead@iplanet.local`; never created when `NODE_ENV=production` |
 
 ### Incoming email from a MilesWeb mailbox (IMAP)
 

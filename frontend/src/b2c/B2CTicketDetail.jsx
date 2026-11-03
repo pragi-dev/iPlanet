@@ -1,16 +1,18 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
-  Ban, CheckCircle2, ChevronLeft, ClipboardCheck, Download, Hand, Mail, MessageSquare, Paperclip, Play, RefreshCcw, RotateCcw, Route, Send, StickyNote, Undo2, UserPlus, XCircle,
+  Ban, CheckCircle2, ChevronLeft, ClipboardCheck, Download, Hand, Mail, MessageSquare, Paperclip, Play, RefreshCcw, RotateCcw, Route, Send, StickyNote, Store, Undo2, UserPlus, XCircle,
 } from 'lucide-react';
 import {
-  ActivityTimeline, Badge, Button, ErrorState, Field, InfoList, InlineAlert, JourneyTrack, Modal, NextAction, PageSkeleton, Section, Surface, formatDate, formatDateTime, friendlyError, useAsync,
+  ActivityTimeline, Avatar, Badge, Button, ErrorState, Field, InfoList, InlineAlert, JourneyTrack, Modal, NextAction, PageSkeleton, SearchInput, Section, Surface, formatDate, formatDateTime, friendlyError, useAsync,
 } from '../ui';
 import { b2cTicketAction, downloadB2CAttachment, getB2CStaff, getB2CTicket } from './api';
-import { ackLabel, b2cJourneySteps, B2CShell, B2CStatus, B2C_ROLE_LABELS, CRM_STATUS, CUSTOMER_MATCH, CUSTOMER_MATCH_METHODS, CategoryBadge, EMAIL_KINDS, IDENTIFIER_LABELS, NoB2CAccess, REGION_SOURCES, REGION_STATUS, REGISTRATION_REASONS, REGISTRATION_STATUS, TRIAGE_REASONS, auditTimeline, registrationLabel } from './shared';
+import { ackLabel, b2cJourneySteps, B2CShell, B2CStatus, B2C_ROLE_LABELS, CASE_TYPE_SOURCES, CRM_STATUS, CUSTOMER_MATCH, CUSTOMER_MATCH_METHODS, CategoryBadge, EMAIL_KINDS, IDENTIFIER_LABELS, NoB2CAccess, REGION_SOURCES, REGION_STATUS, REGISTRATION_REASONS, REGISTRATION_STATUS, TRIAGE_REASONS, auditTimeline, registrationLabel } from './shared';
 
 const ACTION_META = {
   complete_triage: { label: 'Complete triage', icon: ClipboardCheck },
+  resolve_enquiry: { label: 'Answer enquiry and close', icon: MessageSquare },
+  transfer_retail: { label: 'Transfer to Retail', icon: Store },
   send_registration: { label: 'Send registration link', icon: Send, direct: true },
   retry_crm: { label: 'Retry CRM lookup', icon: RefreshCcw, direct: true },
   claim: { label: 'Take ownership', icon: Hand, direct: true },
@@ -28,26 +30,34 @@ const ACTION_META = {
   reopen: { label: 'Reopen', icon: RotateCcw },
   add_note: { label: 'Add internal note', icon: StickyNote },
 };
-const DONE = { send_registration: 'Registration link queued for the customer.', claim: 'You now own this escalation.', accept: 'Assignment accepted.', start: 'Work started.', retry_crm: 'CRM lookup repeated.', complete_triage: 'Triage completed and the escalation was routed.', assign: 'Assigned.', reroute: 'Rerouted.', set_path: 'Workflow path updated.', request_clarification: 'Clarification request queued for the customer.', propose_resolution: 'Repair completion submitted.', approve_resolution: 'Resolution approved. The final customer email has been queued.', reject_resolution: 'Returned to the owner for rework.', close: 'Escalation closed.', close_unresolved: 'Escalation closed.', reopen: 'Escalation reopened.', add_note: 'Note added.' };
+const DONE = { resolve_enquiry: 'Enquiry answered and closed. The answer has been queued for the customer.', transfer_retail: 'Transferred to the retail team and closed.', send_registration: 'Registration link queued for the customer.', claim: 'You now own this escalation.', accept: 'Assignment accepted.', start: 'Work started.', retry_crm: 'CRM lookup repeated.', complete_triage: 'Triage completed and the escalation was routed.', assign: 'Assigned.', reroute: 'Rerouted.', set_path: 'Workflow path updated.', request_clarification: 'Clarification request queued for the customer.', propose_resolution: 'Repair completion submitted.', approve_resolution: 'Resolution approved. The final customer email has been queued.', reject_resolution: 'Returned to the owner for rework.', close: 'Escalation closed.', close_unresolved: 'Escalation closed.', reopen: 'Escalation reopened.', add_note: 'Note added.' };
 const OUTBOUND_STATUS = { queued: ['Queued', 'info'], sending: ['Sending', 'info'], retrying: ['Retrying', 'warning'], held: ['Held — template not approved', 'warning'], sent: ['Sent — accepted by mail server', 'success'], failed: ['Failed', 'critical'], skipped: ['Not sent — inbox is receive-only (IMAP)', 'neutral'] };
 const REJECT_REASONS = { type_not_allowed: 'file type not allowed', content_does_not_match_type: 'content does not match its type', too_large: 'too large', empty_file: 'empty', content_unavailable: 'not downloadable', too_many_attachments: 'too many attachments' };
 const levelName = (levels, key) => levels.find(level => level.key === key)?.label || B2C_ROLE_LABELS[key] || key;
 
 // What the signed-in user should do next, from the status and allowed actions.
-function nextStep(ticket, allowed, levels, open) {
+function nextStep(ticket, allowed, levels, open, nextLevelKey) {
   const can = action => allowed.includes(action);
-  const button = (action, extra = {}) => ({ label: ACTION_META[action].label, icon: ACTION_META[action].icon, onClick: () => open(action), ...extra });
+  const button = (action, extra = {}) => ({ action, label: ACTION_META[action].label, icon: ACTION_META[action].icon, onClick: () => open(action), ...extra });
   const level = levelName(levels, ticket.workflow?.currentLevel);
+  const executive = nextLevelKey ? levelName(levels, nextLevelKey) : null;
+  const deadline = ticket.assignReminderAt ? ` Assign it by ${formatDateTime(ticket.assignReminderAt)}, or you will be reminded.` : ticket.assignReminderSentAt && executive ? ` A reminder was sent ${formatDateTime(ticket.assignReminderSentAt)}: it is overdue for a ${executive}.` : '';
+  const handOn = can('assign') && executive ? ` Use Assign to hand it to a ${executive}.${deadline}` : '';
+  // With the Service Executive: the time they have to accept and start the work.
+  const startBy = ticket.startReminderAt ? ` The work must start by ${formatDateTime(ticket.startReminderAt)}, or a reminder is sent.` : ticket.startReminderSentAt ? ` A reminder to start was sent ${formatDateTime(ticket.startReminderSentAt)}.` : '';
   switch (ticket.status) {
     case 'Pending Triage':
+      // The B2C Admin's own cases: an Enquiry is answered here, a Retail case goes to the retail team.
+      if (ticket.triage?.reasons?.includes('enquiry_answer')) return { tone: 'info', eyebrow: 'Enquiry', title: 'Answer the enquiry and close', description: `This Service case is an enquiry${ticket.caseTypeMatched?.length ? ` (it mentions ${ticket.caseTypeMatched.map(word => `“${word}”`).join(', ')})` : ''}. Answer the customer and close it, or treat it as an escalation to send it to the Cluster Manager.`, actions: [can('resolve_enquiry') && button('resolve_enquiry'), can('complete_triage') && button('complete_triage', { secondary: true, label: 'Treat as escalation' }), can('transfer_retail') && button('transfer_retail', { secondary: true })] };
+      if (ticket.triage?.reasons?.includes('retail_transfer')) return { tone: 'info', eyebrow: 'Retail', title: 'Transfer to the retail team', description: 'Retail cases are closed as per the Retail process: transfer this case to the retail team of the Retail matrix, or treat it as a Service escalation.', actions: [can('transfer_retail') && button('transfer_retail'), can('complete_triage') && button('complete_triage', { secondary: true, label: 'Treat as Service escalation' })] };
       return { tone: 'warning', eyebrow: 'Triage', title: 'Review before routing', description: (ticket.triage?.reasons || []).map(reason => TRIAGE_REASONS[reason] || reason).join('. ') || 'This escalation needs review.', actions: [can('complete_triage') && button('complete_triage'), can('send_registration') && button('send_registration', { secondary: true }), can('retry_crm') && button('retry_crm', { secondary: true })] };
     case 'Open':
     case 'Reopened':
-      return { tone: ticket.status === 'Reopened' ? 'warning' : 'info', title: ticket.workflow?.assignee?.name ? `Reopened — with ${ticket.workflow.assignee.name}` : `Waiting for a ${level} to take ownership`, description: ticket.workflow?.assignee?.name ? 'Start work again or hand it to someone else.' : 'Take ownership to accept the work, or assign it to a colleague at this level.', actions: [can('claim') && button('claim'), can('start') && button('start'), can('assign') && button('assign', { secondary: true }), can('reroute') && button('reroute', { secondary: true })] };
+      return { tone: ticket.status === 'Reopened' ? 'warning' : 'info', title: ticket.workflow?.assignee?.name ? `Reopened — with ${ticket.workflow.assignee.name}` : `Waiting for a ${level} to take ownership`, description: `${ticket.workflow?.assignee?.name ? 'Start work again or hand it to someone else.' : 'Take ownership to accept the work, or assign it to a colleague at this level.'}${deadline}`, actions: [can('claim') && button('claim'), can('start') && button('start'), can('assign') && button('assign', { secondary: true }), can('reroute') && button('reroute', { secondary: true })] };
     case 'Engineer Assigned':
-      return { tone: 'info', title: `Assigned to ${ticket.workflow?.assignee?.name}`, description: `Waiting for them to accept. Current level: ${level}.`, actions: [can('accept') && button('accept'), can('assign') && button('assign', { secondary: true })] };
+      return { tone: 'info', title: `Assigned to ${ticket.workflow?.assignee?.name}`, description: `Waiting for them to accept. Current level: ${level}.${handOn}${startBy}`, actions: [can('accept') && button('accept'), can('assign') && button('assign', { secondary: true })] };
     case 'Engineer Accepted':
-      return { tone: 'info', title: `${ticket.workflow?.assignee?.name} accepted`, description: `Accepted but work has not started. Current level: ${level}.`, actions: [can('start') && button('start'), can('assign') && button('assign', { secondary: true })] };
+      return { tone: 'info', title: `${ticket.workflow?.assignee?.name} accepted`, description: `Accepted but work has not started. Current level: ${level}.${handOn}${startBy}`, actions: [can('start') && button('start'), can('assign') && button('assign', { secondary: true })] };
     case 'In Progress':
       return { tone: 'info', title: `Work in progress (${level})`, description: 'Complete the repair when ready, or ask the customer for details. Overdue escalations are escalated automatically.', actions: [can('propose_resolution') && button('propose_resolution'), can('request_clarification') && button('request_clarification', { secondary: true })] };
     case 'Awaiting Customer':
@@ -55,7 +65,7 @@ function nextStep(ticket, allowed, levels, open) {
     case 'Pending Validation':
       return { tone: 'warning', eyebrow: 'Validation', title: can('approve_resolution') ? 'Resolution awaiting your validation' : `Resolution awaiting validation by ${ticket.validation?.validatorLevel ? levelName(levels, ticket.validation.validatorLevel) : 'a B2C admin'}`, description: ticket.validation?.resolutionSummary, actions: [can('approve_resolution') && button('approve_resolution'), can('reject_resolution') && button('reject_resolution', { secondary: true })] };
     case 'Completed':
-      return { tone: 'success', title: 'Repair completed', description: 'The final customer email has been queued. Close the escalation once nothing further is needed.', actions: [can('close') && button('close'), can('reopen') && button('reopen', { secondary: true })] };
+      return { tone: 'success', title: 'Repair completed', description: ticket.autoCloseAt ? `The final customer email has been queued. The escalation closes automatically at ${formatDateTime(ticket.autoCloseAt)}; close it now, or reopen it if the issue is not fixed.` : 'The final customer email has been queued. Close the escalation once nothing further is needed.', actions: [can('close') && button('close'), can('reopen') && button('reopen', { secondary: true })] };
     default:
       return { tone: 'neutral', eyebrow: 'Status', title: 'Closed', description: ticket.closure?.reason && ticket.closure.reason !== 'Resolved' ? `Closed without resolution: ${ticket.closure.reason}` : 'This escalation is closed.', actions: [can('reopen') && button('reopen', { secondary: true })] };
   }
@@ -75,7 +85,7 @@ export function B2CTicketDetail() {
   if (!data && !state.error) return <B2CShell title="Escalation" crumbs={crumbs}><PageSkeleton variant="detail" kpis={0} /></B2CShell>;
   if (!data) return <B2CShell title="Escalation" crumbs={crumbs}><div className="card"><ErrorState title={state.error?.status === 404 ? 'Escalation not found' : 'Unable to load this escalation'} message={state.error?.status === 404 ? 'It does not exist or is not visible to your account.' : friendlyError(state.error)} onRetry={state.error?.status === 404 ? undefined : state.reload} /></div></B2CShell>;
 
-  const { ticket, conversation, audit, allowedActions: allowed, workflow, templates, crmConfigured, registration } = data;
+  const { ticket, conversation, outboundHidden, serviceHistory, deviceCoverage, files = [], audit, allowedActions: allowed, workflow, templates, crmConfigured, registration } = data;
   const levels = workflow.levels;
 
   const run = async (action, payload = {}) => {
@@ -94,9 +104,9 @@ export function B2CTicketDetail() {
     } finally { setBusy(false); }
   };
   const open = action => (ACTION_META[action].direct ? void run(action) : setDialog(action));
-  const next = nextStep(ticket, allowed, levels, open);
+  const next = nextStep(ticket, allowed, levels, open, workflow.nextLevel);
   next.actions = next.actions.filter(Boolean).map(action => ({ ...action, disabled: busy }));
-  const secondary = allowed.filter(action => !next.actions.some(item => item.label === ACTION_META[action].label) && action !== 'add_note');
+  const secondary = allowed.filter(action => !next.actions.some(item => item.action === action) && action !== 'add_note');
 
   return <B2CShell title={ticket.reference} crumbs={crumbs}>
     <header className="case-header">
@@ -106,7 +116,7 @@ export function B2CTicketDetail() {
           <p className="case-id mono">{ticket.reference}</p>
           <h1 className="case-title">{ticket.subject || 'No subject'}</h1>
           <p className="case-sub">{[ticket.customer?.name || ticket.customer?.email, ticket.region, `received ${formatDateTime(ticket.createdAt)}`].filter(Boolean).join(' · ')}</p>
-          <div className="case-badges"><B2CStatus status={ticket.status} /><CategoryBadge category={ticket.category} /><Badge tone={CRM_STATUS[ticket.crm?.status]?.tone}>{CRM_STATUS[ticket.crm?.status]?.label}</Badge><Badge tone={ticket.acknowledgement?.status === 'sent' ? 'success' : ticket.acknowledgement?.status === 'failed' ? 'critical' : 'neutral'}>{ackLabel(ticket.acknowledgement)}</Badge></div>
+          <div className="case-badges"><B2CStatus status={ticket.status} /><CategoryBadge category={ticket.category} />{ticket.caseType && <Badge tone={ticket.caseType === 'Enquiry' ? 'info' : 'neutral'}>{ticket.caseType}</Badge>}<Badge tone={CRM_STATUS[ticket.crm?.status]?.tone}>{CRM_STATUS[ticket.crm?.status]?.label}</Badge><Badge tone={ticket.acknowledgement?.status === 'sent' ? 'success' : ticket.acknowledgement?.status === 'failed' ? 'critical' : 'neutral'}>{ackLabel(ticket.acknowledgement)}</Badge></div>
         </div>
         <div className="page-actions">{allowed.includes('add_note') && <Button icon={StickyNote} onClick={() => setDialog('add_note')}>Add note</Button>}</div>
       </div>
@@ -121,9 +131,19 @@ export function B2CTicketDetail() {
     <div className="workspace">
       <div className="workspace-main">
         <Surface label="Escalation">
-          <Section stacked title="Email conversation" description="Emails are shown as plain text. Attachments download as files and are never opened in the browser.">
+          {/* Level staff get the customer's own emails only; our replies are for B2C admins. */}
+          <Section stacked title={outboundHidden ? 'Customer emails' : 'Email conversation'} description={`${outboundHidden ? 'What the customer wrote. ' : ''}Emails are shown as plain text. Attachments download as files and are never opened in the browser.`}>
             <ol className="b2c-thread">{conversation.map(message => <EmailMessage key={message._id} message={message} ticketId={ticket._id} onError={setError} />)}</ol>
           </Section>
+          <Section stacked title="Attachments" description={files.length ? 'Every file the customer sent with this escalation: email attachments and the invoice from the registration form. Files download and are never opened in the browser.' : 'The customer has not sent any files with this escalation.'}>
+            {files.length > 0 && <ul className="b2c-ticket-files">{files.map(file => <li key={file.downloadKey}>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => downloadB2CAttachment(ticket._id, file.downloadKey, file.filename).catch(downloadError => setError(friendlyError(downloadError, 'Unable to download the file.')))}><Download size={14} aria-hidden="true" />{file.filename}<span className="text-muted">{Math.max(1, Math.round((file.size || 0) / 1024))} KB</span></button>
+              <span className="text-muted text-small">{file.source === 'registration' ? 'Invoice from the registration form' : 'From the customer\'s email'}{file.addedAt ? ` · ${formatDateTime(file.addedAt)}` : ''}</span>
+            </li>)}</ul>}
+          </Section>
+          {serviceHistory && <Section stacked title="Service history" description={serviceHistory.serialNumbers.length ? `Other escalations for device ${serviceHistory.serialNumbers.join(', ')}` : 'No serial number on this escalation, so its device history cannot be shown.'}>
+            {serviceHistory.serialNumbers.length > 0 && (serviceHistory.tickets.length ? <ServiceHistory items={serviceHistory.tickets} /> : <p className="text-muted text-small">No other escalations for this device.</p>)}
+          </Section>}
           {(ticket.validation?.resolutionSummary || ticket.resolution?.summary) && <Section stacked title="Resolution">
             <InfoList columns={2} items={[
               ['Summary', ticket.resolution?.summary || ticket.validation?.resolutionSummary],
@@ -152,28 +172,31 @@ export function B2CTicketDetail() {
           </section>
           {registration && <section className="side-section" aria-label="Customer registration">
             <p className="side-section-title">Customer registration</p>
-            <RegistrationPanel registration={registration} />
+            <RegistrationPanel registration={registration} onDownloadInvoice={registration.invoice ? () => downloadB2CAttachment(ticket._id, registration.invoice.key, registration.invoice.filename).catch(downloadError => setError(friendlyError(downloadError, 'Unable to download the invoice.'))) : null} />
           </section>}
           <section className="side-section" aria-label="Region and routing">
             <p className="side-section-title">Region &amp; routing</p>
             <RegionRouting ticket={ticket} levels={levels} />
           </section>
-          <section className="side-section" aria-label="Devices">
-            <p className="side-section-title">Devices</p>
+          <section className="side-section" aria-label="Device and coverage">
+            <p className="side-section-title">Device &amp; coverage</p>
+            {deviceCoverage && <DeviceCoverage device={deviceCoverage} />}
             {ticket.devices?.length ? <ul className="b2c-device-list">{ticket.devices.map(device => <li key={device.serialNumber || device.crmDeviceId}>
               <strong>{device.productName || device.model || 'Device'}</strong>
               <span className="mono">{device.serialNumber}</span>
               <span className="text-muted text-small">{[device.model, device.warrantyStatus && `Warranty: ${device.warrantyStatus}`, device.purchaseDate && `Purchased ${formatDate(device.purchaseDate)}`].filter(Boolean).join(' · ')}</span>
-            </li>)}</ul> : <p className="text-muted text-small">No device details from the CRM.</p>}
+            </li>)}</ul> : !deviceCoverage && <p className="text-muted text-small">No device record for this escalation's serial number.</p>}
             {ticket.crmCases?.length > 0 && <InfoList items={ticket.crmCases.map(item => [`CRM case ${item.caseId}`, [item.status, item.openedAt && `opened ${formatDate(item.openedAt)}`].filter(Boolean).join(' · ')])} />}
           </section>
           <section className="side-section" aria-label="Identifiers and classification">
             <p className="side-section-title">Identifiers &amp; classification</p>
             <InfoList items={[
-              ...(ticket.identifiers?.length ? ticket.identifiers.map((item, index) => [`${IDENTIFIER_LABELS[item.type] || item.type}${ticket.identifiers.filter(other => other.type === item.type).length > 1 ? ` ${index + 1}` : ''}`, <span key={item.value}><span className="mono">{item.value}</span> <span className="text-muted text-small">({item.source === 'manual' ? 'added in triage' : `from ${item.source}`})</span></span>]) : [['Identifiers', 'None found']]),
+              ...(ticket.identifiers?.length ? ticket.identifiers.map((item, index) => [`${IDENTIFIER_LABELS[item.type] || item.type}${ticket.identifiers.filter(other => other.type === item.type).length > 1 ? ` ${index + 1}` : ''}`, <span key={item.value}><span className="mono">{item.value}</span> <span className="text-muted text-small">({item.source === 'manual' ? 'added in triage' : item.source === 'attachment' ? 'read from an attached file' : `from ${item.source}`})</span></span>]) : [['Identifiers', 'None found']]),
               ['Category', `${ticket.category}${ticket.classification?.source ? ` · ${ticket.classification.source === 'inbox' ? 'from inbox' : ticket.classification.source === 'rule' ? `keywords: ${ticket.classification.matched.join(', ')}` : 'set manually'}` : ''}`],
+              ['Case type', ticket.caseType ? `${ticket.caseType} · ${CASE_TYPE_SOURCES[ticket.caseTypeSource] || ''}${ticket.caseTypeMatched?.length ? `: ${ticket.caseTypeMatched.join(', ')}` : ''}` : null],
+              ['Retail team', ticket.retailTransfer?.name ? `${ticket.retailTransfer.name} (${ticket.retailTransfer.email})${ticket.retailTransfer.at ? ` · ${formatDateTime(ticket.retailTransfer.at)}` : ''}` : null],
               ['Inbox', ticket.inboxAddress],
-            ]} />
+            ].filter(([, value]) => value !== null)} />
           </section>
         </div>
       </aside>
@@ -183,10 +206,95 @@ export function B2CTicketDetail() {
   </B2CShell>;
 }
 
+function Workload({ count, max }) {
+  return <span className="workload" title={`${count} open escalation${count === 1 ? '' : 's'}`}>
+    <span className="workload-dots" aria-hidden="true">{Array.from({ length: Math.min(Math.max(5, max), 8) }, (_, index) => <i key={index} className={index < count ? 'on' : ''} />)}</span>
+    {count} open
+  </span>;
+}
+
+// Who can take the escalation, as in the B2B engineer list: everyone eligible for the ticket's
+// region, least busy first, with their open workload. Nobody with open work is called available;
+// the least busy person is suggested, and the reasons are stated.
+function AssignList({ groups, region, selected, onSelect, hint }) {
+  const [search, setSearch] = useState('');
+  const byLoad = people => [...people].sort((a, b) => (a.activeTickets || 0) - (b.activeTickets || 0) || String(a.name).localeCompare(String(b.name)));
+  const everyone = groups.flatMap(([, people]) => people);
+  const maxLoad = Math.max(0, ...everyone.map(person => person.activeTickets || 0));
+  const [, firstGroup] = groups[0];
+  const suggestion = byLoad(firstGroup)[0];
+  const match = person => !search.trim() || `${person.name} ${person.email} ${(person.b2cRegions || []).join(' ')}`.toLowerCase().includes(search.trim().toLowerCase());
+  const shown = groups.map(([label, people]) => [label, byLoad(people).filter(match)]).filter(([, people]) => people.length);
+  return <div className="stack-12">
+    {suggestion && <section className="suggestion-card" aria-label="Suggested">
+      <div className="suggestion-card-head">
+        <div>
+          <p className="suggestion-eyebrow">Suggested</p>
+          <div className="person-block" style={{ marginTop: 6 }}><Avatar name={suggestion.name} size={36} /><div><strong>{suggestion.name}</strong><small>{suggestion.email}</small></div></div>
+        </div>
+        <Button size="sm" variant={selected === String(suggestion._id) ? 'primary' : 'secondary'} onClick={() => onSelect(String(suggestion._id))}>{selected === String(suggestion._id) ? 'Selected' : 'Choose'}</Button>
+      </div>
+      <p className="suggestion-reasons">{[region ? `Covers ${region}` : null, suggestion.activeTickets ? `Fewest open escalations (${suggestion.activeTickets})` : 'No open escalations'].filter(Boolean).map(reason => <span key={reason}>{reason}</span>)}</p>
+    </section>}
+    {everyone.length > 5 && <SearchInput className="search-full" value={search} onChange={setSearch} placeholder="Search by name, email or region…" label="Search staff" />}
+    <p className="text-muted text-small">{hint}</p>
+    {shown.map(([label, people]) => <div key={label} className="stack-8">
+      {groups.length > 1 && <p className="side-section-title">{label}</p>}
+      <div className="engineer-list" role="radiogroup" aria-label={label}>
+        {people.map(person => {
+          const id = String(person._id);
+          const count = person.activeTickets || 0;
+          return <button key={id} type="button" role="radio" aria-checked={selected === id} className="engineer-option" onClick={() => onSelect(id)}>
+            <Avatar name={person.name} size={36} />
+            <span className="engineer-option-text">
+              <strong>{person.name}</strong>
+              <small>{[person.b2cRegions?.length ? person.b2cRegions.join(', ') : 'All regions', person.email].filter(Boolean).join(' · ')}</small>
+            </span>
+            <span className="engineer-option-side"><Badge dot tone={count ? 'neutral' : 'success'}>{count ? 'Has open work' : 'Available'}</Badge><Workload count={count} max={maxLoad} /></span>
+          </button>;
+        })}
+      </div>
+    </div>)}
+    {!shown.length && <p className="text-muted text-small">Nobody matches this search.</p>}
+  </div>;
+}
+
+// The device record's warranty, AMC and entitlements, as on the Warranty & Coverage page.
+function DeviceCoverage({ device }) {
+  const term = (status, ends) => (status || ends ? [status || 'Not on record', ends && `ends ${formatDate(ends)}`].filter(Boolean).join(' · ') : 'Not on record');
+  return <div className="stack-8">
+    <div className="row b2c-coverage-head"><strong>{device.model || 'Device'}</strong><Badge dot tone={device.coverageStatus === 'Covered' ? 'success' : 'neutral'}>{device.coverageStatus}</Badge></div>
+    <InfoList items={[
+      ['Serial number', <span key="serial" className="mono">{device.serialNumber}</span>],
+      ['Warranty', term(device.warrantyStatus, device.warrantyExpiry)],
+      ['AMC', term(device.amcStatus, device.amcExpiry)],
+      ['Entitlements', device.entitlements?.length ? device.entitlements.join(' · ') : 'None — not covered'],
+      ['Purchased', device.purchaseDate ? formatDate(device.purchaseDate) : null],
+      ['Device location', device.location || null],
+    ].filter(([, value]) => value)} />
+  </div>;
+}
+
+// The device's other escalations, newest first: when, what was reported, and how it ended.
+function ServiceHistory({ items }) {
+  return <ol className="b2c-service-history">{items.map(item => {
+    const outcome = item.resolution ? `Resolved: ${item.resolution}` : item.closedAt && item.closureReason && item.closureReason !== 'Resolved' ? `Closed without resolution: ${item.closureReason}` : null;
+    return <li key={item._id} className="b2c-service-history-item">
+      <div className="row b2c-service-history-head">
+        {item.canOpen ? <Link className="mono" to={`/b2c/tickets/${item._id}`}>{item.reference}</Link> : <span className="mono">{item.reference}</span>}
+        <B2CStatus status={item.status} />
+        <span className="text-muted text-small">{formatDate(item.createdAt)}{item.region ? ` · ${item.region}` : ''}</span>
+      </div>
+      <p>{item.subject || <span className="text-muted">No subject</span>}<span className="text-muted text-small">{item.category && item.category !== 'Unclassified' ? ` · ${item.category}` : ''}{item.handledBy ? ` · ${item.handledBy}` : ''}</span></p>
+      {outcome && <p className="text-muted text-small">{outcome}</p>}
+    </li>;
+  })}</ol>;
+}
+
 // The registration request of an escalation whose sender could not be identified: its state,
 // when each step happened and why it needs a person. The link itself is never shown.
 const REGISTRATION_CHECKS = { device_found: 'device record found', purchase_region_confirmed: 'purchase region confirmed', purchase_date_confirmed: 'purchase date confirmed', customer_matched: 'existing customer matched', new_customer: 'no existing customer', device_region_missing: 'device record has no region' };
-function RegistrationPanel({ registration }) {
+function RegistrationPanel({ registration, onDownloadInvoice }) {
   const status = REGISTRATION_STATUS[registration.status];
   const reason = registration.reason ? REGISTRATION_REASONS[registration.reason] || registration.reason.replace(/_/g, ' ') : null;
   const submission = registration.submission;
@@ -207,6 +315,7 @@ function RegistrationPanel({ registration }) {
       ['Outcome', registration.outcome?.customerRecord ? `${{ existing: 'Existing customer record used', linked: 'Device added to an existing customer', created: 'New customer record created' }[registration.outcome.customerRecord]}${registration.outcome.region ? ` · ${registration.outcome.region}` : ''}` : null],
       ['Ticket created', { registration: 'After the customer registered', staff: 'By a B2C admin, without registration' }[registration.ticketCreatedBy] || null],
       ['Checks passed', registration.outcome?.checks?.length ? registration.outcome.checks.filter(check => REGISTRATION_CHECKS[check]).map(check => REGISTRATION_CHECKS[check]).join(', ') : null],
+      ['Invoice file', registration.invoice && onDownloadInvoice ? <button key="invoice" type="button" className="btn btn-secondary btn-sm" onClick={onDownloadInvoice}><Download size={14} aria-hidden="true" />{registration.invoice.filename}<span className="text-muted">{Math.max(1, Math.round(registration.invoice.size / 1024))} KB</span></button> : null],
     ].filter(([, value]) => value)} />
     {submission && <>
       <p className="text-muted text-small">Submitted by the customer (not verified):</p>
@@ -296,7 +405,25 @@ function EmailMessage({ message, ticketId, onError }) {
         ? <button type="button" className="btn btn-secondary btn-sm" onClick={() => downloadB2CAttachment(ticketId, file.downloadKey, file.filename).catch(downloadError => onError(friendlyError(downloadError, 'Unable to download the attachment.')))}><Download size={14} aria-hidden="true" />{file.filename}<span className="text-muted">{Math.max(1, Math.round(file.size / 1024))} KB</span></button>
         : <span className="b2c-attachment-rejected"><Paperclip size={14} aria-hidden="true" />{file.filename} — not stored ({REJECT_REASONS[file.rejectReason] || file.rejectReason})</span>}
     </li>)}</ul>}
+    {inbound && message.attachmentReading && <AttachmentReading reading={message.attachmentReading} />}
   </li>;
+}
+
+// What Claude read from the email's attached files (invoice, photo of the device or its box).
+const READING_SKIPPED = { heic_not_readable: 'HEIC photo — cannot be read', unsupported_type: 'file type not readable', limit: 'over the reading limit', unreadable: 'could not be opened' };
+function AttachmentReading({ reading }) {
+  if (reading.status === 'nothing_to_read') return null;
+  if (reading.status !== 'read') return <p className="text-muted text-small">{reading.status === 'not_configured' ? 'Attachments were not read automatically (Claude is not configured).' : 'The attachments could not be read automatically; open them to check the details.'}</p>;
+  const items = [
+    ['Serial number', reading.serialNumbers?.length ? <span key="serial" className="mono">{reading.serialNumbers.join(', ')}</span> : null],
+    ['Device', reading.deviceModel], ['Invoice', reading.invoiceNumber], ['Purchased', [reading.purchaseDateText, reading.storeName].filter(Boolean).join(' · ')],
+    ['Buyer', [reading.customerName, reading.customerPhone].filter(Boolean).join(' · ')],
+    ['Not read', reading.skipped?.length ? reading.skipped.map(item => `${item.filename} (${READING_SKIPPED[item.reason] || item.reason})`).join('; ') : null],
+  ].filter(([, value]) => value);
+  return <div className="b2c-attachment-reading">
+    <p className="text-small"><strong>Read from the attachments</strong>{reading.summary ? <span className="text-muted"> · {reading.summary}</span> : null}</p>
+    {items.length ? <InfoList items={items} /> : <p className="text-muted text-small">Nothing useful was found in them.</p>}
+  </div>;
 }
 
 function TemplateNote({ template, label }) {
@@ -307,9 +434,13 @@ function TemplateNote({ template, label }) {
 }
 
 function ActionDialog({ action, ticket, workflow, templates, busy, error, onSubmit, onClose }) {
+  // Retail teams for Transfer to Retail; the one for the ticket's region comes first.
+  const retailTeams = workflow.retailMatrix || [];
   const [form, setForm] = useState(() => ({
-    category: ticket.category === 'Unclassified' ? '' : ticket.category, region: ticket.region || '', regionReason: '', identifiers: [], identifierType: 'caseId', identifierValue: '', rerunCrm: true,
+    // Triage routes only Service escalations: a Retail case is transferred instead.
+    category: ['Unclassified', 'Retail'].includes(ticket.category) ? (ticket.category === 'Retail' ? 'Service' : '') : ticket.category, region: ticket.region || '', regionReason: '', identifiers: [], identifierType: 'caseId', identifierValue: '', rerunCrm: true,
     userId: '', levelKey: '', reason: '', message: '', note: '', resolutionSummary: '', customerMessage: action === 'approve_resolution' ? ticket.validation?.customerMessage || '' : '', path: ticket.path || [],
+    matrixKey: (retailTeams.find(team => team.region && team.region.toLowerCase() === String(ticket.region || '').toLowerCase()) || retailTeams[0])?.key || '',
   }));
   const set = (key, value) => setForm(current => ({ ...current, [key]: value }));
   const staff = useAsync(() => (['assign', 'reroute', 'complete_triage'].includes(action) ? getB2CStaff() : Promise.resolve([])), [action]);
@@ -317,7 +448,10 @@ function ActionDialog({ action, ticket, workflow, templates, busy, error, onSubm
   // Triage decides the region, so the staff list follows the region chosen in the form.
   const identified = ticket.regionAssignment?.status === 'automatic' ? ticket.regionAssignment.region : null;
   const targetRegion = action === 'complete_triage' ? form.region || identified : ticket.region;
-  const eligible = (staff.data || []).filter(person => person.b2cRole === targetLevel && (!person.b2cRegions?.length || person.b2cRegions.includes(targetRegion)) && String(person._id) !== String(ticket.workflow?.assignee?.userId));
+  const eligibleAt = level => (staff.data || []).filter(person => person.b2cRole === level && (!person.b2cRegions?.length || person.b2cRegions.includes(targetRegion)) && String(person._id) !== String(ticket.workflow?.assignee?.userId));
+  const eligible = eligibleAt(targetLevel);
+  // Assign also offers the next level on the path (Cluster Manager → Service Executive).
+  const onward = action === 'assign' && workflow.nextLevel ? eligibleAt(workflow.nextLevel) : [];
   const levelLabel = key => workflow.levels.find(level => level.key === key)?.label || key;
   const regionOverridden = Boolean(form.region) && form.region !== identified;
   const regions = workflow.regions || [];
@@ -325,7 +459,7 @@ function ActionDialog({ action, ticket, workflow, templates, busy, error, onSubm
   const payload = () => {
     switch (action) {
       case 'complete_triage': return { category: form.category, region: form.region, regionReason: regionOverridden ? form.regionReason : '', identifiers: form.identifiers, rerunCrm: form.rerunCrm, note: form.note, ...(form.userId ? { userId: form.userId } : {}) };
-      case 'assign': return { userId: form.userId };
+      case 'assign': return { userId: form.userId, levelKey: onward.some(person => String(person._id) === form.userId) ? workflow.nextLevel : targetLevel };
       case 'reroute': return { levelKey: form.levelKey, reason: form.reason, ...(form.userId ? { userId: form.userId } : {}) };
       case 'set_path': return { path: form.path };
       case 'request_clarification': return { message: form.message };
@@ -334,6 +468,8 @@ function ActionDialog({ action, ticket, workflow, templates, busy, error, onSubm
       case 'reject_resolution': case 'reopen': return { reason: form.reason };
       case 'close_unresolved': return { reason: form.reason, customerMessage: form.customerMessage };
       case 'close': case 'add_note': return { note: form.note };
+      case 'resolve_enquiry': return { customerMessage: form.customerMessage, note: form.note };
+      case 'transfer_retail': return { matrixKey: form.matrixKey, note: form.note, customerMessage: form.customerMessage };
       default: return {};
     }
   };
@@ -342,6 +478,7 @@ function ActionDialog({ action, ticket, workflow, templates, busy, error, onSubm
     complete_triage: Boolean(form.category) && (!regionOverridden || form.regionReason.trim()) && (Boolean(form.region || identified) || !regions.length || form.identifiers.length > 0), assign: Boolean(form.userId), reroute: form.levelKey && form.reason.trim(), set_path: form.path.length > 0,
     request_clarification: form.message.trim(), propose_resolution: form.resolutionSummary.trim() && form.customerMessage.trim(), reject_resolution: form.reason.trim(), reopen: form.reason.trim(),
     close_unresolved: form.reason.trim(), add_note: form.note.trim(),
+    resolve_enquiry: form.customerMessage.trim(), transfer_retail: Boolean(form.matrixKey),
   }[action] ?? true;
   const textarea = (key, placeholder, rows = 4) => props => <textarea {...props} rows={rows} value={form[key]} onChange={event => set(key, event.target.value)} placeholder={placeholder} />;
   const staffSelect = (required, hint) => <Field label={required ? 'Staff member' : 'Assign to (optional)'} hint={hint}>{props => <select {...props} value={form.userId} onChange={event => set('userId', event.target.value)}>
@@ -352,9 +489,11 @@ function ActionDialog({ action, ticket, workflow, templates, busy, error, onSubm
   const descriptions = {
     complete_triage: 'Confirm the category and region, and add any identifier the automatic extraction missed (a serial number on a device record gives the region). The escalation is then routed using the configured workflow.',
     reroute: 'Moves the escalation to any enabled level. The level is added to the path if it is not already on it.',
-    propose_resolution: workflow.validatorLevel === false ? 'Validation is not required: the escalation is resolved and the final email is queued.' : `The resolution goes to ${workflow.validatorLevel ? levelLabel(workflow.validatorLevel) : 'a B2C admin'} for validation before the customer is told.`,
+    propose_resolution: workflow.validatorLevel === false ? `No approval is needed: the repair is completed straight away and the final email is queued.${workflow.autoCloseMinutes ? ` The escalation then closes automatically after ${workflow.autoCloseMinutes} minutes.` : ''}` : `The resolution goes to ${workflow.validatorLevel ? levelLabel(workflow.validatorLevel) : 'a B2C admin'} for validation before the customer is told.`,
     approve_resolution: 'Approving resolves the escalation and queues the final customer email below.',
     close_unresolved: 'Use for emails that are not escalations (for example spam or duplicates). Optionally send the customer a final email.',
+    resolve_enquiry: 'Your answer is emailed to the customer and the case closes as an answered enquiry. It does not go to a Cluster Manager.',
+    transfer_retail: 'The case is emailed to the retail team, who close it as per the Retail process, and it closes here. You can also tell the customer.',
   };
 
   return <Modal as="form" size="md" title={ACTION_META[action].label} eyebrow={ticket.reference} description={descriptions[action]} onClose={onClose}
@@ -364,7 +503,7 @@ function ActionDialog({ action, ticket, workflow, templates, busy, error, onSubm
       {error && <InlineAlert title={error} />}
       {action === 'complete_triage' && <>
         {ticket.triage?.reasons?.length > 0 && <InlineAlert tone="warning" title="Flagged for triage">{ticket.triage.reasons.map(reason => TRIAGE_REASONS[reason] || reason).join('. ')}</InlineAlert>}
-        <Field label="Category" required>{props => <select {...props} value={form.category} onChange={event => set('category', event.target.value)}><option value="">Choose Service or Retail</option><option>Service</option><option>Retail</option></select>}</Field>
+        <Field label="Category" required>{props => <select {...props} value={form.category} onChange={event => set('category', event.target.value)}><option value="">Choose the category</option><option value="Service">Service — escalation to the Cluster Manager</option><option value="Retail" disabled>Retail — use Transfer to Retail instead</option></select>}</Field>
         {regions.length
           ? <Field label="Region" required={!identified && !form.identifiers.length} hint={identified ? `From the device record: ${identified}.` : 'No device record gives a region. Add the serial number, or choose the region.'}>{props => <select {...props} value={form.region} onChange={event => setForm(current => ({ ...current, region: event.target.value, userId: '' }))}>
             <option value="">{identified ? `Keep ${identified}` : 'Choose a region'}</option>
@@ -389,7 +528,23 @@ function ActionDialog({ action, ticket, workflow, templates, busy, error, onSubm
         <label className="row text-small"><input type="checkbox" checked={form.rerunCrm} onChange={event => set('rerunCrm', event.target.checked)} />Repeat the CRM lookup before routing</label>
         <Field label="Triage note (internal)">{textarea('note', 'Why this escalation can proceed', 3)}</Field>
       </>}
-      {action === 'assign' && (staff.loading ? <p className="text-muted">Loading staff…</p> : eligible.length ? staffSelect(true, `People holding the ${levelLabel(targetLevel)} role for this region.`) : <InlineAlert tone="warning" title="Nobody else can take this level">No other active staff member holds the {levelLabel(targetLevel)} role for this region.</InlineAlert>)}
+      {action === 'assign' && (staff.loading ? <p className="text-muted">Loading staff…</p> : eligible.length || onward.length
+        ? <AssignList groups={[[levelLabel(workflow.nextLevel), onward], [`Other ${levelLabel(targetLevel)}s`, eligible]].filter(([, people]) => people.length)} region={ticket.region} selected={form.userId} onSelect={value => set('userId', value)}
+          hint={onward.length ? `The escalation moves to the ${levelLabel(workflow.nextLevel)} you choose, who is notified.` : `People holding the ${levelLabel(targetLevel)} role for ${ticket.region || 'this region'}.`} />
+        : <InlineAlert tone="warning" title="Nobody can take this escalation">No other active staff member holds the {levelLabel(targetLevel)}{workflow.nextLevel ? ` or ${levelLabel(workflow.nextLevel)}` : ''} role for this region.</InlineAlert>)}
+      {action === 'resolve_enquiry' && <>
+        <Field label="Answer to the customer" required hint="Sent as the final email, with the reference in the subject.">{textarea('customerMessage', 'e.g. A screen replacement for this model costs Rs 8,000 including parts and takes two days.', 5)}</Field>
+        <Field label="Internal note">{textarea('note', 'Optional: where the answer came from', 2)}</Field>
+      </>}
+      {action === 'transfer_retail' && (retailTeams.length
+        ? <>
+          <Field label="Retail team" required hint={ticket.region ? `This case's region: ${ticket.region}.` : 'This case has no region yet.'}>{props => <select {...props} value={form.matrixKey} onChange={event => set('matrixKey', event.target.value)}>
+            {retailTeams.map(team => <option key={team.key} value={team.key}>{team.name}{team.region ? ` · ${team.region}` : ''} · {team.email}</option>)}
+          </select>}</Field>
+          <Field label="Note for the retail team">{textarea('note', 'What the retail team should know', 3)}</Field>
+          <Field label="Message to the customer (optional)" hint="Leave empty to close without emailing the customer.">{textarea('customerMessage', 'e.g. Your concern has been passed to our retail team, who will contact you.', 3)}</Field>
+        </>
+        : <InlineAlert tone="warning" title="No retail teams yet">Add the retail teams to the Retail matrix in B2C Settings first.</InlineAlert>)}
       {action === 'reroute' && <Field label="Move to level" required>{props => <select {...props} value={form.levelKey} onChange={event => setForm(current => ({ ...current, levelKey: event.target.value, userId: '' }))}><option value="">Choose a level</option>{workflow.levels.filter(level => level.key !== ticket.workflow?.currentLevel).map(level => <option key={level.key} value={level.key}>{level.label}</option>)}</select>}</Field>}
       {action === 'reroute' && targetLevel && !staff.loading && staffSelect(false)}
       {['reroute', 'reject_resolution', 'reopen', 'close_unresolved'].includes(action) && <Field label="Reason" required hint="Recorded in the escalation history.">{textarea('reason', '', 3)}</Field>}

@@ -26,6 +26,27 @@ Email to the request inbox (B2B_EMAIL_USER)
 Other status changes are not emailed; the customer follows them on the tracking page.
 Tickets raised in the portal are never emailed.
 
+## Attachments
+
+Every file attached to the email is fetched with it (images embedded in the body, such as
+signature logos, are not). Each is checked as B2C email attachments are: PDF, JPG, PNG, HEIC
+or TXT only, contents that match the type (a renamed file is refused), up to 10 MB, and the
+first 10 files. Accepted files are stored under a random name in `uploads/`; refused ones are
+listed on the request as *Not imported* with the reason, so the reviewer can open the email in
+the mailbox for them.
+
+On approval every stored file goes with the ticket: photos as its images (shown under
+Evidence) and other files, such as an invoice PDF, as its attachments (listed under Evidence on
+the service and corporate ticket pages).
+
+**Claude reads the attachments with the email** (`backend/src/attachmentReading.js`): PDFs as
+documents, JPG/PNG/GIF/WEBP photos as images and text files as text, up to 5 files and 20 MB
+per email. HEIC photos cannot be read by Claude and are listed as *Not read*. Serial numbers,
+asset IDs, models, the invoice number and purchase date found in the files fill the draft like
+those in the email text; *What Claude found* lists the files read and a note of what they
+showed. The files are treated as data from the sender, never as instructions. B2C escalations
+read attachments the same way (see `docs/b2c-escalations.md`).
+
 ## Acknowledgement emails
 
 Each acknowledgement goes to the address the request came from, as a reply in that email's

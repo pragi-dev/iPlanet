@@ -216,6 +216,24 @@ button { cursor: pointer; }
 .reg-section legend { padding: 0; font-weight: 600; font-size: 15px; }
 .reg-section-description { margin: 2px 0 var(--space-4); font-size: 13px; color: var(--color-text-secondary); }
 .reg-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+/* Same height as the text inputs, so it sits level with the invoice number beside it. */
+.reg-invoice-drop {
+  display: flex; align-items: center; gap: var(--space-2); height: 46px; padding: 0 14px;
+  border: 1px dashed var(--color-border); border-radius: var(--radius-md); background: var(--glass);
+  font-size: 15px; color: var(--color-text-secondary); cursor: pointer; transition: border-color 180ms var(--ease), background-color 180ms var(--ease);
+}
+.reg-invoice-drop:hover { color: var(--color-text-primary); }
+.reg-invoice-drop:hover { border-color: var(--color-accent); background: var(--glass-strong); }
+.reg-invoice input:focus-visible + .reg-invoice-drop { border-color: var(--color-accent); box-shadow: var(--focus); }
+.field-invalid .reg-invoice-drop { border-color: var(--color-error); }
+.reg-invoice-file {
+  display: flex; align-items: center; gap: var(--space-2); height: 46px; padding: 0 var(--space-1) 0 14px;
+  border: 1px solid var(--glass-edge); border-radius: var(--radius-md); background: var(--glass-strong); box-shadow: var(--glass-highlight);
+}
+.reg-invoice-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+.reg-invoice-remove { display: grid; place-items: center; width: 34px; height: 34px; flex: none; border: 0; border-radius: 50%; background: transparent; color: var(--color-text-secondary); cursor: pointer; }
+.reg-invoice-remove:hover { background: var(--color-fill); color: var(--color-text-primary); }
+.reg-invoice-remove:disabled { cursor: default; opacity: 0.5; }
 .reg-confirm-field { padding-top: var(--space-4); border-top: 1px solid var(--glass-edge); }
 .reg-confirm { display: flex; align-items: flex-start; gap: var(--space-2); font-size: 14px; line-height: 1.45; cursor: pointer; }
 .reg-confirm input { width: 18px; height: 18px; margin: 1px 0 0; flex: none; accent-color: var(--color-accent); }

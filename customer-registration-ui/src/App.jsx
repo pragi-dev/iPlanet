@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Clock, FlaskConical, Link2Off, RotateCcw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Clock, FileText, FlaskConical, Link2Off, Paperclip, RotateCcw, X } from 'lucide-react';
 import { Button, Field, InlineAlert, JourneyTrack } from './components';
-import { EMPTY_FORM, FIELDS, SECTIONS, todayIso, toPayload, validate } from './fields';
+import { EMPTY_FORM, FIELDS, INVOICE_FILE, SECTIONS, todayIso, toPayload, validate } from './fields';
 import { registrationJourney } from './registrationJourney';
 import { loadRegistration, registrationMode, submitRegistration } from './service/registrationService';
 
@@ -66,14 +66,15 @@ export default function App() {
   const submit = async event => {
     event.preventDefault();
     if (submitting.current) return;
-    const found = validate(form, { regions: state.data.regions });
+    const invoiceMaxBytes = state.data.invoiceMaxBytes || INVOICE_FILE.maxBytes;
+    const found = validate(form, { regions: state.data.regions, invoiceMaxBytes });
     setErrors(found);
     setNotice('');
     if (Object.keys(found).length) { setNotice('Please correct the highlighted fields.'); focusFirstError(found); return; }
     submitting.current = true;
     setBusy(true);
     try {
-      const result = await submitRegistration(toPayload(form));
+      const result = await submitRegistration(toPayload(form), form.invoice);
       setForm(EMPTY_FORM);
       setState(current => ({ ...current, phase: 'submitted', result, submittedAt: new Date() }));
       window.scrollTo?.({ top: 0 });
@@ -129,6 +130,8 @@ export default function App() {
           <p className="reg-section-description">{section.description}</p>
           <div className="reg-grid">
             {section.fields.map(key => {
+              // Beside the invoice number, in the same row.
+              if (key === 'invoice') return <InvoiceField key={key} file={form.invoice} error={errors.invoice} maxBytes={state.data.invoiceMaxBytes || INVOICE_FILE.maxBytes} onChange={file => set('invoice', file)} />;
               const field = FIELDS[key];
               return <Field key={key} id={`reg-${key}`} label={field.label} required={field.required} hint={HINTS[key]} error={errors[key]}>{props => key === 'purchaseRegion'
                 ? <select {...props} value={form.purchaseRegion} onChange={event => set('purchaseRegion', event.target.value)}>
@@ -153,6 +156,30 @@ export default function App() {
     </main>
 
     <footer className="reg-footer text-small">Your details are used only to verify your device and continue your support request.</footer>
+  </div>;
+}
+
+const fileSize = bytes => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
+
+// Optional invoice upload: one PDF or photo. The chosen file is shown with a Remove button;
+// the native input is visually hidden behind a styled label so it stays keyboard accessible.
+function InvoiceField({ file, error, maxBytes, onChange }) {
+  const input = useRef(null);
+  const clear = () => { onChange(null); if (input.current) input.current.value = ''; };
+  useEffect(() => { if (!file && input.current) input.current.value = ''; }, [file]);
+  const hint = `Optional. PDF, JPG, PNG or HEIC, up to ${Math.floor(maxBytes / 1048576)} MB.`;
+  return <div className={`field reg-invoice ${error ? 'field-invalid' : ''}`}>
+    <span className="field-label" id="reg-invoice-label">{INVOICE_FILE.label} file</span>
+    <input ref={input} id="reg-invoice" className="sr-only" type="file" accept={INVOICE_FILE.accept} aria-labelledby="reg-invoice-label" aria-describedby={error ? 'reg-invoice-error' : 'reg-invoice-hint'} aria-invalid={error ? true : undefined}
+      onChange={event => onChange(event.target.files?.[0] || null)} />
+    {file
+      ? <div className="reg-invoice-file">
+        <FileText size={16} aria-hidden="true" />
+        <span className="reg-invoice-name">{file.name}<span className="text-muted"> · {fileSize(file.size)}</span></span>
+        <button type="button" className="reg-invoice-remove" onClick={clear} aria-label={`Remove ${file.name}`}><X size={16} aria-hidden="true" /></button>
+      </div>
+      : <label htmlFor="reg-invoice" className="reg-invoice-drop"><Paperclip size={16} aria-hidden="true" />Attach invoice</label>}
+    {error ? <p className="field-error" id="reg-invoice-error">{error}</p> : <p className="field-hint" id="reg-invoice-hint">{hint}</p>}
   </div>;
 }
 
