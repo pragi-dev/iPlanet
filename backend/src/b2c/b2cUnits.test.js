@@ -9,7 +9,7 @@ import { inspectAttachment, sanitiseFilename } from './attachments.js';
 import { renderTemplate, templateVars } from './templates.js';
 import { redactText, redactDetails } from './redact.js';
 import { DEFAULT_IDENTIFIER_RULES, DEFAULT_TEMPLATES, defaultSettings } from './b2cDefaults.js';
-import { ACTIONS, STATUS, allowedActions, canPerform, canView, nextLevel, validatorLevelFor, visibilityFilter } from './workflow.js';
+import { ACTIONS, STATUS, allowedActions, canPerform, canView, defaultPath, nextLevel, validatorLevelFor, visibilityFilter } from './workflow.js';
 import { validateSettingsUpdate } from './settingsValidation.js';
 import { assessDeviceRegion, resolveDeviceRegion } from './deviceRegion.js';
 import { assessCustomerRegion, extractContacts, matchCustomer, normalisePhone, serialForLookup } from './customerMatch.js';
@@ -22,7 +22,15 @@ import { createBrevoAckSender } from './connectors/brevoAckSender.js';
 import { reportAckConfig } from './index.js';
 import { computeSlaEscalation, slaTargets } from '../slaEscalation.js';
 
-const settings = defaultSettings({ testInboxAddress: 'escalations@b2c-inbox.test' });
+const defaults = defaultSettings({ testInboxAddress: 'escalations@b2c-inbox.test' });
+const settings = defaults;
+
+test('the flow is Cluster Manager → Service Executive, with no other levels', () => {
+  assert.deepEqual(defaultPath(defaults), ['cluster_manager', 'service_excellence_lead']);
+  assert.deepEqual(defaults.workflowLevels.map(level => [level.key, level.label, level.enabled]), [['cluster_manager', 'Cluster Manager', true], ['service_excellence_lead', 'Service Executive', true]]);
+  const ticket = { status: STATUS.ASSIGNED, region: 'North', workflow: { path: defaultPath(defaults), currentLevel: 'cluster_manager' } };
+  assert.equal(nextLevel(ticket, defaults), 'service_excellence_lead');
+});
 
 test('HTML email is reduced to text without scripts, styles or markup', () => {
   const text = htmlToText('<html><head><style>p{}</style></head><body><p>Hello&nbsp;there</p><script>alert(1)</script><img src=x onerror=alert(1)>Line&#33;<br>Next &lt;b&gt;</body></html>');
@@ -108,18 +116,18 @@ const user = (id, b2cRole, b2cRegions = []) => ({ id, name: id, b2cRole, b2cRegi
 const admin = user('admin', 'b2c_admin');
 const cm = user('cm', 'cluster_manager', ['North']);
 const cmSouth = user('cm2', 'cluster_manager', ['South']);
-const rbh = user('rbh', 'rbh');
-const ticketAt = (status, extra = {}) => ({ status, region: 'North', participants: [], workflow: { path: ['cluster_manager', 'rbh', 'trainer'], currentLevel: 'cluster_manager', assignee: null }, validation: {}, ...extra });
+const executive = user('se', 'service_excellence_lead');
+const ticketAt = (status, extra = {}) => ({ status, region: 'North', participants: [], workflow: { path: ['cluster_manager', 'service_excellence_lead'], currentLevel: 'cluster_manager', assignee: null }, validation: {}, ...extra });
 
 test('visibility: admins see all, level staff see their level queue in their regions, others nothing', () => {
   const open = ticketAt(STATUS.OPEN);
   assert.equal(canView(open, admin), true);
   assert.equal(canView(open, cm), true);
   assert.equal(canView(open, cmSouth), false);
-  assert.equal(canView(open, rbh), false);
+  assert.equal(canView(open, executive), false);
   assert.equal(canView(open, { id: 'x', b2cRole: null }), false);
   assert.equal(canView(ticketAt(STATUS.TRIAGE), cm), false, 'triage is admin-only');
-  assert.equal(canView(ticketAt(STATUS.CLOSED, { participants: ['rbh'] }), rbh), true, 'past participants keep read access');
+  assert.equal(canView(ticketAt(STATUS.CLOSED, { participants: ['se'] }), executive), true, 'past participants keep read access');
   assert.deepEqual(visibilityFilter(admin), {});
   assert.equal(visibilityFilter(cm).$or.length, 4);
 });
@@ -134,16 +142,19 @@ test('actions follow status and role: claim, accept, start, validation', () => {
   const accepted = ticketAt(STATUS.ACCEPTED, { workflow: assigned.workflow });
   assert.equal(canPerform('start', { ticket: accepted, user: cm, settings }), true);
   assert.equal(canPerform('accept', { ticket: accepted, user: cm, settings }), false);
-  assert.equal(canPerform('accept', { ticket: assigned, user: rbh, settings }), false, 'only the assignee accepts');
+  assert.equal(canPerform('accept', { ticket: assigned, user: executive, settings }), false, 'only the assignee accepts');
   assert.equal(canPerform('complete_triage', { ticket: ticketAt(STATUS.TRIAGE), user: admin, settings }), true);
   assert.equal(canPerform('close_unresolved', { ticket: assigned, user: cm, settings }), false);
-  assert.equal(nextLevel(assigned, settings), 'rbh');
-  assert.equal(validatorLevelFor(assigned, settings), 'rbh');
+  assert.equal(nextLevel(assigned, settings), 'service_excellence_lead');
+  assert.equal(validatorLevelFor(assigned, settings), null, 'the Cluster Manager\'s own repair: a B2C admin approves');
+  const withExecutive = ticketAt(STATUS.INVESTIGATING, { workflow: { ...open.workflow, currentLevel: 'service_excellence_lead', assignee: { userId: 'se' } } });
+  assert.equal(validatorLevelFor(withExecutive, settings), false, 'the Service Executive\'s repair needs no approval');
   assert.equal(validatorLevelFor(assigned, { ...settings, validation: { mode: 'none' } }), false);
-  assert.equal(validatorLevelFor(assigned, { ...settings, validation: { mode: 'level', levelKey: 'trainer' } }), 'trainer');
-  const pending = ticketAt(STATUS.PENDING_VALIDATION, { workflow: { ...open.workflow, assignee: { userId: 'cm' } }, validation: { validatorLevel: 'rbh', proposedBy: { userId: 'cm' } } });
-  assert.equal(canPerform('approve_resolution', { ticket: pending, user: rbh, settings }), true);
-  assert.equal(canPerform('approve_resolution', { ticket: pending, user: cm, settings }), false, 'no self-validation');
+  assert.equal(validatorLevelFor(assigned, { ...settings, validation: { mode: 'level', levelKey: 'cluster_manager' } }), 'cluster_manager');
+  const pending = ticketAt(STATUS.PENDING_VALIDATION, { workflow: { ...withExecutive.workflow }, participants: ['cm'], validation: { validatorLevel: 'cluster_manager', proposedBy: { userId: 'se' } } });
+  assert.equal(canPerform('approve_resolution', { ticket: pending, user: cm, settings }), true, 'the region\'s Cluster Manager approves');
+  assert.equal(canPerform('approve_resolution', { ticket: pending, user: cmSouth, settings }), false, 'not another region\'s');
+  assert.equal(canPerform('approve_resolution', { ticket: pending, user: executive, settings }), false, 'no self-validation');
   const adminProposal = { ...pending, validation: { validatorLevel: null, proposedBy: { userId: 'admin' } } };
   assert.equal(canPerform('approve_resolution', { ticket: adminProposal, user: admin, settings }), false, 'admins cannot validate their own proposal either');
   assert.ok(Object.values(ACTIONS).every(action => action.statuses.length));
@@ -255,7 +266,7 @@ test('assessDeviceRegion: exact serial match on the device records, explicit out
 test('only B2C admins complete triage, which is where an unresolved region is decided', () => {
   const ticket = { status: STATUS.TRIAGE, workflow: {}, participants: [] };
   assert.equal(canPerform('complete_triage', { ticket, user: { id: 'a', b2cRole: 'b2c_admin' }, settings }), true);
-  for (const b2cRole of ['cluster_manager', 'rbh', undefined]) assert.equal(canPerform('complete_triage', { ticket, user: { id: 'u', b2cRole }, settings }), false, b2cRole);
+  for (const b2cRole of ['cluster_manager', 'service_excellence_lead', undefined]) assert.equal(canPerform('complete_triage', { ticket, user: { id: 'u', b2cRole }, settings }), false, b2cRole);
 });
 
 test('normalisePhone: the same Indian number in any common format, and nothing that is not a number', () => {

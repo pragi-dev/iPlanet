@@ -56,6 +56,7 @@ const B2CNotifications = page(() => import('./b2c/B2CNotifications'), 'B2CNotifi
 const SignUp = page(() => import('./auth/SignUp'), 'SignUp');
 const TrackTicket = page(() => import('./track/TrackTicket'), 'TrackTicket');
 const B2CRegistrations = page(() => import('./b2c/B2CRegistrations'), 'B2CRegistrations');
+const B2CCoverage = page(() => import('./b2c/B2CCoverage'), 'B2CCoverage');
 // Public: reached from the customer registration email, no sign-in.
 const CustomerRegistration = page(() => import('./b2c/CustomerRegistration'), 'CustomerRegistration');
 
@@ -89,8 +90,9 @@ function Login() {
   const profiles = {
     corporate: { label: 'Corporate Admin', email: 'karthik.raj@democorporation.in', password: 'Demo@123' },
     service: { label: 'iPlanet Service', email: 'service@iplanet.local', password: 'Demo@123' },
-    // No demo account: B2C staff are created by an administrator, and production has no B2C demo accounts.
-    b2c: { label: 'B2C Escalations', email: '', password: '' },
+    // The B2C admin demo account (created locally by ensureB2CDemoAccounts; on a server it must
+    // exist there). Other B2C staff are created by an administrator.
+    b2c: { label: 'B2C Admin', email: 'b2c.admin@iplanet.local', password: 'Demo@123' },
   };
   const [searchParams] = useSearchParams();
   const [profile, setProfile] = useState(() => signInWorkspaceFrom(searchParams));
@@ -141,7 +143,7 @@ function Login() {
         {profile === 'b2c'
           ? <p className="login-switch">B2C accounts are created by your B2C administrator.</p>
           : <p className="login-switch">Don’t have an account? <Link to={`/signup${profile === 'service' ? '?workspace=service' : ''}`}>Sign up</Link></p>}
-        <p className="login-note"><span>Access is managed by your administrator.</span>{profile !== 'b2c' && <span>Demo password <strong>Demo@123</strong></span>}</p>
+        <p className="login-note"><span>Access is managed by your administrator.</span><span>Demo password <strong>Demo@123</strong></span></p>
       </form>
   </AuthLayout>;
 }
@@ -164,7 +166,7 @@ const prefetchedPortals = new Set();
 const portalChunks = {
   corporate_admin: [corporatePages, corporateExtras, reviewPages, () => import('./corporate/RequestEnhanced'), () => import('./corporate/TicketDetailEnhanced'), () => import('./corporate/CoverageEnhanced'), () => import('./corporate/ServiceRecommendations')],
   iplanet_service: [servicePages, serviceExtras, internalReviews, () => import('./service/companyQueue'), () => import('./service/OperationalTicketDetail'), () => import('./service/ProactiveService'), () => import('./service/enrollment'), () => import('./service/coverage')],
-  [B2C_ONLY_ROLE]: [() => import('./b2c/B2CQueue'), () => import('./b2c/B2CTicketDetail'), () => import('./b2c/B2CReports')],
+  [B2C_ONLY_ROLE]: [() => import('./b2c/B2CQueue'), () => import('./b2c/B2CTicketDetail'), () => import('./b2c/B2CReports'), () => import('./b2c/B2CCoverage')],
 };
 function usePrefetchPortal(role) {
   useEffect(() => {
@@ -298,6 +300,7 @@ function B2CRoutes() {
     <Route path="/b2c/tickets/:id" element={<B2CProtected><B2CTicketDetail /></B2CProtected>} />
     <Route path="/b2c/registrations" element={<B2CProtected><B2CRegistrations /></B2CProtected>} />
     <Route path="/b2c/reports" element={<B2CProtected><B2CReports /></B2CProtected>} />
+    <Route path="/b2c/coverage" element={<B2CProtected><B2CCoverage /></B2CProtected>} />
     <Route path="/b2c/integrations" element={<B2CProtected><B2CIntegrations /></B2CProtected>} />
     <Route path="/b2c/settings" element={<B2CProtected><B2CSettings /></B2CProtected>} />
     <Route path="/b2c/notifications" element={<B2CProtected><B2CNotifications /></B2CProtected>} />

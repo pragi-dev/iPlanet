@@ -46,9 +46,6 @@ export function emailInboxConfig(environment = emailSettings()) {
   };
 }
 
-const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
-const MAX_ATTACHMENTS = 5;
-
 export function createImapMailbox(config = emailInboxConfig()) {
   const isConfigured = () => Boolean(config.host && config.user && config.pass);
 
@@ -85,10 +82,11 @@ export function createImapMailbox(config = emailInboxConfig()) {
             subject: parsed.subject || '',
             text: (parsed.text || '').trim(),
             receivedAt: parsed.date || new Date(),
+            // Every attached file; images embedded in the body (signatures, logos) are part of the
+            // text. Each file is checked when it is stored (emailRequestRoutes.js), and one that
+            // cannot be kept is recorded with the reason instead of being dropped silently.
             attachments: (parsed.attachments || [])
-              .filter(item => item.contentDisposition !== 'inline' || /^image\//.test(item.contentType))
-              .filter(item => item.size <= MAX_ATTACHMENT_BYTES)
-              .slice(0, MAX_ATTACHMENTS)
+              .filter(item => !item.related && !(item.contentDisposition === 'inline' && item.cid))
               .map(item => ({ filename: item.filename || 'attachment', contentType: item.contentType, size: item.size, content: item.content })),
           });
         }

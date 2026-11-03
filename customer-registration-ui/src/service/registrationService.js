@@ -39,7 +39,8 @@ async function request(path, options = {}) {
   try {
     response = await fetch(`${API_BASE}${path}`, {
       ...options,
-      headers: { 'Content-Type': 'application/json', ...options.headers },
+      // FormData sets its own multipart Content-Type (with the boundary).
+      headers: options.body instanceof FormData ? options.headers : { 'Content-Type': 'application/json', ...options.headers },
       credentials: 'omit',
       referrerPolicy: 'no-referrer',
     });
@@ -59,10 +60,17 @@ function apiAdapter(token) {
   return {
     async load() {
       const data = await request(path);
-      return { mode: 'api', companyName: data.companyName, reference: data.reference, expiresAt: data.expiresAt, regions: data.regions || [] };
+      return { mode: 'api', companyName: data.companyName, reference: data.reference, expiresAt: data.expiresAt, regions: data.regions || [], invoiceMaxBytes: data.invoice?.maxBytes };
     },
-    async submit(payload) {
-      const data = await request(path, { method: 'POST', body: JSON.stringify(payload) });
+    // With an invoice the form goes as multipart data (file field "invoice"); otherwise as JSON.
+    async submit(payload, invoice) {
+      let body = JSON.stringify(payload);
+      if (invoice) {
+        body = new FormData();
+        for (const [key, value] of Object.entries(payload)) body.append(key, String(value));
+        body.append('invoice', invoice, invoice.name);
+      }
+      const data = await request(path, { method: 'POST', body });
       return { mode: 'api', reference: data.reference };
     },
   };
@@ -77,4 +85,4 @@ function adapter() {
 
 export const registrationMode = MODE;
 export const loadRegistration = () => adapter().load();
-export const submitRegistration = payload => adapter().submit(payload);
+export const submitRegistration = (payload, invoice = null) => adapter().submit(payload, invoice);

@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Ticket, X } from 'lucide-react';
 import { ServiceShell } from './components';
 import { getCompanies, getServiceCentres, getServiceTickets } from './api';
-import { Badge, Button, EmptyState, FilterBar, FilterSelect, PageHeader, RowAction, SearchInput, TableCard, formatDate, friendlyError, slaLabel, useAsync } from '../ui';
+import { Badge, Button, EmptyState, FilterBar, FilterSelect, PageHeader, SearchInput, TableCard, formatDate, friendlyError, slaLabel, useAsync } from '../ui';
 
 const statuses = ['Open', 'Engineer Assigned', 'Engineer Accepted', 'In Progress', 'Waiting for Parts', 'Completed', 'Closed'];
 const locations = ['Chennai', 'Coimbatore', 'Bengaluru', 'Madurai'];
@@ -30,7 +30,7 @@ export function MyTickets() {
   return <ServiceShell title="Tickets">
     <PageHeader title="Tickets" description="Every service request raised by corporate customers." />
     <TableCard
-      columns={10}
+      columns={9}
       loading={state.loading && !state.data}
       error={state.error && friendlyError(state.error)}
       errorTitle="Unable to load tickets"
@@ -49,19 +49,19 @@ export function MyTickets() {
       isEmpty={!tickets.length}
       empty={active ? <EmptyState icon={Search} title="No tickets match these filters" description="Try a different search term or clear the filters." action={<Button size="sm" onClick={clear}>Clear filters</Button>} /> : <EmptyState icon={Ticket} title="No tickets yet" description="Tickets raised by corporate customers will appear here." />}
     >
-      <table className="table table-compact">
-        <thead><tr><th>Ticket ID</th><th>Corporate</th><th>Device</th><th>Issue</th><th>Priority</th><th>Engineer</th><th>Status</th><th>SLA</th><th>Created</th><th><span className="sr-only">Action</span></th></tr></thead>
+      <table className="table table-compact table-dense">
+        <thead><tr><th>Ticket ID</th><th>Corporate</th><th>Device</th><th>Issue</th><th>Priority</th><th>Engineer</th><th>Status</th><th>SLA</th><th>Created</th></tr></thead>
         <tbody>{tickets.map(ticket => <tr key={ticket._id} className="row-clickable" onClick={event => { if (!event.target.closest('a')) navigate(`/service/tickets/${ticket._id}`); }}>
           <td className="cell-nowrap"><Link className="cell-link mono" to={`/service/tickets/${ticket._id}`}>{ticket.ticketId}</Link><span className="cell-sub">{ticket.location}</span></td>
-          <td className="cell-nowrap">{ticket.companyId?.name || ticket.customerId?.company || '—'}</td>
-          <td className="cell-nowrap"><span className="cell-primary">{ticket.deviceId?.model || '—'}</span><span className="cell-sub mono">{ticket.deviceId?.serialNumber}</span></td>
+          <td>{ticket.companyId?.name || ticket.customerId?.company || '—'}</td>
+          <td><span className="cell-primary">{ticket.deviceId?.model || '—'}</span><span className="cell-sub mono">{ticket.deviceId?.serialNumber}</span></td>
           <td>{ticket.issueType || '—'}<span className="cell-sub">{ticket.category}</span></td>
           <td><Badge>{ticket.priority}</Badge></td>
           <td>{ticket.assignedEngineer || <span className="text-muted">Unassigned</span>}</td>
           <td><Badge dot>{ticket.status}</Badge></td>
           <td><Badge>{slaLabel(ticket)}</Badge></td>
+          {/* The ticket ID links to the ticket and the whole row opens it, so there is no separate Open column. */}
           <td className="cell-nowrap">{formatDate(ticket.createdAt)}</td>
-          <td className="cell-right"><RowAction to={`/service/tickets/${ticket._id}`} label="Open" /></td>
         </tr>)}</tbody>
       </table>
     </TableCard>

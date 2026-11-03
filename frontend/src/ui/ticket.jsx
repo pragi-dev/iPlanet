@@ -1,4 +1,4 @@
-import { CircleAlert, Clock3, Laptop, Monitor, ShieldAlert, ShieldCheck, Smartphone, Tablet, Watch } from 'lucide-react';
+import { CircleAlert, Clock3, Laptop, Monitor, Paperclip, ShieldAlert, ShieldCheck, Smartphone, Tablet, Watch } from 'lucide-react';
 import { Badge } from './primitives';
 import { formatDateTime, slaLabel, statusTone } from './format';
 
@@ -24,6 +24,17 @@ export function Evidence({ ticket, resolve, onOpen }) {
       <Badge tone={image.kind === 'Annotated' ? 'warning' : 'neutral'}>{image.kind}</Badge>
     </button>)}
   </div>;
+}
+
+// Files other than photos that came with the request (for example an invoice PDF from the
+// customer's email). Opened from the uploads folder like the photos.
+export function TicketAttachments({ ticket, resolve }) {
+  const files = ticket?.attachments || [];
+  if (!files.length) return null;
+  const size = bytes => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round((bytes || 0) / 1024))} KB`);
+  return <ul className="ticket-attachments">
+    {files.map(file => <li key={file.path}><a className="cell-link" href={resolve(file.path)} target="_blank" rel="noreferrer"><Paperclip size={14} aria-hidden="true" /> {file.filename}</a> <span className="cell-sub">{size(file.size)}</span></li>)}
+  </ul>;
 }
 
 export function levelLabel(level) {

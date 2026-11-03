@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, FilePlus2, Send, UserPlus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, FilePlus2, Send, UserPlus } from 'lucide-react';
 import { ActivityTimeline, Badge, Button, Drawer, EmptyState, ErrorState, Field, FilterBar, InfoList, InlineAlert, Modal, PageHeader, TableCard, Tabs, formatDateTime, formatRelative, friendlyError, pluralize, useAsync } from '../ui';
-import { b2cRegistrationAction, getB2CRegistration, getB2CRegistrations } from './api';
+import { b2cRegistrationAction, downloadB2CRegistrationInvoice, getB2CRegistration, getB2CRegistrations } from './api';
 import { B2CShell, NoB2CAccess, REGISTRATION_REASONS, REGISTRATION_STATUS, auditTimeline } from './shared';
 
 // Emails from customers who could not be identified. No ticket (and no ticket number) exists
@@ -114,6 +114,8 @@ function RegistrationDrawer({ id, onClose, onChanged }) {
         ['Invalid submissions', request.failedAttempts || null],
         ['Submitted', request.submittedAt ? formatDateTime(request.submittedAt) : null],
         ['Checks passed', request.outcome?.checks?.length ? request.outcome.checks.filter(check => REGISTRATION_CHECKS[check]).map(check => REGISTRATION_CHECKS[check]).join(', ') : null],
+        // Downloaded as a file, never opened in the browser.
+        ['Invoice file', request.invoice ? <button key="invoice" type="button" className="btn btn-secondary btn-sm" onClick={() => downloadB2CRegistrationInvoice(id, request.invoice.key, request.invoice.filename).catch(downloadError => setError(friendlyError(downloadError, 'Unable to download the invoice.')))}><Download size={14} aria-hidden="true" />{request.invoice.filename}<span className="text-muted">{Math.max(1, Math.round(request.invoice.size / 1024))} KB</span></button> : null],
       ].filter(([, value]) => value !== null && value !== undefined)} />
       {request.submission && <section aria-label="Submitted details" className="stack-12">
         <p className="side-section-title">What the customer submitted</p>

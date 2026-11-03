@@ -2,7 +2,8 @@ import { loadB2CConfig, validateAckConfig, validateImapConfig } from './b2cConfi
 import { createSmtpAckSender } from './connectors/smtpAckSender.js';
 import { createBrevoAckSender } from './connectors/brevoAckSender.js';
 import { b2cModels, ensureB2CIndexes } from './b2cModels.js';
-import { B2C_ADMIN, DEFAULT_LEVELS } from './b2cDefaults.js';
+import { B2C_ADMIN, DEFAULT_LEVELS, REMOVED_LEVEL_KEYS } from './b2cDefaults.js';
+import { createAttachmentReader } from '../attachmentReading.js';
 import { createAttachmentStore } from './attachments.js';
 import { createEmailConnectors } from './connectors/emailConnector.js';
 import { createCrmConnector } from './connectors/crmConnector.js';
@@ -25,6 +26,8 @@ export function createB2CModule({ User, Notification, EscalationRule, Device, Cu
     models: b2cModels,
     User,
     notifyUsers,
+    // Claude reads attached invoices and photos (needs ANTHROPIC_API_KEY; off without it).
+    attachmentReader: createAttachmentReader(),
     // Escalations are matched to a registered customer, and routed to the region defined
     // on that customer's device.
     customerDirectory: createCustomerDirectory(Customer),
@@ -43,7 +46,7 @@ export function createB2CModule({ User, Notification, EscalationRule, Device, Cu
     service,
     router: createB2CRouter({ service, auth, User, Notification, logger }),
     // Customer registration links: token only, no sign-in. Mount at /api/b2c/public before `router`.
-    publicRouter: createB2CPublicRouter({ service, logger }),
+    publicRouter: createB2CPublicRouter({ service, logger, limits: { invoiceBytes: config.maxAttachmentBytes } }),
     internalRouter: createB2CInternalRouter({ service, config }),
     scheduler: createB2CScheduler({ service, minutes: config.pollMinutes, logger }),
     async initialise({ hashPassword }) {
@@ -80,9 +83,22 @@ export function reportRegistrationConfig(registration = {}, logger = console) {
 
 // Reads the portal's `devices` collection. The region of a device is its `location`.
 const escapeRegex = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const COVERAGE_FIELDS = '_id serialNumber assetId model deviceType location purchaseDate warrantyStatus warrantyExpiry amcStatus amcExpiry';
+const sameRegion = (a, b) => String(a || '').trim().replace(/\s+/g, ' ').toLowerCase() === String(b || '').trim().replace(/\s+/g, ' ').toLowerCase();
 export function createDeviceDirectory(Device) {
-  if (!Device) return { findBySerial: async () => [], regions: async () => [] };
+  if (!Device) return { findBySerial: async () => [], regions: async () => [], coverage: async () => [], coverageBySerial: async () => null };
   return {
+    // Devices with their warranty and AMC, for the B2C Warranty & Coverage page. `regions`
+    // (a staff member's b2cRegions) limits them to devices whose location is one of those regions.
+    async coverage(regions = []) {
+      const devices = await Device.find({}).select(COVERAGE_FIELDS).sort({ model: 1, serialNumber: 1 }).lean();
+      return regions.length ? devices.filter(device => regions.some(region => sameRegion(region, device.location))) : devices;
+    },
+    // One device's warranty and AMC by its exact serial number (ignoring case); null when not on record.
+    async coverageBySerial(serial) {
+      const found = await Device.find({ serialNumber: { $regex: `^${escapeRegex(serial)}$`, $options: 'i' } }).select(COVERAGE_FIELDS).limit(2).lean();
+      return found.length === 1 ? found[0] : null;
+    },
     // Exact serial number, ignoring case only. A few records are enough to detect duplicates.
     findBySerial: serial => Device.find({ serialNumber: { $regex: `^${escapeRegex(serial)}$`, $options: 'i' } }).select('_id serialNumber model location purchaseDate').limit(5).lean(),
     async regions() {
@@ -115,10 +131,14 @@ export function createCustomerDirectory(Customer) {
   };
 }
 
-// Local demo B2C-only staff for each B2C role (never created in production). Existing
-// accounts are left unchanged.
+// Local demo B2C-only staff, one per role (never created in production). Existing accounts
+// are left unchanged; demo accounts for removed levels, created by earlier versions, are removed.
+const demoEmail = key => `b2c.${key.replace(/_/g, '-')}@iplanet.local`;
+
 export async function ensureB2CDemoAccounts({ User, hashPassword }) {
-  const roles = [{ key: B2C_ADMIN, label: 'B2C Admin', email: 'b2c.admin@iplanet.local' }, ...DEFAULT_LEVELS.map(level => ({ key: level.key, label: level.label, email: `b2c.${level.key.replace(/_/g, '-')}@iplanet.local` }))];
+  const roles = [{ key: B2C_ADMIN, label: 'B2C Admin', email: 'b2c.admin@iplanet.local' }, ...DEFAULT_LEVELS.map(level => ({ key: level.key, label: level.label, email: demoEmail(level.key) }))];
+  const retired = REMOVED_LEVEL_KEYS.map(demoEmail);
+  await User.deleteMany({ email: { $in: retired }, company: 'B2C Escalations (Demo)' });
   for (const role of roles) {
     await User.updateOne(
       { email: role.email },

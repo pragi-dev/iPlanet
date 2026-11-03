@@ -58,8 +58,13 @@ The fields, labels, required flags, length limits and checks are copied from
 - Customer: full name*, email*, mobile number*
 - Device: serial number, model
 - Purchase: purchase date, store or city of purchase*, purchase region, dealer or retailer,
-  invoice or order number
+  invoice or order number, and an invoice file beside it (one PDF, JPG, PNG or HEIC; size limit
+  from the server, 10 MB by default)
 - Confirmation that the details are accurate*
+
+With an invoice file the form is sent as multipart data; otherwise as JSON. The page checks the
+file's type and size first; the server checks it again, including that its contents match its type.
+In demo mode the file is checked but not uploaded.
 
 The backend also accepts an alternate phone number and a brand; this form does not ask for them.
 The serial number and purchase date are optional, but are checked when given.

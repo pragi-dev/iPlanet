@@ -47,12 +47,15 @@ export function defaultPath(settings) {
   return enabledLevels(settings).map(level => level.key);
 }
 // Which level must validate a proposed resolution. null = B2C admin only;
-// false = no validation step.
+// false = no validation step. 'executive_direct' (the default): the Service Executive's repair
+// (the last level on the path) is completed without approval; a repair done at an earlier level
+// (the Cluster Manager's own) is approved by a B2C admin.
 export function validatorLevelFor(ticket, settings) {
-  const mode = settings?.validation?.mode || 'next_level';
+  const mode = settings?.validation?.mode || 'executive_direct';
   if (mode === 'none') return false;
   if (mode === 'level') return settings.validation.levelKey || null;
-  return nextLevel(ticket, settings);
+  const path = effectivePath(ticket, settings);
+  return path.length > 0 && ticket.workflow?.currentLevel === path[path.length - 1] ? false : null;
 }
 
 export function isValidator(ticket, user) {
@@ -85,6 +88,11 @@ export function visibilityFilter(user) {
 
 export const ACTIONS = {
   complete_triage: { label: 'Complete triage', statuses: [TRIAGE], allowed: ({ user }) => isAdmin(user) },
+  // The B2C Admin's own cases: an Enquiry is answered (emailed) and closed; a Retail case is
+  // handed to the retail team from the Retail matrix and closed. Also for a ticket that turns
+  // out to be one of these after routing.
+  resolve_enquiry: { label: 'Answer enquiry and close', statuses: [TRIAGE, OPEN, ...WORKING], requires: ['customerMessage'], allowed: ({ user }) => isAdmin(user) },
+  transfer_retail: { label: 'Transfer to Retail', statuses: [TRIAGE, OPEN, ...WORKING], requires: ['matrixKey'], allowed: ({ user }) => isAdmin(user) },
   // Offered only while registration is enabled and the customer is not identified (b2cService).
   send_registration: { label: 'Send registration link', statuses: [TRIAGE], allowed: ({ user }) => isAdmin(user) },
   retry_crm: { label: 'Retry CRM lookup', statuses: ACTIVE_STATUSES, allowed: ({ ticket, user }) => isAdmin(user) || isAssignee(ticket, user) },

@@ -14,7 +14,8 @@ import mongoose from 'mongoose';
 import { Company, Device, EmailRequest, Ticket, User } from '../models.js';
 import { allowRoles, auth } from '../middleware.js';
 import { createClaudeEmailExtractor, normalizeExtraction } from './emailExtractor.js';
-import { createEmailRequestModule } from './emailRequestRoutes.js';
+import { attachmentBlocks, createAttachmentReader } from '../attachmentReading.js';
+import { createEmailRequestModule, ticketFilesFromEmail } from './emailRequestRoutes.js';
 
 const JWT_SECRET = 'email-request-test-secret';
 process.env.JWT_SECRET = JWT_SECRET;
@@ -47,6 +48,43 @@ describe('Claude extraction', () => {
     assert.match(received.messages[0].content, /^<email>[\s\S]*Ignore your rules[\s\S]*<\/email>$/);
   });
 
+  test('reads attached PDFs, photos and text files with the email; skips HEIC and other types', async () => {
+    let received;
+    const reply = { isServiceRequest: true, summary: 's', category: 'Service', issueType: 'Battery', description: 'd', priority: 'High', serialNumbers: ['c02zk1a1abcd'], assetIds: [], deviceModel: 'MacBook Air', location: null, preferredDateText: null, deviceCount: null, contactName: null, contactPhone: null, missingDetails: [], invoiceNumber: ' INV-204 ', purchaseDateText: '3 March 2026', attachmentNotes: 'Invoice INV-204 lists serial C02ZK1A1ABCD' };
+    const client = { messages: { create: async request => { received = request; return { stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(reply) }] }; } } };
+    const extract = createClaudeEmailExtractor({ client, model: 'claude-test-model' });
+    const pdf = Buffer.from('%PDF-1.4\n% invoice\n');
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+    const result = await extract({ from: { address: 'a@b.test' }, subject: 'Battery', text: 'See the invoice', today: '2026-10-28', attachments: [
+      { filename: 'invoice.pdf', contentType: 'application/pdf', content: pdf },
+      { filename: 'label.jpg', contentType: 'image/jpeg', content: jpeg },
+      { filename: 'note.txt', contentType: 'text/plain', content: Buffer.from('Serial No: C02ZK1A1ABCD') },
+      { filename: 'box.heic', contentType: 'image/heic', content: Buffer.from('heic') },
+    ] });
+    const blocks = received.messages[0].content;
+    assert.deepEqual(blocks.map(block => block.type), ['text', 'document', 'text', 'image', 'text', 'text', 'text'], 'each file labelled, then the email text last');
+    assert.deepEqual(blocks[1].source, { type: 'base64', media_type: 'application/pdf', data: pdf.toString('base64') });
+    assert.deepEqual(blocks[3].source, { type: 'base64', media_type: 'image/jpeg', data: jpeg.toString('base64') });
+    assert.equal(blocks[5].text, 'Serial No: C02ZK1A1ABCD');
+    assert.match(blocks[6].text, /^<email>[\s\S]*See the invoice[\s\S]*<\/email>/);
+    assert.match(received.system, /Files attached to the email/);
+    assert.deepEqual([result.invoiceNumber, result.purchaseDateText, result.attachmentNotes], ['INV-204', '3 March 2026', 'Invoice INV-204 lists serial C02ZK1A1ABCD']);
+    assert.deepEqual(result.attachmentsRead, ['invoice.pdf', 'label.jpg', 'note.txt']);
+    assert.deepEqual(result.attachmentsSkipped, [{ filename: 'box.heic', reason: 'heic_not_readable' }]);
+  });
+
+  test('B2C: reads a retail invoice for its serial number and buyer; nothing to read without readable files', async () => {
+    assert.equal(createAttachmentReader({ apiKey: '' }), null);
+    let calls = 0;
+    const client = { messages: { create: async () => { calls += 1; return { stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify({ serialNumbers: [' f2lxk0abcdef ', 'not a serial!', 'F2LXK0ABCDEF'], deviceModel: 'iPhone 15', purchaseDateText: '01-03-2026', invoiceNumber: 'TN/2026/88', storeName: 'iPlanet Chennai', customerName: 'Asha Rao', customerPhone: '+91 98765 43210', summary: 'Tax invoice for an iPhone 15' }) }] }; } } };
+    const read = createAttachmentReader({ client, model: 'claude-test-model' });
+    const result = await read({ subject: 'Repair', files: [{ filename: 'bill.pdf', contentType: 'application/pdf', content: Buffer.from('%PDF-1.4') }] });
+    assert.deepEqual([result.status, result.serialNumbers, result.customerName, result.read], ['read', ['F2LXK0ABCDEF'], 'Asha Rao', ['bill.pdf']]);
+    assert.deepEqual(await read({ subject: 'Repair', files: [{ filename: 'box.heic', contentType: 'image/heic', content: Buffer.from('x') }] }), { status: 'nothing_to_read', read: [], skipped: [{ filename: 'box.heic', reason: 'heic_not_readable' }] });
+    assert.equal(calls, 1, 'no Claude call when nothing can be read');
+    assert.deepEqual(attachmentBlocks(Array.from({ length: 7 }, (_, index) => ({ filename: `p${index}.pdf`, contentType: 'application/pdf', content: Buffer.from('%PDF') }))).skipped.map(item => item.reason), ['limit', 'limit'], 'at most 5 files per email');
+  });
+
   test('reports a response that stopped early', async () => {
     const client = { messages: { create: async () => ({ stop_reason: 'max_tokens', content: [] }) } };
     await assert.rejects(() => createClaudeEmailExtractor({ client, model: 'claude-test-model' })({ from: {}, subject: '', text: '', today: '2026-10-28' }), /stopped early/);
@@ -73,7 +111,8 @@ describe('inbox check, review and approval', { skip }, () => {
   const created = [];
   const extracted = new Map();
   const mailbox = { address: 'requests@iplanet.test', isConfigured: () => true, fetchUnread: async () => inbox.splice(0), markRead: async uids => { markedRead.push(...uids); } };
-  const extract = async ({ subject }) => normalizeExtraction(extracted.get(subject) || { isServiceRequest: true, summary: subject, category: 'Service', issueType: 'Other', description: subject, priority: 'Medium' });
+  const extractCalls = [];
+  const extract = async ({ subject, attachments = [] }) => { extractCalls.push({ subject, files: attachments.map(file => [file.filename, file.contentType]) }); return normalizeExtraction(extracted.get(subject) || { isServiceRequest: true, summary: subject, category: 'Service', issueType: 'Other', description: subject, priority: 'Medium' }); };
   const createTicket = async ({ draft }) => { const ticket = await Ticket.create({ ticketId: `TKT-TEST-${created.length + 1}`, ...draft }); created.push({ ticket, draft }); return ticket; };
   const token = user => jwt.sign({ id: user._id, name: user.name, role: user.role, companyId: user.companyId }, JWT_SECRET, { expiresIn: '1h' });
   const call = async (method, url, { body, as = service } = {}) => {
@@ -116,7 +155,16 @@ describe('inbox check, review and approval', { skip }, () => {
   });
 
   test('a known sender and serial number give a complete draft', async () => {
-    receive({ subject: 'Battery', attachments: [{ filename: 'photo.jpg', contentType: 'image/jpeg', size: 3, content: Buffer.from('jpg') }] });
+    // A real photo and invoice are kept; a renamed file, an unsupported type and an oversized file are recorded as not imported.
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+    const pdf = Buffer.from('%PDF-1.4\n% invoice\n');
+    receive({ subject: 'Battery', attachments: [
+      { filename: 'photo.jpg', contentType: 'image/jpeg', size: jpeg.length, content: jpeg },
+      { filename: 'invoice.pdf', contentType: 'application/pdf', size: pdf.length, content: pdf },
+      { filename: 'fake.pdf', contentType: 'application/pdf', size: 9, content: Buffer.from('not a pdf') },
+      { filename: 'setup.exe', contentType: 'application/octet-stream', size: 2, content: Buffer.from('MZ') },
+      { filename: 'huge.pdf', contentType: 'application/pdf', size: 11 * 1048576, content: Buffer.concat([pdf, Buffer.alloc(11 * 1048576)]) },
+    ] });
     extracted.set('Battery', { isServiceRequest: true, summary: 'Battery drains', category: 'Service', issueType: 'Battery', description: 'Battery drains in two hours.', priority: 'High', serialNumbers: ['c02demo00001'], preferredDateText: 'tomorrow' });
     const check = await call('POST', '/check');
     assert.deepEqual(check.body, { received: 1, checked: 1 });
@@ -131,6 +179,21 @@ describe('inbox check, review and approval', { skip }, () => {
     assert.equal(body.draft.location, 'Chennai');
     assert.match(body.attachments[0].path, /^\/uploads\/email-[a-f0-9]{32}\.jpg$/);
     assert.ok(fs.existsSync(path.join(uploadDir, path.basename(body.attachments[0].path))));
+    assert.match(body.attachments[1].path, /^\/uploads\/email-[a-f0-9]{32}\.pdf$/);
+    assert.deepEqual(body.attachments.map(item => [item.filename, item.status, item.rejectReason]), [
+      ['photo.jpg', 'stored', null], ['invoice.pdf', 'stored', null],
+      ['fake.pdf', 'rejected', 'content_does_not_match_type'], ['setup.exe', 'rejected', 'type_not_allowed'], ['huge.pdf', 'rejected', 'too_large'],
+    ]);
+    assert.ok(body.attachments.slice(2).every(item => item.path === null), 'refused files are not stored');
+    assert.deepEqual(extractCalls.find(call => call.subject === 'Battery').files, [['photo.jpg', 'image/jpeg'], ['invoice.pdf', 'application/pdf']], 'Claude reads only the files that passed the checks');
+    // On approval the photo becomes a ticket image and the invoice a ticket attachment.
+    const stored = await EmailRequest.findById(item.id).lean();
+    assert.deepEqual(ticketFilesFromEmail(stored.attachments), {
+      images: [body.attachments[0].path],
+      attachments: [{ filename: 'invoice.pdf', contentType: 'application/pdf', size: pdf.length, path: body.attachments[1].path }],
+    });
+    // Requests saved before files were checked have no status: their files still go to the ticket.
+    assert.deepEqual(ticketFilesFromEmail([{ filename: 'old.jpg', contentType: 'image/jpeg', size: 3, path: '/uploads/old.jpg' }]).images, ['/uploads/old.jpg']);
     assert.ok(markedRead.length >= 1);
   });
 

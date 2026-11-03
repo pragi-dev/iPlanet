@@ -6,7 +6,7 @@ import { getEngineers, getServiceTicket, getServiceTickets, mediaUrl, serviceAct
 import { CallCustomerPanel } from './CallCustomerPanel';
 import { EngineerAssignDrawer } from './EngineerAssignDrawer';
 import {
-  ActivityTimeline, Avatar, Badge, Button, ConfirmDialog, CoverageTiles, DeviceIcon, ErrorState, Evidence, Field, InfoList, InlineAlert, Insight, Lightbox, NextAction, PageSkeleton,
+  ActivityTimeline, Avatar, Badge, Button, ConfirmDialog, CoverageTiles, DeviceIcon, ErrorState, Evidence, TicketAttachments, Field, InfoList, InlineAlert, Insight, Lightbox, NextAction, PageSkeleton,
   SLAPanel, Section, ServiceJourney, Surface, formatDate, formatTat, formatDateTime, formatRelative, friendlyError, idOf, pluralize, recurringIssues, riskLabel, riskTone, slaBadgeText, slaLabel, slaRisk, statusTone,
   suggestEngineer, useAsync,
 } from '../ui';
@@ -154,7 +154,7 @@ export function OperationalTicketDetail() {
           <Section stacked title="Service information">
             <InfoList columns={2} items={[['Corporate', company], ['Contact person', ticket.customerId?.name], ['Contact phone', ticket.customerId?.phone || ticket.companyId?.phone], ['Service centre', ticket.serviceCentreId?.name], ['Service location', ticket.location], ['Preferred date', formatDate(ticket.preferredServiceDate, '')], ...(ticket.deviceCount ? [['Number of devices', ticket.deviceCount]] : []), ['Raised', formatDateTime(ticket.createdAt, '')], ['Expected TAT', formatTat(ticket.expectedTAT)]]} />
           </Section>
-          <Section stacked title="Evidence" description="Original photos and customer damage markings"><Evidence ticket={ticket} resolve={mediaUrl} onOpen={setSelectedImage} /></Section>
+          <Section stacked title="Evidence" description="Original photos, customer damage markings and attached files"><Evidence ticket={ticket} resolve={mediaUrl} onOpen={setSelectedImage} /><TicketAttachments ticket={ticket} resolve={mediaUrl} /></Section>
           <Section stacked title="Timeline" description="Every update, newest first"><ActivityTimeline events={timeline} limit={6} /></Section>
         </Surface>
       </div>

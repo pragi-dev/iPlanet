@@ -1,4 +1,4 @@
-import { Bell, ChartPie, Inbox, LayoutDashboard, ListChecks, PlugZap, SlidersHorizontal, UserPlus, UserRoundCheck } from 'lucide-react';
+import { Bell, ChartPie, Inbox, LayoutDashboard, ListChecks, PlugZap, ShieldCheck, SlidersHorizontal, UserPlus, UserRoundCheck } from 'lucide-react';
 import { AppShell, Badge, EmptyState, formatDateTime, readSessionUser } from '../ui';
 import { servicePortalFor } from '../service/components';
 import { getB2CTickets } from './api';
@@ -8,10 +8,7 @@ import { apiRequest as request } from '../service/api';
 export const B2C_ROLE_LABELS = {
   b2c_admin: 'B2C Admin',
   cluster_manager: 'Cluster Manager',
-  rbh: 'Regional Business Head',
-  trainer: 'Trainer',
-  cd_team_am: 'CD Team Assistant Manager',
-  service_excellence_lead: 'Service Excellence Lead',
+  service_excellence_lead: 'Service Executive',
 };
 
 export const isB2CAdmin = () => readSessionUser().b2cRole === 'b2c_admin';
@@ -39,11 +36,13 @@ function b2cPortal(user) {
         { id: 'b2c-queue', icon: Inbox, title: 'Open escalation queue', keywords: 'tickets list', to: '/b2c/tickets' },
         { id: 'b2c-mine', icon: UserRoundCheck, title: 'My escalations', keywords: 'assigned me', to: '/b2c/tickets?view=mine' },
         { id: 'b2c-validation', icon: ListChecks, title: 'Resolutions awaiting validation', keywords: 'approve validate', to: '/b2c/tickets?view=validation' },
+        { id: 'b2c-coverage', icon: ShieldCheck, title: 'Warranty & Coverage', keywords: 'warranty amc coverage devices expiring', to: '/b2c/coverage' },
       ],
     },
     groups: [
       { label: 'Overview', items: [{ to: '/b2c', end: true, icon: LayoutDashboard, label: 'Overview' }] },
       { label: 'Escalations', items: [{ to: '/b2c/tickets', icon: Inbox, label: 'Escalation Queue', match: ['/b2c/tickets/'] }, ...(admin ? [{ to: '/b2c/registrations', icon: UserPlus, label: 'Awaiting Registration' }] : [])] },
+      { label: 'Devices', items: [{ to: '/b2c/coverage', icon: ShieldCheck, label: 'Warranty & Coverage' }] },
       { label: 'Monitoring', items: [{ to: '/b2c/reports', icon: ChartPie, label: 'Reports' }, ...(admin ? [{ to: '/b2c/integrations', icon: PlugZap, label: 'Integration Health' }] : [])] },
       { label: 'Communication', items: [{ to: '/b2c/notifications', icon: Bell, label: 'Notifications', badge: 'unread' }] },
       ...(admin ? [{ label: 'Administration', items: [{ to: '/b2c/settings', icon: SlidersHorizontal, label: 'B2C Settings' }] }] : []),
@@ -136,6 +135,8 @@ export const TRIAGE_REASONS = {
   multiple_device_matches: 'More than one device record has this serial number',
   device_region_missing: 'The device record has no region (location)',
   no_regional_assignee: 'Nobody holds the first workflow level for this region',
+  enquiry_answer: 'Enquiry: answer it and close',
+  retail_transfer: 'Retail case: transfer it to the retail team',
   // Customer registration (sent when the sender cannot be identified).
   customer_registration_pending: 'Waiting for the customer to complete the registration form',
   customer_registration_review: 'The customer\'s registration needs a decision',
@@ -238,13 +239,16 @@ const AUDIT_LABELS = {
   email_sent: 'Email sent', email_send_failed: 'Email send failed', email_not_sent: 'Customer email not sent', customer_replied: 'Customer replied', sla_escalation: 'SLA escalation', set_priority: 'Priority changed (no longer used)', claim: 'Took ownership', assign: 'Engineer assigned', accept: 'Engineer accepted',
   start: 'Work started', escalate: 'Escalated to next level', reroute: 'Rerouted', set_path: 'Workflow path changed', request_clarification: 'Clarification requested',
   propose_resolution: 'Repair completion submitted', approve_resolution: 'Resolution approved', reject_resolution: 'Resolution returned for rework',
-  close: 'Closed', close_unresolved: 'Closed without resolution', reopen: 'Reopened', add_note: 'Internal note', attachment_downloaded: 'Attachment downloaded',
+  close: 'Closed', close_unresolved: 'Closed without resolution', resolve_enquiry: 'Enquiry answered and closed', transfer_retail: 'Transferred to Retail', reopen: 'Reopened', add_note: 'Internal note', attachment_downloaded: 'Attachment downloaded',
   registration_requested: 'Customer registration requested', registration_not_requested: 'Customer registration not requested', registration_resent: 'Registration link sent again',
   registration_opened: 'Registration link opened', registration_completed: 'Customer registration completed', registration_needs_review: 'Customer registration needs review',
   registration_expired: 'Registration link expired', registration_cancelled: 'Customer registration withdrawn', send_registration: 'Registration link sent',
   registration_email_failed: 'Registration email failed', ticket_created_without_registration: 'Ticket created without customer registration',
+  workflow_level_removed: 'Workflow level removed', validator_changed: 'Validator changed', auto_closed: 'Closed automatically', assignment_reminder: 'Assignment reminder sent', start_reminder: 'Start-work reminder sent',
 };
-export const EMAIL_KINDS = { acknowledgement: 'acknowledgement', clarification: 'clarification request', final: 'final customer email', registration: 'registration request' };
+export const EMAIL_KINDS = { acknowledgement: 'acknowledgement', clarification: 'clarification request', final: 'final customer email', registration: 'registration request', retail_transfer: 'retail team hand-over' };
+// Service cases: an Enquiry is answered by the B2C Admin, an Escalation goes to the Cluster Manager.
+export const CASE_TYPE_SOURCES = { rule: 'enquiry keywords', default: 'no enquiry keyword', manual: 'set by a B2C admin' };
 
 function auditSummary(event) {
   const details = event.details || {};
@@ -257,16 +261,23 @@ function auditSummary(event) {
     case 'acknowledgement_not_sent': return `${ACK_SKIPPED[details.reason] || details.reason || ''}${details.onAssignment ? ' · checked again on engineer assignment' : ''}`;
     case 'region_set': return `${details.from ? `${details.from} → ` : ''}${details.to}${details.previousReason ? ` (was: ${TRIAGE_REASONS[details.previousReason] || details.previousReason})` : ''}`;
     case 'escalate': case 'reroute': return `${details.fromLevel} → ${details.toLevel}${details.assignee ? ` · ${details.assignee}` : ' · waiting for an owner'}`;
-    case 'assign': return `${details.from ? `${details.from} → ` : ''}${details.to}`;
+    case 'assign': return `${details.from ? `${details.from} → ` : ''}${details.to}${details.toLevel ? ` (${details.fromLevel} → ${details.toLevel})` : ''}`;
     case 'crm_lookup': return `Result: ${CRM_STATUS[details.result]?.label || details.result}${details.matchedBy ? ` (by ${details.matchedBy})` : ''}`;
     case 'crm_lookup_failed': return `Attempt ${details.attempt}${details.willRetry ? ', will retry' : ', no more automatic retries'}`;
     case 'queued_for_triage': return (details.reasons || []).map(reason => TRIAGE_REASONS[reason] || reason).join('; ');
     case 'category_identified': return `Category ${details.category}`;
+    case 'transfer_retail': return `${details.team}${details.region ? ` · ${details.region}` : ''}${details.customerNotified ? ' · customer told' : ''}`;
+    case 'resolve_enquiry': return details.fromCaseType === 'Escalation' ? 'Answered as an enquiry (was an escalation)' : 'Answer emailed to the customer';
     case 'triage_completed': return `${details.automatic ? 'Automatic · ' : ''}Category ${details.category}${details.region ? ` · region ${details.region}` : ''}${details.assignee ? ` · assigned to ${details.assignee}` : ''}${details.overriddenReasons?.length ? ` · overrode: ${details.overriddenReasons.map(reason => TRIAGE_REASONS[reason] || reason).join('; ')}` : ''}`;
     case 'email_sent': return `Customer ${EMAIL_KINDS[details.kind] || 'email'} sent${details.mode === 'test' ? ' (test adapter — not delivered)' : ''}`;
     case 'email_not_sent': return `Customer ${EMAIL_KINDS[details.kind] || 'email'} not sent: the inbox is receive-only (IMAP)`;
     case 'email_send_failed': return `Customer ${EMAIL_KINDS[details.kind] || 'email'}: attempt ${details.attempt} failed${details.willRetry ? ', will retry' : ''}`;
     case 'set_path': return (details.path || []).join(' → ');
+    case 'assignment_reminder': return `Not assigned to a ${details.next} within ${details.hours} hour${details.hours === 1 ? '' : 's'}${details.recipient ? ` · reminded ${details.recipient}` : ` · reminded the ${details.level}s of the region`}`;
+    case 'start_reminder': return `${details.executive} had not ${details.accepted ? 'started the work' : 'accepted it'} ${details.hours} hour${details.hours === 1 ? '' : 's'} after assignment · reminded them${details.assignedBy ? ` and ${details.assignedBy}` : ''}`;
+    case 'auto_closed': return `${details.minutes} minute${details.minutes === 1 ? '' : 's'} after the repair was completed`;
+    case 'validator_changed': return `Resolution now validated by ${details.to} instead of ${details.from} (the level that assigned the escalation approves)`;
+    case 'workflow_level_removed': return `${details.removedLevel} is no longer part of the flow${details.validator ? ` · resolution now validated by ${details.validator}` : ` · back to the ${details.level} queue`}`;
     case 'propose_resolution': return details.validator ? `Validator: ${details.validator}` : details.validation === 'not required' ? 'Resolved without validation' : '';
     case 'attachment_downloaded': return details.filename;
     case 'registration_requested': return `${details.manual ? 'Sent by staff' : 'Automatic'} · ${details.trigger === 'insufficient' ? 'not enough details matched' : 'no registered customer matched'}${details.ticketCreated === false ? ' · no ticket until the customer registers' : ''}`;
